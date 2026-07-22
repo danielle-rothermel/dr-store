@@ -43,13 +43,17 @@ class Backend(Protocol):
     def get_object(
         self,
         *,
+        schema: str,
         content_hash: str,
     ) -> tuple[str, str] | None:
-        """Return ``(schema, canonical)`` stored at ``content_hash``.
+        """Return ``(stored_schema, canonical)`` for a reference key.
 
-        Return ``None`` when nothing is stored under that content hash.
-        Keyed by content hash alone so that a schema mismatch is detectable
-        rather than presenting as a missing object.
+        Prefer the exact ``(schema, content_hash)`` row. When no such row
+        exists but the same content is filed under a *different* schema,
+        return that other row's ``(stored_schema, canonical)`` so the store
+        can raise a schema mismatch rather than presenting as a missing
+        object. Return ``None`` only when nothing is stored at
+        ``content_hash`` under any schema.
         """
         ...
 

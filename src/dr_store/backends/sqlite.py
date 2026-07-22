@@ -29,9 +29,10 @@ _BUSY_TIMEOUT_MS = 30_000
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS objects (
-    content_hash TEXT PRIMARY KEY NOT NULL,
     schema       TEXT NOT NULL,
-    canonical    TEXT NOT NULL
+    content_hash TEXT NOT NULL,
+    canonical    TEXT NOT NULL,
+    PRIMARY KEY (schema, content_hash)
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS bindings (
@@ -99,13 +100,14 @@ class SqliteBackend:
         with self._immediate() as conn:
             cursor = conn.execute(
                 "INSERT OR IGNORE INTO objects "
-                "(content_hash, schema, canonical) VALUES (?, ?, ?)",
-                (content_hash, schema, canonical),
+                "(schema, content_hash, canonical) VALUES (?, ?, ?)",
+                (schema, content_hash, canonical),
             )
             inserted = cursor.rowcount == 1
             row = conn.execute(
-                "SELECT schema, canonical FROM objects WHERE content_hash = ?",
-                (content_hash,),
+                "SELECT schema, canonical FROM objects "
+                "WHERE schema = ? AND content_hash = ?",
+                (schema, content_hash),
             ).fetchone()
             stored_schema, stored_canonical = row
         return PutOutcome(
@@ -117,11 +119,16 @@ class SqliteBackend:
     def get_object(
         self,
         *,
+        schema: str,
         content_hash: str,
     ) -> tuple[str, str] | None:
+        # Prefer the exact (schema, content_hash) row. When none exists but
+        # the same content is filed under a different schema, return that row
+        # so the store can raise a schema mismatch rather than not-found.
         row = self._conn.execute(
-            "SELECT schema, canonical FROM objects WHERE content_hash = ?",
-            (content_hash,),
+            "SELECT schema, canonical FROM objects "
+            "WHERE content_hash = ? ORDER BY schema = ? DESC LIMIT 1",
+            (content_hash, schema),
         ).fetchone()
         if row is None:
             return None

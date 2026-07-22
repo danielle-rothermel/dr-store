@@ -87,28 +87,57 @@ def test_get_detects_corrupted_content(store: ObjectStore) -> None:
     ref, _ = store.put(SCHEMA, RECORD)
     # Corrupt the stored canonical text out from under the reference; the
     # verified read must recompute the hash and reject the mismatch.
-    _corrupt_stored_object(store, ref)
+    # Corrupt to *valid but different* JSON: the hash recompute rejects it.
+    _overwrite_stored_canonical(store, ref, '{"tampered": true}')
     with pytest.raises(ContentHashMismatchError):
         store.get(ref)
 
 
-def _corrupt_stored_object(store: ObjectStore, ref: ObjectReference) -> None:
+def _overwrite_stored_canonical(
+    store: ObjectStore,
+    ref: ObjectReference,
+    canonical: str,
+) -> None:
     backend = store._backend
     from dr_store import MemoryBackend, SqliteBackend
 
     if isinstance(backend, MemoryBackend):
-        backend._objects[ref.content_hash] = (
-            ref.schema,
-            '{"tampered": true}',
-        )
+        backend._objects[(ref.schema, ref.content_hash)] = canonical
     elif isinstance(backend, SqliteBackend):
         conn = backend._conn
         conn.execute(
-            "UPDATE objects SET canonical = ? WHERE content_hash = ?",
-            ('{"tampered": true}', ref.content_hash),
+            "UPDATE objects SET canonical = ? "
+            "WHERE schema = ? AND content_hash = ?",
+            (canonical, ref.schema, ref.content_hash),
         )
     else:  # pragma: no cover - defensive
         raise TypeError("unknown backend")
+
+
+def test_get_detects_non_json_corruption(store: ObjectStore) -> None:
+    # Corrupt the stored canonical text into bytes that do not even parse as
+    # JSON (bit rot, truncation, a partial write). The verified read must
+    # surface this as a typed contract error, never a bare JSONDecodeError.
+    ref, _ = store.put(SCHEMA, RECORD)
+    _overwrite_stored_canonical(store, ref, "not-json{{{")
+    with pytest.raises(ContentHashMismatchError):
+        store.get(ref)
+
+
+def test_same_content_under_different_schema_both_store(
+    store: ObjectStore,
+) -> None:
+    # The typed key is (schema, content_hash): identical content filed under
+    # two different schemas are two distinct objects. Both puts succeed and
+    # each resolves to its own record; neither is a spurious conflict.
+    ref_one, status_one = store.put("schema.one", {"a": 1})
+    ref_two, status_two = store.put("schema.two", {"a": 1})
+    assert status_one is PutStatus.STORED
+    assert status_two is PutStatus.STORED
+    assert ref_one.content_hash == ref_two.content_hash
+    assert ref_one.schema != ref_two.schema
+    assert store.get(ref_one) == {"a": 1}
+    assert store.get(ref_two) == {"a": 1}
 
 
 def test_different_content_at_same_hash_conflicts(

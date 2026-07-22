@@ -21,6 +21,7 @@ from dr_serialize import Jsonable, canonical_json, validate_finite_json
 
 from dr_store.errors import (
     BindingConflictError,
+    ContentHashMismatchError,
     ObjectConflictError,
     ObjectNotFoundError,
     SchemaMismatchError,
@@ -87,12 +88,10 @@ class ObjectStore:
         )
         if outcome.inserted:
             return reference, PutStatus.STORED
-        # Key was already present: idempotent only if identical content and
-        # identical schema; otherwise a genuine collision conflict.
-        if (
-            outcome.stored_canonical == canonical
-            and outcome.stored_schema == schema
-        ):
+        # The exact (schema, content_hash) key was already present: an
+        # idempotent replay when the stored canonical bytes are identical,
+        # otherwise a genuine content-hash collision at that typed key.
+        if outcome.stored_canonical == canonical:
             return reference, PutStatus.IDEMPOTENT
         raise ObjectConflictError(
             schema=schema,
@@ -110,6 +109,7 @@ class ObjectStore:
         content no longer hashes to its reference (corruption).
         """
         stored = self._backend.get_object(
+            schema=reference.schema,
             content_hash=reference.content_hash,
         )
         if stored is None:
@@ -120,7 +120,20 @@ class ObjectStore:
                 expected=reference.schema,
                 actual=stored_schema,
             )
-        record = validate_finite_json(json.loads(canonical))
+        # Stored canonical bytes that no longer parse as JSON (bit rot,
+        # truncation, a partial write) are corruption, not a caller error:
+        # surface them as a typed content-hash mismatch so every corruption
+        # mode fails through one contract exception, never a bare
+        # json.JSONDecodeError.
+        try:
+            decoded = json.loads(canonical)
+        except json.JSONDecodeError as exc:
+            raise ContentHashMismatchError(
+                expected=reference.content_hash,
+                actual="<unparseable: stored content is not valid JSON>",
+                schema=reference.schema,
+            ) from exc
+        record = validate_finite_json(decoded)
         reference.verify_record(record)
         return record
 

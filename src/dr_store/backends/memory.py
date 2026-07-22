@@ -17,8 +17,8 @@ class MemoryBackend:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # content_hash -> (schema, canonical)
-        self._objects: dict[str, tuple[str, str]] = {}
+        # (schema, content_hash) -> canonical
+        self._objects: dict[tuple[str, str], str] = {}
         # key -> (schema, content_hash)
         self._bindings: dict[str, tuple[str, str]] = {}
 
@@ -30,28 +30,38 @@ class MemoryBackend:
         canonical: str,
     ) -> PutOutcome:
         with self._lock:
-            existing = self._objects.get(content_hash)
+            existing = self._objects.get((schema, content_hash))
             if existing is None:
-                self._objects[content_hash] = (schema, canonical)
+                self._objects[(schema, content_hash)] = canonical
                 return PutOutcome(
                     inserted=True,
                     stored_schema=schema,
                     stored_canonical=canonical,
                 )
-            stored_schema, stored_canonical = existing
             return PutOutcome(
                 inserted=False,
-                stored_schema=stored_schema,
-                stored_canonical=stored_canonical,
+                stored_schema=schema,
+                stored_canonical=existing,
             )
 
     def get_object(
         self,
         *,
+        schema: str,
         content_hash: str,
     ) -> tuple[str, str] | None:
         with self._lock:
-            return self._objects.get(content_hash)
+            # Prefer the exact (schema, content_hash) row. When none exists
+            # but the same content is filed under a different schema, return
+            # that row so the store can raise a schema mismatch, not
+            # not-found.
+            exact = self._objects.get((schema, content_hash))
+            if exact is not None:
+                return (schema, exact)
+            for (row_schema, row_hash), canonical in self._objects.items():
+                if row_hash == content_hash:
+                    return (row_schema, canonical)
+            return None
 
     def bind(
         self,
