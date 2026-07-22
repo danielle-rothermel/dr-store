@@ -41,9 +41,20 @@ wheels = [
 [[package]]
 name = "dr-serialize"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-serialize?branch=main#643cceaffa0d3847b4dc41f417796d82f60315a8" }
+source = { editable = "../dr-serialize" }
 dependencies = [
     { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.13.4" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ty", specifier = ">=0.0.51" },
 ]
 
 [[package]]
@@ -63,7 +74,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?branch=main" }]
+requires-dist = [{ name = "dr-serialize", editable = "../dr-serialize" }]
 
 [package.metadata.requires-dev]
 dev = [
