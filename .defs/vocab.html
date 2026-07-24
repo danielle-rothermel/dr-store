@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<title>dr-store · The object storage contract this repo owns</title>
+<style>
+  /* Page-local tokens. Purple (--anchor) = main-point accents (.key/.must);
+     blue (--accent) = term links (.term-ref), matching doc.css link hue. */
+  .term-name { font-weight: 600; }
+  dfn.term-name { font-style: normal; }
+  .must { color: var(--anchor); font-weight: 600; }
+  .term-ref { color: var(--accent); text-decoration: underline; text-decoration-style: dashed; text-underline-offset: 2px; }
+  td ul { margin: 0; padding-left: 18px; }
+  td li { margin-bottom: 4px; }
+  td li:last-child { margin-bottom: 0; }
+</style>
+</head>
+<body>
+<main class="wide">
+
+<h1>The dr-store object storage contract</h1>
+<p class="dek">A reference for the terms and guarantees that bind dr-store.</p>
+<div class="byline">dr-store · 2026-07-24</div>
+
+<p>This is the vocabulary of the append-only content-addressed object store dr-store implements: the <span class="key">terms</span>, the <span class="key">guarantees</span> that bind this repo, what is in and out of <span class="key">scope</span>, and the <span class="key">mapping</span> from each term to the names actually exported by <a href="../src/dr_store/__init__.py"><code>dr_store</code></a>.</p>
+
+<div class="section-head" id="terms"><h2>Terms</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Term</th><th>Definition</th></tr></thead>
+  <tbody>
+    <tr><td><dfn class="term-name" id="term-record">Record</dfn></td><td>One complete stored value: a JSON-safe structure carrying every field the caller means to persist, stored and returned exactly as given.</td></tr>
+    <tr><td><dfn class="term-name" id="term-schema">Schema</dfn></td><td>A declared name that labels the shape of a <a class="term-ref" href="#term-record">record</a>. It is opaque to the store — a string the caller owns — and it partitions stored content so the same bytes filed under two names remain distinct.</td></tr>
+    <tr><td><dfn class="term-name" id="term-canonical-json">Canonical JSON</dfn></td><td>The single deterministic UTF-8 JSON text of a JSON-safe value — compact, sorted keys — computed through the serialization layer. The same value always produces the same bytes; dr-store never derives a second rendering of its own.</td></tr>
+    <tr><td><dfn class="term-name" id="term-hash">Hash</dfn></td><td>Deterministic fixed-length value computed by a declared algorithm over exact declared input bytes. dr-store implements the <a class="term-ref" href="#term-content-hash">content hash</a> specialization over <a class="term-ref" href="#term-canonical-json">canonical JSON</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="term-key">Key</dfn></td><td>An opaque caller-owned string naming a place in the binding table. Its meaning belongs entirely to the caller; the store never parses or interprets it.</td></tr>
+    <tr><td><dfn class="term-name" id="term-binding">Binding</dfn></td><td>A single durable association from a <a class="term-ref" href="#term-key">key</a> to one <a class="term-ref" href="#term-object-reference">object reference</a>. Once written it is never replaced, cleared, or superseded.</td></tr>
+    <tr><td><dfn class="term-name" id="term-idempotent-replay">Idempotent Replay</dfn></td><td>A write whose incoming value is identical to the value already stored at the same place: no new content is created and the existing stored value is unchanged.</td></tr>
+    <tr><td><dfn class="term-name" id="term-conflict">Conflict</dfn></td><td>A write whose incoming value differs from the value already stored at the same place; it is a typed outcome that leaves the existing stored value unchanged.</td></tr>
+    <tr><td><dfn class="term-name" id="term-append-only">Append-Only</dfn></td><td>The property that stored content is only ever added, never mutated or removed. No operation in this contract replaces or deletes an existing <a class="term-ref" href="#term-record">record</a> or <a class="term-ref" href="#term-binding">binding</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="term-compare-and-set">Compare-and-Set</dfn></td><td>The atomic durable write in which a value is stored only when its place is empty; an occupied place is left unchanged and its existing row is returned. It is the sole durability primitive each <a class="term-ref" href="#term-append-only">append-only</a> table rests on, provided by the <a class="term-ref" href="#term-backend">backend</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="term-content-hash">Content Hash</dfn></td><td>The full 64-character lowercase SHA-256 <a class="term-ref" href="#term-hash">hash</a> of the <a class="term-ref" href="#term-canonical-json">canonical JSON</a> of a complete persisted <a class="term-ref" href="#term-record">record</a>, addressing that record's content.</td></tr>
+    <tr><td><dfn class="term-name" id="term-object-reference">Object Reference</dfn></td><td>The typed content-addressed handle pairing a declared <a class="term-ref" href="#term-schema">schema</a> with the full <a class="term-ref" href="#term-content-hash">content hash</a> of a <a class="term-ref" href="#term-record">record</a>. It resolves exactly one immutable stored record, and both parts are validated at construction so an ill-formed reference can never enter the store.</td></tr>
+    <tr><td><dfn class="term-name" id="term-object-store">Object Store</dfn></td><td>The authoritative <a class="term-ref" href="#term-append-only">append-only</a> mapping from an <a class="term-ref" href="#term-object-reference">object reference</a> to the exact immutable <a class="term-ref" href="#term-record">record</a> it addresses, plus the binding table from <a class="term-ref" href="#term-key">keys</a> to references. It owns every semantic rule of this contract and delegates only atomic durability to a <a class="term-ref" href="#term-backend">backend</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="term-immutable-put">Immutable Put</dfn></td><td>The single stored association between one complete <a class="term-ref" href="#term-record">record</a> and its schema-typed <a class="term-ref" href="#term-object-reference">object reference</a>, established once and never overwritten. A verified value at an absent place is stored, an identical value is an <a class="term-ref" href="#term-idempotent-replay">idempotent replay</a>, and differing content at the same place is a <a class="term-ref" href="#term-conflict">conflict</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="term-verified-get">Verified Get</dfn></td><td>An <a class="term-ref" href="#term-object-reference">object reference</a> resolved to the exact immutable <a class="term-ref" href="#term-record">record</a> it addresses, with the <a class="term-ref" href="#term-content-hash">content hash</a> and the declared <a class="term-ref" href="#term-schema">schema</a> confirmed against the stored bytes on every read.</td></tr>
+    <tr><td><dfn class="term-name" id="term-atomic-key-to-reference-binding">Atomic Key-to-Reference Binding</dfn></td><td>The single generic <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> that writes one <a class="term-ref" href="#term-binding">binding</a>: an unbound <a class="term-ref" href="#term-key">key</a> binds; the same <a class="term-ref" href="#term-object-reference">object reference</a> is an <a class="term-ref" href="#term-idempotent-replay">idempotent replay</a>; a different reference is a <a class="term-ref" href="#term-conflict">conflict</a> that preserves the durable winner. No overwrite, clear, or rebind path is exposed.</td></tr>
+    <tr><td><dfn class="term-name" id="term-backend">Backend</dfn></td><td>The backend-neutral contract supplying the atomic durable <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> primitives for the two <a class="term-ref" href="#term-append-only">append-only</a> tables, plus point reads. It stores the <a class="term-ref" href="#term-canonical-json">canonical JSON</a> text unchanged and introduces no second rendering; all hashing, verification, idempotency, and conflict typing live above it in the <a class="term-ref" href="#term-object-store">object store</a>.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="guarantees"><h2>Guarantees</h2></div>
+
+<div class="callout">
+  <strong>Stored Content Is Never Overwritten.</strong> Every write is <a class="term-ref" href="#term-append-only">append-only</a>: an absent place accepts a verified value, an identical value replays as idempotent success, and any differing value is a typed <a class="term-ref" href="#term-conflict">conflict</a> that preserves the existing durable value untouched.
+</div>
+<ul>
+  <li><span class="must">Computes the full</span> <a class="term-ref" href="#term-content-hash">content hash</a> — a lowercase <span class="key">64-character SHA-256</span> value over <a class="term-ref" href="#term-canonical-json">canonical JSON</a> — entirely through the serialization layer, inventing <span class="key">no second canonicalization</span>.</li>
+  <li><span class="must">Validates</span> every <a class="term-ref" href="#term-object-reference">object reference</a> at construction, so a reference with an empty <a class="term-ref" href="#term-schema">schema</a> or a malformed <a class="term-ref" href="#term-content-hash">content hash</a> can never enter the store.</li>
+  <li><span class="must">Stores</span> one complete <a class="term-ref" href="#term-record">record</a> per <a class="term-ref" href="#term-immutable-put">immutable put</a>: an absent <a class="term-ref" href="#term-key">key</a> accepts the verified value atomically; the identical <a class="term-ref" href="#term-canonical-json">canonical</a> value is an <a class="term-ref" href="#term-idempotent-replay">idempotent replay</a>; a differing value at the same key is a <a class="term-ref" href="#term-conflict">conflict</a>.</li>
+  <li><span class="must">Recomputes and verifies</span> the <a class="term-ref" href="#term-content-hash">content hash</a> and the declared <a class="term-ref" href="#term-schema">schema</a> on <span class="key">every</span> <a class="term-ref" href="#term-verified-get">verified get</a> — a read never trusts stored bytes unchecked.</li>
+  <li><span class="must">Fails with a typed error</span> on every read fault: missing content, content filed under a different <a class="term-ref" href="#term-schema">schema</a>, and stored bytes that no longer hash to their reference (corruption, including unparseable content) each raise a distinct exception.</li>
+  <li><span class="must">Binds</span> a <a class="term-ref" href="#term-key">key</a> to exactly one <a class="term-ref" href="#term-object-reference">object reference</a> through <a class="term-ref" href="#term-atomic-key-to-reference-binding">atomic key-to-reference binding</a>: unbound binds, the same reference replays, a different reference conflicts and preserves the durable winner.</li>
+  <li><span class="must">Exposes no</span> overwrite, clear, or rebind path — <span class="key">the store is</span> <a class="term-ref" href="#term-append-only">append-only</a> for both <a class="term-ref" href="#term-record">records</a> and <a class="term-ref" href="#term-binding">bindings</a>.</li>
+  <li>A <a class="term-ref" href="#term-content-hash">content hash</a> is <span class="key">not an identity hash</span>: it covers the complete persisted <a class="term-ref" href="#term-record">record</a>, not a caller-selected identity subset.</li>
+  <li>The <a class="term-ref" href="#term-backend">backend</a> supplies only atomic durable <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> primitives and point reads; the two shipped backends are interchangeable and store <span class="key">identical bytes</span>.</li>
+  <li>The contract is <span class="key">domain-neutral</span>: no workflow, retry, campaign, or other domain concept appears anywhere in it.</li>
+</ul>
+
+<div class="section-head" id="scope"><h2>In vs. Out of Scope</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>In scope</th><th>Out of scope</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>
+        <ul>
+          <li><a class="term-ref" href="#term-content-hash">Content hash</a> computation and validation</li>
+          <li>Typed <a class="term-ref" href="#term-object-reference">object reference</a> construction</li>
+          <li><a class="term-ref" href="#term-immutable-put">Immutable put</a> of complete <a class="term-ref" href="#term-record">records</a></li>
+          <li><a class="term-ref" href="#term-verified-get">Verified get</a> with per-read recomputation</li>
+          <li><a class="term-ref" href="#term-atomic-key-to-reference-binding">Atomic key-to-reference binding</a></li>
+          <li>Interchangeable <a class="term-ref" href="#term-backend">backends</a></li>
+          <li>Typed storage errors</li>
+        </ul>
+      </td>
+      <td>
+        <ul>
+          <li><a class="term-ref" href="#term-canonical-json">Canonical JSON</a> rendering and <a class="term-ref" href="#term-hash">hash</a> algorithms</li>
+          <li>Identity hashing over a caller-selected subset</li>
+          <li>Domain <a class="term-ref" href="#term-schema">schemas</a> or field selection</li>
+          <li>The meaning of any <a class="term-ref" href="#term-key">key</a></li>
+          <li>Mutation, deletion, or garbage collection</li>
+          <li>Workflow, retry, and campaign semantics</li>
+        </ul>
+      </td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="exported-names"><h2>Exported Names</h2></div>
+
+<p class="aside">Each row maps a term, or a group of supporting exports, to names in <a href="../src/dr_store/__init__.py"><code>dr_store.__all__</code></a>. Every exported name appears exactly once in the names column; there are no aliases or alternate spellings. The terms <a class="term-ref" href="#term-record">record</a>, <a class="term-ref" href="#term-schema">schema</a>, <a class="term-ref" href="#term-canonical-json">canonical JSON</a>, <a class="term-ref" href="#term-hash">hash</a>, <a class="term-ref" href="#term-key">key</a>, <a class="term-ref" href="#term-binding">binding</a>, <a class="term-ref" href="#term-idempotent-replay">idempotent replay</a>, <a class="term-ref" href="#term-conflict">conflict</a>, <a class="term-ref" href="#term-append-only">append-only</a>, and <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> name concepts rather than exports, so they have no row.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Term</th><th>Exported names</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><a class="term-ref" href="#term-content-hash">Content Hash</a></td>
+      <td><code>compute_content_hash</code>, <code>is_content_hash</code>, <code>CONTENT_HASH_LENGTH</code></td>
+      <td><code>compute_content_hash</code> validates a <a class="term-ref" href="#term-record">record</a> and returns its <a class="term-ref" href="#term-content-hash">content hash</a>; <code>is_content_hash</code> tests a string for the 64-character lowercase hex shape counted by <code>CONTENT_HASH_LENGTH</code>.</td>
+    </tr>
+    <tr>
+      <td><a class="term-ref" href="#term-object-reference">Object Reference</a></td>
+      <td><code>ObjectReference</code>, <code>ReferenceValidationError</code></td>
+      <td>Construction itself validates: an empty <a class="term-ref" href="#term-schema">schema</a> or malformed <a class="term-ref" href="#term-content-hash">content hash</a> raises <code>ReferenceValidationError</code>. The <code>ObjectReference.for_record</code> and <code>verify_record</code> methods build and check a reference against a <a class="term-ref" href="#term-record">record</a>.</td>
+    </tr>
+    <tr>
+      <td><a class="term-ref" href="#term-object-store">Object Store</a></td>
+      <td><code>ObjectStore</code></td>
+      <td>The whole public contract over a <a class="term-ref" href="#term-backend">backend</a>. Its <code>resolve</code> method is the one read-only convenience over the binding table, returning the bound <a class="term-ref" href="#term-object-reference">object reference</a> or <code>None</code>.</td>
+    </tr>
+    <tr>
+      <td><a class="term-ref" href="#term-immutable-put">Immutable Put</a></td>
+      <td><code>PutStatus</code>, <code>ObjectConflictError</code></td>
+      <td>The <code>ObjectStore.put</code> method returns a reference and a <code>PutStatus</code> of <code>STORED</code> or <code>IDEMPOTENT</code>; a <a class="term-ref" href="#term-conflict">conflict</a> is not a status but raises <code>ObjectConflictError</code>, preserving the stored value.</td>
+    </tr>
+    <tr>
+      <td><a class="term-ref" href="#term-verified-get">Verified Get</a></td>
+      <td><code>ObjectNotFoundError</code>, <code>SchemaMismatchError</code>, <code>ContentHashMismatchError</code></td>
+      <td>The <code>ObjectStore.get</code> method raises <code>ObjectNotFoundError</code> when nothing resolves, <code>SchemaMismatchError</code> when content is filed under a different <a class="term-ref" href="#term-schema">schema</a>, and <code>ContentHashMismatchError</code> when stored bytes no longer hash to their reference. <code>ContentHashMismatchError</code> is also raised on <a class="term-ref" href="#term-immutable-put">put</a> when a supplied reference does not match its <a class="term-ref" href="#term-record">record</a>.</td>
+    </tr>
+    <tr>
+      <td><a class="term-ref" href="#term-atomic-key-to-reference-binding">Atomic Key-to-Reference Binding</a></td>
+      <td><code>BindStatus</code>, <code>BindingConflictError</code></td>
+      <td>The <code>ObjectStore.bind</code> method returns a <code>BindStatus</code> of <code>BOUND</code> or <code>IDEMPOTENT</code>; a different-reference <a class="term-ref" href="#term-conflict">conflict</a> raises <code>BindingConflictError</code>, which carries the preserved durable winner.</td>
+    </tr>
+    <tr>
+      <td><a class="term-ref" href="#term-backend">Backend</a></td>
+      <td><code>Backend</code>, <code>MemoryBackend</code>, <code>SqliteBackend</code>, <code>PutOutcome</code>, <code>BindOutcome</code></td>
+      <td><code>Backend</code> is the neutral protocol; <code>MemoryBackend</code> and <code>SqliteBackend</code> are the two interchangeable implementations. <code>PutOutcome</code> and <code>BindOutcome</code> are the backend-level results a <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> returns, distinct from the caller-facing <code>PutStatus</code>/<code>BindStatus</code>.</td>
+    </tr>
+    <tr>
+      <td>Storage errors</td>
+      <td><code>StoreError</code></td>
+      <td>The base class every dr-store failure derives from; the concept-specific members are listed with <a class="term-ref" href="#term-object-reference">object reference</a>, <a class="term-ref" href="#term-immutable-put">immutable put</a>, <a class="term-ref" href="#term-verified-get">verified get</a>, and <a class="term-ref" href="#term-atomic-key-to-reference-binding">atomic key-to-reference binding</a> above.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="colophon">
+  <p><strong>Scope.</strong> This sheet is the authoritative statement of the append-only content-addressed object storage contract dr-store implements. Exported names match <code>src/dr_store/__init__.py</code>.</p>
+</div>
+
+</main>
+</body>
+</html>
