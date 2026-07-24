@@ -17,7 +17,7 @@ import enum
 import json
 from typing import TYPE_CHECKING
 
-from dr_serialize import Jsonable, canonical_json, validate_finite_json
+from dr_serialize import Jsonable, canonical_json, validate_strict_json
 
 from dr_store.errors import (
     BindingConflictError,
@@ -78,7 +78,7 @@ class ObjectStore:
         the same content hash raises :class:`ObjectConflictError` and never
         overwrites the stored value.
         """
-        validated = validate_finite_json(record)
+        validated = validate_strict_json(record)
         canonical = canonical_json(validated)
         reference = ObjectReference.for_record(schema, validated)
         outcome = self._backend.put_object(
@@ -133,7 +133,7 @@ class ObjectStore:
                 actual="<unparseable: stored content is not valid JSON>",
                 schema=reference.schema,
             ) from exc
-        record = validate_finite_json(decoded)
+        record = validate_strict_json(decoded)
         reference.verify_record(record)
         return record
 

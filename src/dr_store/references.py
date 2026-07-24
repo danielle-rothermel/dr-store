@@ -14,8 +14,8 @@ from dataclasses import dataclass
 
 from dr_serialize import (
     Jsonable,
-    sha256_json_digest,
-    validate_finite_json,
+    json_hash,
+    validate_strict_json,
 )
 
 from dr_store.errors import ContentHashMismatchError, ReferenceValidationError
@@ -39,7 +39,7 @@ def compute_content_hash(record: Jsonable) -> str:
     hash that no later read could reproduce. Canonicalization and the digest
     itself come entirely from dr-serialize.
     """
-    return sha256_json_digest(validate_finite_json(record))
+    return json_hash(validate_strict_json(record))
 
 
 @dataclass(frozen=True, slots=True)
