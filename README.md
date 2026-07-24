@@ -22,6 +22,12 @@ complete canonical persisted record, canonicalized through
 canonical JSON. `dr-store` does not invent a second canonicalization
 dialect, and a Content Hash is not an Identity Hash.
 
+The [vocabulary sheet](https://danielle-rothermel.github.io/dr-store/)
+(source: `.defs/vocab.html`) is the authoritative statement of the
+append-only content-addressed object storage contract this repo
+implements: the terms, the guarantees, what is in and out of scope, and
+the mapping from each term to the exported names.
+
 ## Ecosystem
 
 `dr-store` depends only on `dr-serialize` for canonical JSON and strict
