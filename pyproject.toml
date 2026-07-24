@@ -8,13 +8,21 @@ authors = [
     { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" }
 ]
 requires-python = ">=3.12"
+keywords = [
+    "content-addressed",
+    "object-store",
+    "append-only",
+    "immutable",
+    "storage",
+    "hashing",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
 dependencies = [
@@ -24,6 +32,8 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/danielle-rothermel/dr-store"
 Issues = "https://github.com/danielle-rothermel/dr-store/issues"
+Documentation = "https://danielle-rothermel.github.io/dr-store/"
+Changelog = "https://github.com/danielle-rothermel/dr-store/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]
