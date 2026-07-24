@@ -66,7 +66,7 @@ class SqliteBackend:
             isolation_level=None,
         )
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA synchronous=FULL")
         conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
         return conn
 

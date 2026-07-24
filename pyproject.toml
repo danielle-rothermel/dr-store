@@ -53,10 +53,6 @@ only-include = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
-
 [tool.ruff]
 include = ["src/**/*.py", "tests/**/*.py"]
 line-length = 79

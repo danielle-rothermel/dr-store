@@ -63,6 +63,26 @@ def test_reference_rejects_malformed_content_hash(bad_hash: str) -> None:
         ObjectReference(schema="example.record", content_hash=bad_hash)
 
 
+@pytest.mark.parametrize("bad_schema", [None, 123, b"bytes"])
+def test_reference_rejects_non_string_schema(bad_schema: object) -> None:
+    with pytest.raises(ReferenceValidationError):
+        ObjectReference(
+            schema=bad_schema,  # ty: ignore[invalid-argument-type]
+            content_hash=VALID_HASH,
+        )
+
+
+@pytest.mark.parametrize("bad_hash", [None, 123, b"a" * 64])
+def test_reference_rejects_non_string_content_hash(
+    bad_hash: object,
+) -> None:
+    with pytest.raises(ReferenceValidationError):
+        ObjectReference(
+            schema="example.record",
+            content_hash=bad_hash,  # ty: ignore[invalid-argument-type]
+        )
+
+
 def test_reference_is_frozen_and_hashable() -> None:
     ref = ObjectReference.for_record("example.record", {"a": 1})
     with pytest.raises(dataclasses.FrozenInstanceError):

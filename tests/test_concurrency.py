@@ -127,3 +127,23 @@ def test_cross_process_binds_one_durable_winner(tmp_path: Path) -> None:
 
     winner = ObjectStore(SqliteBackend(db_path)).resolve("cross-process-key")
     assert winner is not None
+
+
+def test_cross_process_same_reference_is_idempotent(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "store.db")
+    # Initialize the schema once in the parent before forking contenders.
+    SqliteBackend(db_path)
+    workers = 8
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
+        results = list(
+            pool.map(
+                _bind_in_subprocess,
+                [db_path] * workers,
+                [0] * workers,
+            )
+        )
+
+    assert results.count("bound") == 1
+    assert results.count("idempotent") == workers - 1
+    assert "conflict" not in results

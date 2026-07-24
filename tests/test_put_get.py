@@ -124,6 +124,28 @@ def test_get_detects_non_json_corruption(store: ObjectStore) -> None:
         store.get(ref)
 
 
+def test_get_detects_non_finite_corruption(store: ObjectStore) -> None:
+    # json.loads accepts NaN/Infinity, so a poisoned canonical text carrying
+    # a non-finite token parses yet fails strict validation. The verified
+    # read must surface this as a typed contract error, never a leaked
+    # StrictJsonError.
+    ref, _ = store.put(SCHEMA, RECORD)
+    _overwrite_stored_canonical(store, ref, '{"payload": NaN}')
+    with pytest.raises(ContentHashMismatchError):
+        store.get(ref)
+
+
+def test_get_detects_non_canonical_bytes(store: ObjectStore) -> None:
+    # Byte-level drift that still decodes and hashes identically is
+    # corruption: {"a": 1} (with a space) decodes to the same value as the
+    # canonical {"a":1}, so verify_record passes, but the raw bytes differ
+    # from the canonical form and an idempotent put replay would reject them.
+    ref, _ = store.put(SCHEMA, {"a": 1})
+    _overwrite_stored_canonical(store, ref, '{"a": 1}')
+    with pytest.raises(ContentHashMismatchError):
+        store.get(ref)
+
+
 def test_same_content_under_different_schema_both_store(
     store: ObjectStore,
 ) -> None:

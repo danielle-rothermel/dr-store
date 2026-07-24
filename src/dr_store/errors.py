@@ -23,16 +23,17 @@ class ReferenceValidationError(StoreError):
     """An ObjectReference is structurally invalid.
 
     Raised when the declared schema is empty or the ``content_hash`` is not
-    a 64-character lowercase hex SHA-256 digest.
+    a 64-character lowercase hex SHA-256 hash.
     """
 
 
 class ContentHashMismatchError(StoreError):
     """A record's recomputed Content Hash does not match its reference.
 
-    Raised on immutable put when the caller-supplied reference does not
-    match the hash of the supplied record, and on verified get when stored
-    content no longer hashes to the reference it is filed under (corruption).
+    Raised on verified get when stored content no longer hashes to the
+    reference it is filed under -- corruption, including stored bytes that
+    are unparseable or not in canonical form -- and by direct
+    :meth:`ObjectReference.verify_record` checks.
     """
 
     def __init__(
@@ -83,8 +84,8 @@ class ObjectConflictError(StoreError):
 
     A Content Hash collision that is not an identical-value replay: the
     existing stored value is preserved and never overwritten. In practice
-    this signals a genuine SHA-256 collision or a caller supplying a forged
-    reference; it is surfaced rather than silently accepted.
+    this signals a genuine SHA-256 collision or a nonconforming or poisoned
+    backend; it is surfaced rather than silently accepted.
     """
 
     def __init__(self, *, schema: str, content_hash: str) -> None:

@@ -25,7 +25,7 @@ _HEX_DIGITS = frozenset("0123456789abcdef")
 
 
 def is_content_hash(value: str) -> bool:
-    """Return whether ``value`` is a 64-character lowercase hex digest."""
+    """Return whether ``value`` is a 64-character lowercase hex hash."""
     return len(value) == CONTENT_HASH_LENGTH and all(
         char in _HEX_DIGITS for char in value
     )
@@ -36,7 +36,7 @@ def compute_content_hash(record: Jsonable) -> str:
 
     ``record`` must be strict finite JSON; it is validated before hashing so
     that a non-JSON or non-finite value fails loudly rather than producing a
-    hash that no later read could reproduce. Canonicalization and the digest
+    hash that no later read could reproduce. Canonicalization and the hash
     itself come entirely from dr-serialize.
     """
     return json_hash(validate_strict_json(record))
@@ -47,7 +47,7 @@ class ObjectReference:
     """Typed content-addressed reference: ``(schema, content_hash)``.
 
     ``schema`` is the declared record schema; ``content_hash`` is the full
-    64-character lowercase SHA-256 digest of the complete canonical
+    64-character lowercase SHA-256 hash of the complete canonical
     persisted record. Both components are validated at construction so an
     ill-formed reference can never enter the store.
     """
@@ -56,14 +56,16 @@ class ObjectReference:
     content_hash: str
 
     def __post_init__(self) -> None:
-        if not self.schema:
+        if not isinstance(self.schema, str) or not self.schema:
             raise ReferenceValidationError(
                 "ObjectReference schema must be a non-empty string"
             )
-        if not is_content_hash(self.content_hash):
+        if not isinstance(self.content_hash, str) or not is_content_hash(
+            self.content_hash
+        ):
             raise ReferenceValidationError(
                 "ObjectReference content_hash must be a 64-character "
-                f"lowercase hex SHA-256 digest, got {self.content_hash!r}"
+                f"lowercase hex SHA-256 hash, got {self.content_hash!r}"
             )
 
     @classmethod

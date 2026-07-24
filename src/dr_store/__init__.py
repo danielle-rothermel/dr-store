@@ -2,9 +2,9 @@
 
 dr-store maps a typed :class:`ObjectReference` -- a declared record
 ``schema`` plus the full SHA-256 Content Hash of the complete canonical
-persisted record -- to the exact immutable record value, and provides one
-generic atomic key-to-reference binding. It owns three things and nothing
-else:
+persisted record -- to the immutable canonical (JSON-equivalent) record
+value, and provides one generic atomic key-to-reference binding. It owns
+three things and nothing else:
 
 * **Immutable put** -- an absent key atomically accepts a verified value;
   the identical canonical value replays idempotently; different content

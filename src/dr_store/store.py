@@ -17,7 +17,12 @@ import enum
 import json
 from typing import TYPE_CHECKING
 
-from dr_serialize import Jsonable, canonical_json, validate_strict_json
+from dr_serialize import (
+    Jsonable,
+    StrictJsonError,
+    canonical_json,
+    validate_strict_json,
+)
 
 from dr_store.errors import (
     BindingConflictError,
@@ -99,7 +104,7 @@ class ObjectStore:
         )
 
     def get(self, reference: ObjectReference) -> Jsonable:
-        """Resolve a reference to its exact immutable record, verified.
+        """Resolve a reference to its immutable canonical value, verified.
 
         Recomputes and verifies the Content Hash and checks the declared
         schema on every read. Raises :class:`ObjectNotFoundError` when
@@ -120,21 +125,30 @@ class ObjectStore:
                 expected=reference.schema,
                 actual=stored_schema,
             )
-        # Stored canonical bytes that no longer parse as JSON (bit rot,
-        # truncation, a partial write) are corruption, not a caller error:
-        # surface them as a typed content-hash mismatch so every corruption
-        # mode fails through one contract exception, never a bare
-        # json.JSONDecodeError.
+        # Stored canonical bytes that no longer parse as strict JSON -- bit
+        # rot, truncation, a partial write, or a non-finite token like NaN or
+        # Infinity that json.loads accepts but strict validation rejects --
+        # are corruption, not a caller error: surface them as a typed
+        # content-hash mismatch so every corruption mode fails through one
+        # contract exception, never a bare JSONDecodeError or StrictJsonError.
         try:
-            decoded = json.loads(canonical)
-        except json.JSONDecodeError as exc:
+            record = validate_strict_json(json.loads(canonical))
+        except (json.JSONDecodeError, StrictJsonError) as exc:
             raise ContentHashMismatchError(
                 expected=reference.content_hash,
-                actual="<unparseable: stored content is not valid JSON>",
+                actual="<stored content is not valid strict JSON>",
                 schema=reference.schema,
             ) from exc
-        record = validate_strict_json(decoded)
         reference.verify_record(record)
+        # Byte-level drift from the canonical form is corruption even when the
+        # decoded value still hashes correctly: a get that accepted it would
+        # disagree with an idempotent put replay, which compares raw bytes.
+        if canonical_json(record) != canonical:
+            raise ContentHashMismatchError(
+                expected=reference.content_hash,
+                actual="<stored content is not in canonical form>",
+                schema=reference.schema,
+            )
         return record
 
     def bind(

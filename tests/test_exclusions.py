@@ -62,12 +62,11 @@ FORBIDDEN_METHODS = frozenset(
     }
 )
 
-_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
+_TOKEN_PARTS = re.compile(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+")
 
 
 def _tokens(name: str) -> set[str]:
-    parts = _TOKEN_SPLIT.split(name)
-    return {part.lower() for part in parts if part}
+    return {part.lower() for part in _TOKEN_PARTS.findall(name)}
 
 
 def test_public_names_carry_no_domain_vocabulary() -> None:
