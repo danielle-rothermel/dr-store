@@ -147,9 +147,10 @@ class AllocationError(DocumentDirectoryError):
 class ManifestPublishError(DocumentDirectoryError):
     """A Manifest publication operation failed.
 
-    Raised when the payload is not strict finite JSON and when the
-    temp-write, flush, atomic replace, or directory flush fails. The
-    originating OS or validation error is preserved as ``__cause__``.
+    Raised when the payload is outside the dr-serialize Canonical JSON Text
+    profile and when the temp-write, flush, atomic replace, or directory flush
+    fails. The originating OS or validation error is preserved as
+    ``__cause__``.
     """
 
 
@@ -158,8 +159,9 @@ class ManifestReadError(DocumentDirectoryError):
 
     Covers a Manifest name that is not a safe single segment, a missing
     file, unreadable bytes, malformed JSON, non-strict JSON (a non-finite
-    token), and bytes that decode but are not in canonical form. The
-    originating OS or decoding error is preserved as ``__cause__``.
+    token), values outside the Canonical JSON Text profile, and bytes that
+    decode but are not in canonical form. The originating OS or decoding error
+    is preserved as ``__cause__``.
     """
 
 

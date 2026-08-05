@@ -29,8 +29,9 @@ It is organized into these functional areas:
 ## Content Addressing
 
 A complete record is addressed by its declared schema and the SHA-256 digest
-of its canonical JSON. References validate their own shape and can verify that
-a record still resolves to the same content.
+of its Canonical JSON Text under dr-serialize's frozen profile. References
+validate their own shape and can verify that a record still resolves to the
+same content.
 
 ```python
 CONTENT_HASH_LENGTH = 64
@@ -133,13 +134,14 @@ class Backend(Protocol):
 
 ## Document Directory
 
-A Document Directory holds one atomically published canonical-JSON manifest
-and zero or more streamed binary sidecars. The manifest remains the caller's
-source of truth; the directory owns publication, retention, and verification
-mechanics without interpreting the payload. Sidecar verification accepts one
-safe direct-child name, refuses final-component symlinks for both the Document
-Directory and named child, requires the child to be a regular file, and
-streams bounded reads from the same descriptor it inspected.
+A Document Directory holds one atomically published Manifest satisfying the
+dr-serialize Canonical JSON Text profile and zero or more streamed binary
+sidecars. The Manifest remains the caller's source of truth; the directory
+owns publication, retention, and verification mechanics without interpreting
+the payload. Sidecar verification accepts one safe direct-child name, refuses
+final-component symlinks for both the Document Directory and named child,
+requires the child to be a regular file, and streams bounded reads from the
+same descriptor it inspected.
 
 ```python
 class DocumentDirectory:

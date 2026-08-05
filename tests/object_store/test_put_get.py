@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING
 
 import pytest
 from dr_serialize import StrictJsonError
+from dr_serialize.canonical import (
+    CANONICAL_JSON_MAX_INTEGER_DIGITS,
+    JsonEncodeError,
+)
 
 from dr_store import (
     ContentHashMismatchError,
@@ -195,6 +200,26 @@ def test_get_detects_non_canonical_bytes(
         store.get(ref)
 
 
+def test_get_translates_stored_content_outside_the_canonical_profile(
+    controlled_backend: ControlledBackend,
+) -> None:
+    canonical = "1" + ("0" * CANONICAL_JSON_MAX_INTEGER_DIGITS)
+    ref = ObjectReference(
+        schema=SCHEMA,
+        content_hash=hashlib.sha256(canonical.encode()).hexdigest(),
+    )
+    store = _store_with_controlled_canonical(
+        controlled_backend,
+        ref,
+        canonical,
+    )
+
+    with pytest.raises(ContentHashMismatchError) as caught:
+        store.get(ref)
+
+    assert isinstance(caught.value.__cause__, JsonEncodeError)
+
+
 def test_same_content_under_different_schema_both_store(
     store: ObjectStore,
 ) -> None:
@@ -254,5 +279,18 @@ def test_invalid_strict_json_never_reaches_backend(
             SCHEMA,
             invalid_record,  # ty: ignore[invalid-argument-type]
         )
+    assert controlled_backend.put_calls == 0
+    assert controlled_backend.object_row is None
+
+
+def test_canonical_profile_violation_never_reaches_backend(
+    controlled_backend: ControlledBackend,
+) -> None:
+    record = 10**CANONICAL_JSON_MAX_INTEGER_DIGITS
+    store = ObjectStore(controlled_backend)
+
+    with pytest.raises(JsonEncodeError):
+        store.put(SCHEMA, record)
+
     assert controlled_backend.put_calls == 0
     assert controlled_backend.object_row is None

@@ -37,10 +37,11 @@ def is_content_hash(value: str) -> bool:
 def compute_content_hash(record: Jsonable) -> str:
     """Return the Content Hash of a complete canonical stored record.
 
-    ``record`` must be strict finite JSON; it is validated before hashing so
-    that a non-JSON or non-finite value fails loudly rather than producing a
-    hash that no later read could reproduce. Canonicalization and the hash
-    itself come entirely from dr-serialize.
+    ``record`` must satisfy dr-serialize's Canonical JSON Text profile. It is
+    validated before hashing so that a non-JSON, non-finite, or out-of-profile
+    value fails loudly rather than producing a hash that no later read could
+    reproduce. Canonicalization and the hash itself come entirely from
+    dr-serialize.
     """
     return json_hash(validate_strict_json(record))
 

@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Self, cast
 
 import pytest
+from dr_serialize.canonical import (
+    CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+    CANONICAL_JSON_MAX_INTEGER_DIGITS,
+    JsonEncodeError,
+)
 
 from dr_store import (
     DocumentDirectory,
@@ -23,6 +28,25 @@ MANIFEST_NAME = "record.json"
 FIRST: Jsonable = {"state": "started", "sidecars": []}
 SECOND: Jsonable = {"state": "finished", "sidecars": ["stdout.bin"]}
 WATCHDOG_SECONDS = 60
+
+
+def _nested_value(depth: int) -> Jsonable:
+    value: Jsonable = None
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+PROFILE_VIOLATIONS = [
+    pytest.param(
+        _nested_value(CANONICAL_JSON_MAX_CONTAINER_DEPTH + 1),
+        id="container-depth",
+    ),
+    pytest.param(
+        10**CANONICAL_JSON_MAX_INTEGER_DIGITS,
+        id="integer-digits",
+    ),
+]
 
 
 def _allocate(root: Path) -> DocumentDirectory:
@@ -248,6 +272,22 @@ def test_non_strict_publish_is_typed_and_preserves_previous_manifest(
     assert _read(directory) == FIRST
 
 
+@pytest.mark.parametrize("manifest", PROFILE_VIOLATIONS)
+def test_canonical_profile_publish_failure_is_typed_and_preserves_manifest(
+    tmp_path: Path,
+    manifest: Jsonable,
+) -> None:
+    directory = _allocate(tmp_path)
+    directory.publish(FIRST)
+
+    with pytest.raises(ManifestPublishError) as caught:
+        directory.publish(manifest)
+
+    assert isinstance(caught.value.__cause__, JsonEncodeError)
+    assert _read(directory) == FIRST
+    assert not (directory.path / f"{MANIFEST_NAME}.tmp").exists()
+
+
 def test_read_manifest_missing_is_typed(tmp_path: Path) -> None:
     directory = _allocate(tmp_path)
     with pytest.raises(ManifestReadError) as caught:
@@ -276,6 +316,27 @@ def test_read_manifest_non_canonical_is_typed(tmp_path: Path) -> None:
     (directory.path / MANIFEST_NAME).write_bytes(b'{"a": 1}')
     with pytest.raises(ManifestReadError):
         _read(directory)
+
+
+@pytest.mark.parametrize("manifest", PROFILE_VIOLATIONS)
+def test_read_manifest_outside_the_canonical_profile_is_typed(
+    tmp_path: Path,
+    manifest: Jsonable,
+) -> None:
+    directory = _allocate(tmp_path)
+    canonical = json.dumps(
+        manifest,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    (directory.path / MANIFEST_NAME).write_text(canonical)
+
+    with pytest.raises(ManifestReadError) as caught:
+        _read(directory)
+
+    assert isinstance(caught.value.__cause__, JsonEncodeError)
 
 
 def test_read_manifest_undecodable_bytes_is_typed(tmp_path: Path) -> None:

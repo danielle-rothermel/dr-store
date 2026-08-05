@@ -21,6 +21,7 @@ from pathlib import Path
 
 from dr_serialize import (
     Jsonable,
+    JsonEncodeError,
     StrictJsonError,
     canonical_json,
     validate_strict_json,
@@ -121,10 +122,15 @@ class DocumentDirectory:
         """
         try:
             canonical = canonical_json(validate_strict_json(manifest))
-        except (StrictJsonError, TypeError, ValueError) as exc:
+        except (
+            JsonEncodeError,
+            StrictJsonError,
+            TypeError,
+            ValueError,
+        ) as exc:
             raise ManifestPublishError(
-                f"manifest for {str(self._manifest_path)!r} is not strict "
-                "finite JSON"
+                f"manifest for {str(self._manifest_path)!r} is outside the "
+                "Canonical JSON Text profile"
             ) from exc
         try:
             with self._temp_path.open("wb") as handle:
@@ -202,7 +208,14 @@ class DocumentDirectory:
             raise ManifestReadError(
                 f"manifest {str(manifest_path)!r} is not strict JSON"
             ) from exc
-        if canonical_json(payload).encode("utf-8") != raw:
+        try:
+            canonical = canonical_json(payload).encode("utf-8")
+        except JsonEncodeError as exc:
+            raise ManifestReadError(
+                f"manifest {str(manifest_path)!r} is outside the Canonical "
+                "JSON Text profile"
+            ) from exc
+        if canonical != raw:
             raise ManifestReadError(
                 f"manifest {str(manifest_path)!r} is not in canonical form"
             )

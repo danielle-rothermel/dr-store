@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from dr_serialize import (
     Jsonable,
+    JsonEncodeError,
     StrictJsonError,
     canonical_json,
     validate_strict_json,
@@ -140,11 +141,19 @@ class ObjectStore:
                 actual="<stored content is not valid strict JSON>",
                 schema=reference.schema,
             ) from exc
-        reference.verify_record(record)
+        try:
+            reference.verify_record(record)
+            verified_canonical = canonical_json(record)
+        except JsonEncodeError as exc:
+            raise ContentHashMismatchError(
+                expected=reference.content_hash,
+                actual="<stored content is outside the canonical profile>",
+                schema=reference.schema,
+            ) from exc
         # Byte-level drift from the canonical form is corruption even when the
         # decoded value still hashes correctly: a get that accepted it would
         # disagree with an idempotent put replay, which compares raw bytes.
-        if canonical_json(record) != canonical:
+        if verified_canonical != canonical:
             raise ContentHashMismatchError(
                 expected=reference.content_hash,
                 actual="<stored content is not in canonical form>",
