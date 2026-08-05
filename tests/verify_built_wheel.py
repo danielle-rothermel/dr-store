@@ -8,11 +8,49 @@ import importlib.util
 import pathlib
 import sys
 
-PUBLIC_MODULES = (
-    "dr_store",
-    "dr_store.document_directory",
-    "dr_store.storage_backends",
-)
+EXPECTED_PUBLIC_EXPORTS = {
+    "dr_store": [
+        "CONTENT_HASH_LENGTH",
+        "AllocationError",
+        "Backend",
+        "BindOutcome",
+        "BindStatus",
+        "BindingConflictError",
+        "ContentHashMismatchError",
+        "DocumentDirectory",
+        "DocumentDirectoryError",
+        "ManifestPublishError",
+        "ManifestReadError",
+        "MemoryBackend",
+        "ObjectConflictError",
+        "ObjectNotFoundError",
+        "ObjectReference",
+        "ObjectStore",
+        "PutOutcome",
+        "PutStatus",
+        "ReferenceValidationError",
+        "SchemaMismatchError",
+        "SidecarSummary",
+        "SidecarVerificationError",
+        "SidecarWriter",
+        "SqliteBackend",
+        "StoreError",
+        "compute_content_hash",
+        "is_content_hash",
+    ],
+    "dr_store.document_directory": [
+        "DocumentDirectory",
+        "SidecarSummary",
+        "SidecarWriter",
+    ],
+    "dr_store.storage_backends": [
+        "Backend",
+        "BindOutcome",
+        "MemoryBackend",
+        "PutOutcome",
+        "SqliteBackend",
+    ],
+}
 
 FUNCTIONAL_MODULES = (
     "dr_store.content_addressing",
@@ -62,9 +100,13 @@ def main() -> None:
     for module_name in FUNCTIONAL_MODULES:
         importlib.import_module(module_name)
 
-    for module_name in PUBLIC_MODULES:
+    for module_name, expected_exports in EXPECTED_PUBLIC_EXPORTS.items():
         module = importlib.import_module(module_name)
-        for export in module.__all__:
+        assert module.__all__ == expected_exports, (
+            f"{module_name}.__all__ does not match the public contract: "
+            f"{module.__all__!r}"
+        )
+        for export in expected_exports:
             assert getattr(module, export) is not None, (
                 f"{module_name}.{export} is not importable"
             )
