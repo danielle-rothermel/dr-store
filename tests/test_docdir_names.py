@@ -60,6 +60,15 @@ def test_unsafe_manifest_name_is_rejected(tmp_path: Path, name: str) -> None:
 
 
 @pytest.mark.parametrize("name", UNSAFE_NAMES)
+def test_unsafe_manifest_name_is_rejected_on_construction(
+    tmp_path: Path, name: str
+) -> None:
+    with pytest.raises(AllocationError):
+        DocumentDirectory(tmp_path, name)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("name", UNSAFE_NAMES)
 def test_unsafe_manifest_name_is_rejected_on_read(
     tmp_path: Path,
     name: str,

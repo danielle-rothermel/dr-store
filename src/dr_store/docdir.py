@@ -268,6 +268,7 @@ class DocumentDirectory:
     """
 
     def __init__(self, path: Path, manifest_name: str) -> None:
+        _validate_safe_name(manifest_name, role="manifest_name")
         self._path = path
         self._manifest_name = manifest_name
         self._manifest_path = path / manifest_name
