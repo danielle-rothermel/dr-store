@@ -1,10 +1,3 @@
-"""Visibility after abrupt process death following completed operations.
-
-Each child announces that its public operations returned, then blocks until
-the parent delivers ``SIGKILL``. These tests establish read-back after process
-death; they do not interrupt internal commit phases or model power loss.
-"""
-
 from __future__ import annotations
 
 import json
@@ -66,6 +59,8 @@ sys.stdin.read()
 
 
 def _run_to_completion_then_kill(root: Path, scenario: str) -> Path:
+    # Evidence begins after public operations return; it excludes mid-commit
+    # interruption and power loss.
     process = subprocess.Popen(  # noqa: S603
         [sys.executable, "-c", _CHILD, str(root), scenario],
         stdin=subprocess.PIPE,

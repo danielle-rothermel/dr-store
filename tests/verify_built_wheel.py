@@ -1,11 +1,9 @@
-"""Verify the installed wheel without importing from the repository."""
-
 from __future__ import annotations
 
 import importlib
 import importlib.resources
-import importlib.util
 import pathlib
+import pkgutil
 import sys
 
 FUNCTIONAL_MODULES = (
@@ -21,13 +19,6 @@ FUNCTIONAL_MODULES = (
     "dr_store.storage_backends.contract",
     "dr_store.storage_backends.memory",
     "dr_store.storage_backends.sqlite",
-)
-
-REMOVED_MODULES = (
-    "dr_store.backends",
-    "dr_store.docdir",
-    "dr_store.references",
-    "dr_store.store",
 )
 
 
@@ -53,16 +44,23 @@ def main() -> None:
         f"{package_path}"
     )
 
+    discovered_modules = {
+        module.name
+        for module in pkgutil.walk_packages(
+            package.__path__, prefix=f"{package.__name__}."
+        )
+    }
+    assert discovered_modules == set(FUNCTIONAL_MODULES), (
+        "dr_store module set differs from the expected package layout: "
+        f"expected={sorted(FUNCTIONAL_MODULES)!r}, "
+        f"actual={sorted(discovered_modules)!r}"
+    )
+
     for module_name in FUNCTIONAL_MODULES:
         importlib.import_module(module_name)
 
     typed_marker = importlib.resources.files("dr_store").joinpath("py.typed")
     assert typed_marker.is_file(), "dr_store/py.typed is absent from the wheel"
-
-    for module_name in REMOVED_MODULES:
-        assert importlib.util.find_spec(module_name) is None, (
-            f"removed module remains importable: {module_name}"
-        )
 
     print("built wheel package layout verified")
 

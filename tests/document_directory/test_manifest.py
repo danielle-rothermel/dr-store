@@ -1,5 +1,3 @@
-"""Manifest publication, deterministic atomic visibility, and read-back."""
-
 from __future__ import annotations
 
 import json

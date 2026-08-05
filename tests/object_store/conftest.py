@@ -1,5 +1,3 @@
-"""Controlled backend double for ObjectStore-only fault interpretation."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,8 +9,6 @@ from dr_store import BindOutcome, PutOutcome
 
 @dataclass(slots=True)
 class ControlledBackend:
-    """Minimal Backend whose stored object can be set to controlled bytes."""
-
     object_row: tuple[str, str, str] | None = None
     bindings: dict[str, tuple[str, str]] = field(default_factory=dict)
     put_calls: int = 0

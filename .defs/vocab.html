@@ -6,26 +6,14 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <title>dr-store · The storage contracts this repo owns</title>
-<style>
-  /* Page-local tokens. Purple (--anchor) = main-point accents (.key/.must);
-     blue (--accent) = term links (.term-ref), matching doc.css link hue. */
-  .term-name { font-weight: 600; }
-  dfn.term-name { font-style: normal; }
-  .must { color: var(--anchor); font-weight: 600; }
-  .term-ref { color: var(--accent); text-decoration: underline; text-decoration-style: dashed; text-underline-offset: 2px; }
-  td ul { margin: 0; padding-left: 18px; }
-  td li { margin-bottom: 4px; }
-  td li:last-child { margin-bottom: 0; }
-</style>
 </head>
 <body>
 <main class="wide">
 
 <h1>The dr-store storage contracts</h1>
 <p class="dek">A reference for the terms and guarantees that bind dr-store.</p>
-<div class="byline">dr-store · 2026-07-24</div>
 
-<p>This is the vocabulary of the two components dr-store implements — the append-only content-addressed object store, and the Document Directory below it: the <span class="key">terms</span>, the <span class="key">guarantees</span> that bind this repo, what is in and out of <span class="key">scope</span>, and the <span class="key">mapping</span> from each term to the names actually exported by <a href="https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/__init__.py"><code>dr_store</code></a>.</p>
+<p>This vocabulary defines the append-only content-addressed Object Store and the Document Directory: their <span class="key">terms</span>, <span class="key">guarantees</span>, <span class="key">scope</span>, and mappings to the names exported by <a href="https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/__init__.py"><code>dr_store</code></a>.</p>
 
 <div class="section-head" id="terms"><h2>Object Store Terms</h2></div>
 
@@ -33,23 +21,23 @@
 <table>
   <thead><tr><th>Term</th><th>Definition</th></tr></thead>
   <tbody>
-    <tr><td><dfn class="term-name" id="term-record">Record</dfn></td><td>One complete stored value: a JSON-safe structure carrying every field the caller means to persist, stored and returned as the canonical JSON-equivalent value (its observable mapping order may differ from the input).</td></tr>
+    <tr><td><dfn class="term-name" id="term-record">Record</dfn></td><td>One complete stored value accepted by dr-serialize's frozen <a class="term-ref" href="#term-canonical-json">Canonical JSON</a> profile, carrying every field the caller means to persist. It is stored and returned as the canonical JSON-equivalent value, whose observable mapping order may differ from the input.</td></tr>
     <tr><td><dfn class="term-name" id="term-schema">Schema</dfn></td><td>A declared name that labels the shape of a <a class="term-ref" href="#term-record">record</a>. It is opaque to the store — a string the caller owns — and it partitions stored content so the same bytes filed under two names remain distinct.</td></tr>
-    <tr><td><dfn class="term-name" id="term-canonical-json">Canonical JSON</dfn></td><td>The single deterministic UTF-8 JSON text of a JSON-safe value — compact, sorted keys — computed through the serialization layer. The same value always produces the same bytes; dr-store never derives a second rendering of its own.</td></tr>
+    <tr><td><dfn class="term-name" id="term-canonical-json">Canonical JSON</dfn></td><td>The single deterministic UTF-8 JSON text of a value admitted by dr-serialize's frozen Canonical JSON Text profile. The profile defines both the permitted values and their rendering; dr-store never derives a second dialect of its own.</td></tr>
     <tr><td><dfn class="term-name" id="term-hash">Hash</dfn></td><td>Deterministic fixed-length value computed by a declared algorithm over exact declared input bytes. dr-store implements the <a class="term-ref" href="#term-content-hash">content hash</a> specialization over <a class="term-ref" href="#term-canonical-json">canonical JSON</a>.</td></tr>
     <tr><td><dfn class="term-name" id="term-key">Key</dfn></td><td>An opaque caller-owned string naming a place in the binding table. Its meaning belongs entirely to the caller; the store never parses or interprets it.</td></tr>
-    <tr><td><dfn class="term-name" id="term-binding">Binding</dfn></td><td>A single durable association from a <a class="term-ref" href="#term-key">key</a> to one <a class="term-ref" href="#term-object-reference">object reference</a>. Once written it is never replaced, cleared, or superseded.</td></tr>
+    <tr><td><dfn class="term-name" id="term-binding">Binding</dfn></td><td>A single association from a <a class="term-ref" href="#term-key">key</a> to one <a class="term-ref" href="#term-object-reference">object reference</a>. Once written it is never replaced, cleared, or superseded.</td></tr>
     <tr><td><dfn class="term-name" id="term-idempotent-replay">Idempotent Replay</dfn></td><td>A write whose incoming value is identical to the value already stored at the same place: no new content is created and the existing stored value is unchanged.</td></tr>
     <tr><td><dfn class="term-name" id="term-conflict">Conflict</dfn></td><td>A write whose incoming value differs from the value already stored at the same place; it is a typed outcome that leaves the existing stored value unchanged.</td></tr>
     <tr><td><dfn class="term-name" id="term-append-only">Append-Only</dfn></td><td>The property that stored content is only ever added, never mutated or removed. No operation in this contract replaces or deletes an existing <a class="term-ref" href="#term-record">record</a> or <a class="term-ref" href="#term-binding">binding</a>.</td></tr>
-    <tr><td><dfn class="term-name" id="term-compare-and-set">Compare-and-Set</dfn></td><td>The atomic durable write in which a value is stored only when its place is empty; an occupied place is left unchanged and its existing row is returned. It is the sole durability primitive each <a class="term-ref" href="#term-append-only">append-only</a> table rests on, provided by the <a class="term-ref" href="#term-backend">backend</a>.</td></tr>
-    <tr><td><dfn class="term-name" id="term-content-hash">Content Hash</dfn></td><td>The full 64-character lowercase SHA-256 <a class="term-ref" href="#term-hash">hash</a> of the <a class="term-ref" href="#term-canonical-json">canonical JSON</a> of a complete persisted <a class="term-ref" href="#term-record">record</a>, addressing that record's content.</td></tr>
+    <tr><td><dfn class="term-name" id="term-compare-and-set">Compare-and-Set</dfn></td><td>The atomic write in which a value is stored only when its place is empty; an occupied place is left unchanged and its existing row is returned. It is the storage primitive each <a class="term-ref" href="#term-append-only">append-only</a> table rests on, provided by the <a class="term-ref" href="#term-backend">backend</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="term-content-hash">Content Hash</dfn></td><td>The full 64-character lowercase SHA-256 <a class="term-ref" href="#term-hash">hash</a> of the <a class="term-ref" href="#term-canonical-json">canonical JSON</a> of a complete stored <a class="term-ref" href="#term-record">record</a>, addressing that record's content.</td></tr>
     <tr><td><dfn class="term-name" id="term-object-reference">Object Reference</dfn></td><td>The typed content-addressed handle pairing a declared <a class="term-ref" href="#term-schema">schema</a> with the full <a class="term-ref" href="#term-content-hash">content hash</a> of a <a class="term-ref" href="#term-record">record</a>. It resolves exactly one immutable stored record, and both parts are validated at construction so an ill-formed reference can never enter the store.</td></tr>
-    <tr><td><dfn class="term-name" id="term-object-store">Object Store</dfn></td><td>The authoritative <a class="term-ref" href="#term-append-only">append-only</a> mapping from an <a class="term-ref" href="#term-object-reference">object reference</a> to the exact immutable <a class="term-ref" href="#term-record">record</a> it addresses, plus the binding table from <a class="term-ref" href="#term-key">keys</a> to references. It owns every semantic rule of this contract and delegates only atomic durability to a <a class="term-ref" href="#term-backend">backend</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="term-object-store">Object Store</dfn></td><td>The authoritative <a class="term-ref" href="#term-append-only">append-only</a> mapping from an <a class="term-ref" href="#term-object-reference">object reference</a> to the exact immutable <a class="term-ref" href="#term-record">record</a> it addresses, plus the binding table from <a class="term-ref" href="#term-key">keys</a> to references. It owns every semantic rule of this contract and delegates only atomic storage operations to a <a class="term-ref" href="#term-backend">backend</a>.</td></tr>
     <tr><td><dfn class="term-name" id="term-immutable-put">Immutable Put</dfn></td><td>The single stored association between one complete <a class="term-ref" href="#term-record">record</a> and its schema-typed <a class="term-ref" href="#term-object-reference">object reference</a>, established once and never overwritten. A verified value at an absent place is stored, an identical value is an <a class="term-ref" href="#term-idempotent-replay">idempotent replay</a>, and differing content at the same place is a <a class="term-ref" href="#term-conflict">conflict</a>.</td></tr>
     <tr><td><dfn class="term-name" id="term-verified-get">Verified Get</dfn></td><td>An <a class="term-ref" href="#term-object-reference">object reference</a> resolved to the exact immutable <a class="term-ref" href="#term-record">record</a> it addresses, with the <a class="term-ref" href="#term-content-hash">content hash</a> and the declared <a class="term-ref" href="#term-schema">schema</a> confirmed against the stored bytes on every read.</td></tr>
-    <tr><td><dfn class="term-name" id="term-atomic-key-to-reference-binding">Atomic Key-to-Reference Binding</dfn></td><td>The single generic <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> that writes one <a class="term-ref" href="#term-binding">binding</a>: an unbound <a class="term-ref" href="#term-key">key</a> binds; the same <a class="term-ref" href="#term-object-reference">object reference</a> is an <a class="term-ref" href="#term-idempotent-replay">idempotent replay</a>; a different reference is a <a class="term-ref" href="#term-conflict">conflict</a> that preserves the durable winner. No overwrite, clear, or rebind path is exposed.</td></tr>
-    <tr><td><dfn class="term-name" id="term-backend">Backend</dfn></td><td>The backend-neutral contract supplying the atomic durable <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> primitives for the two <a class="term-ref" href="#term-append-only">append-only</a> tables, plus point reads. It stores the <a class="term-ref" href="#term-canonical-json">canonical JSON</a> text unchanged and introduces no second rendering; all hashing, verification, idempotency, and conflict typing live above it in the <a class="term-ref" href="#term-object-store">object store</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="term-atomic-key-to-reference-binding">Atomic Key-to-Reference Binding</dfn></td><td>The single generic <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> that writes one <a class="term-ref" href="#term-binding">binding</a>: an unbound <a class="term-ref" href="#term-key">key</a> binds; the same <a class="term-ref" href="#term-object-reference">object reference</a> is an <a class="term-ref" href="#term-idempotent-replay">idempotent replay</a>; a different reference is a <a class="term-ref" href="#term-conflict">conflict</a> that preserves the existing winner. No overwrite, clear, or rebind path is exposed.</td></tr>
+    <tr><td><dfn class="term-name" id="term-backend">Backend</dfn></td><td>The backend-neutral contract supplying atomic <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> primitives for the two <a class="term-ref" href="#term-append-only">append-only</a> tables, plus point reads. Persistence is implementation-specific: <code>MemoryBackend</code> is process-local, while <code>SqliteBackend</code> persists data for cross-process use. The backend stores <a class="term-ref" href="#term-canonical-json">canonical JSON</a> text unchanged; hashing, verification, idempotency, and conflict typing live above it in the <a class="term-ref" href="#term-object-store">object store</a>.</td></tr>
   </tbody>
 </table>
 </div>
@@ -57,7 +45,7 @@
 <div class="section-head" id="guarantees"><h2>Object Store Guarantees</h2></div>
 
 <div class="callout">
-  <strong>Stored Content Is Never Overwritten.</strong> Every write is <a class="term-ref" href="#term-append-only">append-only</a>: an absent place accepts a verified value, an identical value replays as idempotent success, and any differing value is a typed <a class="term-ref" href="#term-conflict">conflict</a> that preserves the existing durable value untouched.
+  <strong>Stored Content Is Never Overwritten.</strong> Every write is <a class="term-ref" href="#term-append-only">append-only</a>: an absent place accepts a verified value, an identical value replays as idempotent success, and any differing value is a typed <a class="term-ref" href="#term-conflict">conflict</a> that preserves the existing value untouched.
 </div>
 <ul>
   <li><span class="must">Computes the full</span> <a class="term-ref" href="#term-content-hash">content hash</a> — a lowercase <span class="key">64-character SHA-256</span> value over <a class="term-ref" href="#term-canonical-json">canonical JSON</a> — entirely through the serialization layer, inventing <span class="key">no second canonicalization</span>.</li>
@@ -65,10 +53,10 @@
   <li><span class="must">Stores</span> one complete <a class="term-ref" href="#term-record">record</a> per <a class="term-ref" href="#term-immutable-put">immutable put</a>: an absent (<a class="term-ref" href="#term-schema">schema</a>, <a class="term-ref" href="#term-content-hash">content hash</a>) <a class="term-ref" href="#term-object-reference">object reference</a> accepts the verified value atomically; the identical <a class="term-ref" href="#term-canonical-json">canonical</a> value is an <a class="term-ref" href="#term-idempotent-replay">idempotent replay</a>; a differing value at the same <a class="term-ref" href="#term-object-reference">object reference</a> is a <a class="term-ref" href="#term-conflict">conflict</a>.</li>
   <li><span class="must">Recomputes and verifies</span> the <a class="term-ref" href="#term-content-hash">content hash</a> and the declared <a class="term-ref" href="#term-schema">schema</a> on <span class="key">every</span> <a class="term-ref" href="#term-verified-get">verified get</a> — a read never trusts stored bytes unchecked.</li>
   <li><span class="must">Fails with a typed error</span> on every read fault: missing content, content filed under a different <a class="term-ref" href="#term-schema">schema</a>, and stored bytes that no longer hash to their reference (corruption, including unparseable content) each raise a distinct exception.</li>
-  <li><span class="must">Binds</span> a <a class="term-ref" href="#term-key">key</a> to exactly one <a class="term-ref" href="#term-object-reference">object reference</a> through <a class="term-ref" href="#term-atomic-key-to-reference-binding">atomic key-to-reference binding</a>: unbound binds, the same reference replays, a different reference conflicts and preserves the durable winner.</li>
+  <li><span class="must">Binds</span> a <a class="term-ref" href="#term-key">key</a> to exactly one <a class="term-ref" href="#term-object-reference">object reference</a> through <a class="term-ref" href="#term-atomic-key-to-reference-binding">atomic key-to-reference binding</a>: unbound binds, the same reference replays, a different reference conflicts and preserves the existing winner.</li>
   <li><span class="must">Exposes no</span> overwrite, clear, or rebind path — <span class="key">the store is</span> <a class="term-ref" href="#term-append-only">append-only</a> for both <a class="term-ref" href="#term-record">records</a> and <a class="term-ref" href="#term-binding">bindings</a>.</li>
-  <li>A <a class="term-ref" href="#term-content-hash">content hash</a> is <span class="key">not an identity hash</span>: it covers the complete persisted <a class="term-ref" href="#term-record">record</a>, not a caller-selected identity subset.</li>
-  <li>The <a class="term-ref" href="#term-backend">backend</a> supplies only atomic durable <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> primitives and point reads; the two shipped backends are interchangeable and store <span class="key">identical bytes</span>.</li>
+  <li>A <a class="term-ref" href="#term-content-hash">content hash</a> is <span class="key">not an identity hash</span>: it covers the complete stored <a class="term-ref" href="#term-record">record</a>, not a caller-selected identity subset.</li>
+  <li>The <a class="term-ref" href="#term-backend">backend</a> supplies only atomic <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> primitives and point reads. <code>MemoryBackend</code> is process-local; <code>SqliteBackend</code> persists data for cross-process use.</li>
   <li>The contract is <span class="key">domain-neutral</span>: no workflow, retry, campaign, or other domain concept appears anywhere in it.</li>
 </ul>
 
@@ -142,7 +130,7 @@
     <tr>
       <td><a class="term-ref" href="#term-atomic-key-to-reference-binding">Atomic Key-to-Reference Binding</a></td>
       <td><code>BindStatus</code>, <code>BindingConflictError</code></td>
-      <td>The <code>ObjectStore.bind</code> method returns a <code>BindStatus</code> of <code>BOUND</code> or <code>IDEMPOTENT</code>; a different-reference <a class="term-ref" href="#term-conflict">conflict</a> raises <code>BindingConflictError</code>, which carries the preserved durable winner.</td>
+      <td>The <code>ObjectStore.bind</code> method returns a <code>BindStatus</code> of <code>BOUND</code> or <code>IDEMPOTENT</code>; a different-reference <a class="term-ref" href="#term-conflict">conflict</a> raises <code>BindingConflictError</code>, which carries the preserved existing winner.</td>
     </tr>
     <tr>
       <td><a class="term-ref" href="#term-backend">Backend</a></td>
@@ -152,7 +140,7 @@
     <tr>
       <td>Storage errors</td>
       <td><code>StoreError</code></td>
-      <td>The base class every dr-store failure derives from; the concept-specific members are listed with <a class="term-ref" href="#term-object-reference">object reference</a>, <a class="term-ref" href="#term-immutable-put">immutable put</a>, <a class="term-ref" href="#term-verified-get">verified get</a>, and <a class="term-ref" href="#term-atomic-key-to-reference-binding">atomic key-to-reference binding</a> above.</td>
+      <td>The base class for Object Store contract failures. Document Directory failures derive separately from <code>DocumentDirectoryError</code>.</td>
     </tr>
   </tbody>
 </table>
@@ -160,14 +148,14 @@
 
 <div class="section-head" id="document-directory"><h2>Document Directory</h2></div>
 
-<p>dr-store's second component stores what a <a class="term-ref" href="#term-record">record</a> cannot: one durable directory carrying an atomically-replaced canonical-JSON <a class="term-ref" href="#term-manifest">manifest</a> plus streamed binary <a class="term-ref" href="#term-sidecar">sidecars</a>. Its vocabulary is disjoint from the object storage contract above — no term here is an <a class="term-ref" href="#term-object-reference">object reference</a>, a <a class="term-ref" href="#term-content-hash">content hash</a>, or a <a class="term-ref" href="#term-binding">binding</a> — and the <a class="term-ref" href="#term-append-only">append-only</a> contract is unchanged by it.</p>
+<p>The Document Directory carries one canonical-JSON <a class="term-ref" href="#term-manifest">manifest</a> published by same-directory replacement plus streamed binary <a class="term-ref" href="#term-sidecar">sidecars</a>. Its vocabulary is disjoint from the Object Store contract: no term here is an <a class="term-ref" href="#term-object-reference">object reference</a>, a <a class="term-ref" href="#term-content-hash">content hash</a>, or a <a class="term-ref" href="#term-binding">binding</a>.</p>
 
 <div class="table-wrap">
 <table>
   <thead><tr><th>Term</th><th>Definition</th></tr></thead>
   <tbody>
-    <tr><td><dfn class="term-name" id="term-document-directory">Document Directory</dfn></td><td>One allocated directory with exactly one writer, one <a class="term-ref" href="#term-manifest">manifest</a>, and zero or more <a class="term-ref" href="#term-sidecar">sidecars</a>. It is created under a caller-owned root with a generated name, and its single writer is established by construction, not by locking.</td></tr>
-    <tr><td><dfn class="term-name" id="term-manifest">Manifest</dfn></td><td>The single atomically-replaced <a class="term-ref" href="#term-canonical-json">canonical JSON</a> document of a <a class="term-ref" href="#term-document-directory">document directory</a>, and the source of truth about every <a class="term-ref" href="#term-sidecar">sidecar</a> it describes — meaning, stored segment lengths, and <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>. Its payload is opaque to dr-store, which never reads a field out of it.</td></tr>
+    <tr><td><dfn class="term-name" id="term-document-directory">Document Directory</dfn></td><td>One allocated directory intended for caller-coordinated single-writer use, with one <a class="term-ref" href="#term-manifest">manifest</a> and zero or more <a class="term-ref" href="#term-sidecar">sidecars</a>. It is created under a caller-owned root with a generated name; dr-store does not lock or otherwise enforce the single-writer policy.</td></tr>
+    <tr><td><dfn class="term-name" id="term-manifest">Manifest</dfn></td><td>The single <a class="term-ref" href="#term-canonical-json">canonical JSON</a> document published by same-directory replacement for a <a class="term-ref" href="#term-document-directory">document directory</a>, and the source of truth about every <a class="term-ref" href="#term-sidecar">sidecar</a> it describes — meaning, stored segment lengths, and <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>. Its payload is opaque to dr-store, which never reads a field out of it.</td></tr>
     <tr><td><dfn class="term-name" id="term-sidecar">Sidecar</dfn></td><td>A raw-bytes artifact written incrementally beside the <a class="term-ref" href="#term-manifest">manifest</a>, possibly truncated under caps the caller supplies, and never self-describing: nothing about a sidecar's meaning or completeness can be recovered from the sidecar alone.</td></tr>
     <tr><td><dfn class="term-name" id="term-sidecar-digest">Sidecar Digest</dfn></td><td>The full 64-character lowercase SHA-256 <a class="term-ref" href="#term-hash">hash</a> of a <a class="term-ref" href="#term-sidecar">sidecar</a>'s stored bytes, after truncation. It is <span class="key">not a</span> <a class="term-ref" href="#term-content-hash">content hash</a>: its input is raw bytes, not the <a class="term-ref" href="#term-canonical-json">canonical JSON</a> of a <a class="term-ref" href="#term-record">record</a>.</td></tr>
   </tbody>
@@ -175,16 +163,16 @@
 </div>
 
 <div class="callout">
-  <strong>A Reader Never Sees A Partial Manifest.</strong> After abrupt process death a reader observes either no <a class="term-ref" href="#term-manifest">manifest</a> or one complete previously-published manifest. The claim is scoped to local macOS filesystems; network mounts and cloud-synchronized directories are outside it.
+  <strong>Manifest Visibility Depends on Filesystem Semantics.</strong> After writing and flushing complete contents, publication replaces the <a class="term-ref" href="#term-manifest">manifest</a> in the same directory. All-or-nothing visibility depends on the filesystem honoring atomic same-directory replacement; network, synchronized, or other filesystems whose rename semantics are not established are outside current evidence. The directory flush does not promise power-loss durability.
 </div>
 <ul>
-  <li><span class="must">Allocates</span> a <a class="term-ref" href="#term-document-directory">document directory</a> named <code>&lt;prefix&gt;-&lt;utc-timestamp&gt;-&lt;uuid4&gt;</code> with <span class="key">no retry loop</span>: an existing name is a typed error, never a silent reuse. Concurrent allocation under one root is collision-free.</li>
-  <li><span class="must">Validates</span> prefixes, manifest names, and sidecar names as <span class="key">safe single path segments</span> — no separator, no NUL byte, never <code>.</code> or <code>..</code> — so a name can only ever address a child of its directory.</li>
-  <li><span class="must">Publishes</span> a <a class="term-ref" href="#term-manifest">manifest</a> by writing the complete <a class="term-ref" href="#term-canonical-json">canonical JSON</a> to a temp file in the same directory and renaming it onto the manifest name, flushing file and directory with <code>F_FULLFSYNC</code> where available and <code>fsync</code> as the fallback.</li>
-  <li><span class="must">Computes</span> the <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a> incrementally and finalizes it when the <a class="term-ref" href="#term-sidecar">sidecar</a> is flushed, returning it only in a <code>SidecarSummary</code>, so a <a class="term-ref" href="#term-manifest">manifest</a> embedding a summary's digest structurally cannot precede that flush.</li>
+  <li><span class="must">Allocates</span> a statistically unique <a class="term-ref" href="#term-document-directory">document directory</a> name of the form <code>&lt;prefix&gt;-&lt;utc-timestamp&gt;-&lt;uuid4&gt;</code>. There is <span class="key">no retry loop</span>: a generated-name collision is a typed error, never a silent reuse.</li>
+  <li><span class="must">Validates</span> prefixes, manifest names, and sidecar names as <span class="key">single path segments</span> — no separator, no NUL byte, never <code>.</code> or <code>..</code>. This prevents lexical traversal syntax only: Manifest reads and Sidecar creation and writes follow existing final-component symlinks, so callers must control and trust the directory contents.</li>
+  <li><span class="must">Publishes</span> a <a class="term-ref" href="#term-manifest">manifest</a> by writing and flushing the complete <a class="term-ref" href="#term-canonical-json">canonical JSON</a> in a temp file, replacing the manifest in the same directory, and flushing the directory. Atomic visibility has the filesystem dependency stated above. A final directory-flush failure raises even though the replacement may already be visible.</li>
+  <li><span class="must">Computes</span> the <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a> incrementally. Finalization flushes the <a class="term-ref" href="#term-sidecar">sidecar</a> descriptor before returning its <code>SidecarSummary</code>, but does not flush the containing directory entry. Callers control when or whether any <a class="term-ref" href="#term-manifest">manifest</a> is published; no ordering with an arbitrary publication is enforced.</li>
   <li><span class="must">Reports</span> <code>produced</code> and <code>dropped</code> byte counts alongside the stored segment lengths, so a truncated sidecar states exactly what it discarded.</li>
-  <li><span class="must">Verifies</span> a read-back <a class="term-ref" href="#term-manifest">manifest</a> as strict <span class="key">and canonical</span> JSON, and a <a class="term-ref" href="#term-sidecar">sidecar</a> against a caller-supplied total length and <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>; each fault is a typed error preserving the original OS or decoding exception.</li>
-  <li>The component knows <span class="key">no lifecycle, no manifest schema, no retention policy, and no processes</span>: state machines, payload fields, cap computation, and output draining all belong to the caller.</li>
+  <li><span class="must">Verifies</span> a read-back <a class="term-ref" href="#term-manifest">manifest</a> as strict <span class="key">and canonical</span> JSON. Sidecar verification is the no-follow path: it pins the opened Document Directory and regular child descriptors while checking a caller-supplied total length and <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>. Faults are typed, with originating OS or decoding exceptions preserved when present.</li>
+  <li>The component owns <span class="key">no lifecycle, manifest schema, or retention policy</span>. Payload fields, cap computation, and output-draining policy belong to the caller.</li>
 </ul>
 
 <div class="table-wrap">
@@ -194,12 +182,12 @@
     <tr>
       <td><a class="term-ref" href="#term-document-directory">Document Directory</a></td>
       <td><code>DocumentDirectory</code>, <code>AllocationError</code></td>
-      <td>The <code>DocumentDirectory.allocate</code> class method creates the directory; an unsafe name or a failed <code>mkdir</code> raises <code>AllocationError</code>. <code>open_sidecar</code> opens a <a class="term-ref" href="#term-sidecar">sidecar</a> beside the <a class="term-ref" href="#term-manifest">manifest</a>.</td>
+      <td>The <code>DocumentDirectory.allocate</code> class method creates the directory; a lexically invalid name or a failed <code>mkdir</code> raises <code>AllocationError</code>. <code>open_sidecar</code> opens a <a class="term-ref" href="#term-sidecar">sidecar</a> beside the <a class="term-ref" href="#term-manifest">manifest</a>.</td>
     </tr>
     <tr>
       <td><a class="term-ref" href="#term-manifest">Manifest</a></td>
       <td><code>ManifestPublishError</code>, <code>ManifestReadError</code></td>
-      <td>The <code>DocumentDirectory.publish</code> method durably replaces the manifest; a non-strict payload or a failed write, rename, or flush raises <code>ManifestPublishError</code>. The <code>DocumentDirectory.read_manifest</code> class method returns the stored payload; an unsafe manifest name or a missing, unreadable, malformed, non-strict, or non-<a class="term-ref" href="#term-canonical-json">canonical</a> document raises <code>ManifestReadError</code>.</td>
+      <td>The <code>DocumentDirectory.publish</code> method replaces the manifest in the same directory and flushes it; a non-strict payload or a failed write, replace, or flush raises <code>ManifestPublishError</code>. The <code>DocumentDirectory.read_manifest</code> class method returns the stored payload; a lexically invalid manifest name or a missing, unreadable, malformed, non-strict, or non-<a class="term-ref" href="#term-canonical-json">canonical</a> document raises <code>ManifestReadError</code>.</td>
     </tr>
     <tr>
       <td><a class="term-ref" href="#term-sidecar">Sidecar</a></td>
@@ -209,7 +197,7 @@
     <tr>
       <td><a class="term-ref" href="#term-sidecar-digest">Sidecar Digest</a></td>
       <td><code>SidecarVerificationError</code></td>
-      <td>The <code>DocumentDirectory.verify_sidecar</code> class method checks stored bytes against a caller-supplied digest and total segment length; a length or digest disagreement, or an unreadable file, raises <code>SidecarVerificationError</code>.</td>
+      <td>The <code>DocumentDirectory.verify_sidecar</code> instance method uses no-follow, pinned descriptors to verify a regular direct child of that directory against a caller-supplied digest and total segment length; a length or digest disagreement, or an unreadable file, raises <code>SidecarVerificationError</code>.</td>
     </tr>
     <tr>
       <td>Document Directory errors</td>
@@ -218,10 +206,6 @@
     </tr>
   </tbody>
 </table>
-</div>
-
-<div class="colophon">
-  <p><strong>Scope.</strong> This sheet is the authoritative statement of the contracts dr-store implements: the append-only content-addressed object store and the Document Directory. Exported names match <code>src/dr_store/__init__.py</code>.</p>
 </div>
 
 </main>

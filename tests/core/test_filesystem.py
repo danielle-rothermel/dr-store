@@ -1,13 +1,3 @@
-"""The filesystem flush ladder: F_FULLFSYNC first, os.fsync as fallback.
-
-macOS ``fsync`` only reaches the drive's write cache, so every commit point
-tries ``F_FULLFSYNC`` and falls back to ``os.fsync`` -- where the fcntl
-module or command is absent and after every ``F_FULLFSYNC`` ``OSError``. The
-all-error fallback is accepted current behavior, not proof that a stronger
-flush succeeded. CI runs on Linux, where only the fallback branch executes
-naturally, so the ladder is driven here instead of by the ambient platform.
-"""
-
 from __future__ import annotations
 
 import os
@@ -25,7 +15,7 @@ FULL_FSYNC = 51
 
 
 class _RecordingFcntl:
-    """Stand-in for the fcntl module with a configurable F_FULLFSYNC."""
+    # Linux CI cannot exercise the macOS F_FULLFSYNC branch natively.
 
     def __init__(
         self,

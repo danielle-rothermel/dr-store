@@ -1,5 +1,3 @@
-"""Secure Sidecar read-back against caller-owned expectations."""
-
 from __future__ import annotations
 
 import errno

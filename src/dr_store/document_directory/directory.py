@@ -1,16 +1,3 @@
-"""The Document Directory: one atomic Manifest plus streamed Sidecars.
-
-A Document Directory is one allocated directory with exactly one writer, one
-atomically-replaced canonical-JSON Manifest, and zero or more Sidecars --
-raw-bytes artifacts written incrementally beside the Manifest. The Manifest is
-the source of truth about every Sidecar; a Sidecar is never self-describing.
-
-The component is deliberately domain-neutral and narrow. It never knows
-lifecycle state names or transition legality (:meth:`DocumentDirectory.publish`
-is last-write-wins), never reads a field out of the Manifest payload, never
-computes a retention policy, and never owns threads or child processes.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -51,14 +38,9 @@ _TEMP_SUFFIX = ".tmp"
 
 
 class DocumentDirectory:
-    """One allocated directory holding one Manifest and its Sidecars.
+    """One atomic last-write-wins Manifest plus streamed Sidecars.
 
-    :meth:`allocate` creates the directory and returns the instance naming it.
-    :meth:`read_manifest` reads a directory named by the caller, while
-    :meth:`verify_sidecar` verifies a direct child of this instance's
-    directory. Every :meth:`publish` uses an atomic replace and is
-    last-write-wins: the component owns no lifecycle state and never inspects
-    the payload it stores.
+    The caller coordinates writer exclusivity; this class does not enforce it.
     """
 
     def __init__(self, path: Path, manifest_name: str) -> None:
@@ -70,7 +52,6 @@ class DocumentDirectory:
 
     @property
     def path(self) -> Path:
-        """Filesystem path of the allocated directory."""
         return self._path
 
     @classmethod
@@ -81,18 +62,11 @@ class DocumentDirectory:
         prefix: str,
         manifest_name: str,
     ) -> DocumentDirectory:
-        """Create ``<prefix>-<utc-timestamp>-<uuid4>`` under ``root``.
+        """Allocate ``<prefix>-<utc-timestamp>-<uuid4>`` under ``root``.
 
-        The directory is created with ``exist_ok=False`` so a collision is a
-        typed :class:`~dr_store.core.errors.AllocationError`, never a silent
-        reuse and never a retry loop. ``root`` is caller-owned and must already
-        exist. ``prefix`` and ``manifest_name`` are validated safe single path
-        segments before anything touches disk.
-
-        Allocation does not flush the caller-owned root directory. The new
-        directory is therefore visible after the call returns, but this method
-        does not promise that its directory entry survives loss of the machine
-        or filesystem cache.
+        A UUID collision raises :class:`AllocationError` without retrying.
+        The caller-owned root is not flushed, so its new entry may not survive
+        loss of the machine or filesystem cache.
         """
         validate_safe_name(prefix, role="prefix")
         validate_safe_name(manifest_name, role="manifest_name")
@@ -107,18 +81,13 @@ class DocumentDirectory:
         return cls(path, manifest_name)
 
     def publish(self, manifest: Jsonable) -> None:
-        """Replace the Manifest with ``manifest`` atomically.
+        """Atomically replace the Manifest with canonical JSON.
 
-        The complete canonical JSON is written to a temp file in the same
-        directory, flushed, atomically renamed onto the Manifest name, and the
-        directory entry is flushed. A reader therefore sees either no Manifest
-        or one complete previously-published Manifest, never a partial one.
-
-        Replacement precedes the directory flush. If that final flush fails,
-        this method raises :class:`~dr_store.core.errors.ManifestPublishError`
-        even though the new Manifest may already be visible; the exception does
-        not imply rollback. These flush operations do not promise power-loss
-        durability; ordinary process-death visibility does not prove it.
+        Atomic visibility depends on filesystem same-directory replace
+        semantics.
+        A post-replace directory-flush failure raises even though the new
+        Manifest may be visible; no rollback occurs. Flush success does not
+        guarantee power-loss durability.
         """
         try:
             canonical = canonical_json(validate_strict_json(manifest))
@@ -153,7 +122,6 @@ class DocumentDirectory:
         head_cap: int | None = None,
         tail_cap: int | None = None,
     ) -> SidecarWriter:
-        """Open a Sidecar for incremental writing beside the Manifest."""
         self._validate_sidecar_name(name, error=AllocationError)
         return SidecarWriter(
             self._path / name,
@@ -167,7 +135,6 @@ class DocumentDirectory:
         *,
         error: type[DocumentDirectoryError],
     ) -> None:
-        """Require one safe, non-Manifest direct-child name."""
         validate_safe_name(name, role="sidecar name", error=error)
         if name.casefold() in {
             self._manifest_name.casefold(),
@@ -185,7 +152,7 @@ class DocumentDirectory:
         *,
         manifest_name: str,
     ) -> Jsonable:
-        """Read the Manifest of the directory at ``path``, verified."""
+        """Read and verify a canonical strict-JSON Manifest."""
         validate_safe_name(
             manifest_name,
             role="manifest_name",
@@ -229,14 +196,7 @@ class DocumentDirectory:
         expected_head_length: int,
         expected_tail_length: int,
     ) -> None:
-        """Verify one regular direct-child Sidecar without following it.
-
-        ``name`` follows the same safe single-segment and reserved-name rules
-        as :meth:`open_sidecar`. Verification refuses a final-component
-        symlink for both this Document Directory and the named child, requires
-        the child to be a regular file, and streams bounded reads from the
-        exact descriptor whose file type was inspected.
-        """
+        """Verify a regular child through pinned, no-follow descriptors."""
         self._validate_sidecar_name(name, error=SidecarVerificationError)
         _verify_sidecar(
             self._path,

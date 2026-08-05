@@ -1,5 +1,3 @@
-"""Sidecar retention, exact accounting, and writer failure behavior."""
-
 from __future__ import annotations
 
 import hashlib
@@ -229,8 +227,6 @@ def test_summary_is_frozen(tmp_path: Path) -> None:
 
 
 class _FailOnceHandle:
-    """Binary handle that exposes one deterministic write fault."""
-
     def __init__(self, wrapped: BinaryIO) -> None:
         self._wrapped = wrapped
         self._failed = False

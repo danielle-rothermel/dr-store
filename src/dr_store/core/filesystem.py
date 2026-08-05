@@ -1,5 +1,3 @@
-"""Filesystem safety and flush primitives for dr-store."""
-
 from __future__ import annotations
 
 import os
@@ -11,7 +9,7 @@ if TYPE_CHECKING:
     from pathlib import Path
     from types import ModuleType
 
-try:  # POSIX only; the flush ladder falls back to os.fsync without it.
+try:
     import fcntl as _fcntl
 
     fcntl: ModuleType | None = _fcntl
@@ -28,12 +26,10 @@ def validate_safe_name(
     role: str,
     error: type[DocumentDirectoryError] = AllocationError,
 ) -> None:
-    """Raise ``error`` unless ``name`` is a safe single path segment.
+    """Require one path segment, preserving the caller's error taxonomy.
 
-    A safe name is a non-empty string that is neither ``.`` nor ``..`` and
-    contains no path separator or NUL byte, so it can only ever name a child
-    of the directory it is joined to. The raised class follows the path the
-    name arrived on, so a read fault never surfaces as an allocation failure.
+    Validation is lexical only; it neither inspects nor fences existing
+    entries.
     """
     if name in _RESERVED_NAMES:
         raise error(f"{role} must be a safe name, got {name!r}")
@@ -45,15 +41,10 @@ def validate_safe_name(
 
 
 def flush_descriptor(descriptor: int) -> None:
-    """Request that written bytes reach the storage medium.
+    """Flush bytes, preferring macOS ``F_FULLFSYNC``.
 
-    macOS ``fsync`` only pushes to the drive's write cache, so the platform
-    ladder is ``F_FULLFSYNC`` first and ``os.fsync`` as the fallback -- where
-    ``fcntl`` itself is absent, where the fcntl command is absent, and where
-    the filesystem rejects it. Every ``OSError`` from ``F_FULLFSYNC`` currently
-    takes that fallback, including errors that may represent an I/O failure
-    rather than an unsupported command; callers must not infer that a
-    successful fallback proves the stronger full-flush request succeeded.
+    Every ``OSError`` from ``F_FULLFSYNC`` falls back to ``fsync``, including
+    possible I/O failures; fallback success does not prove a full flush.
     """
     full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
     if fcntl is not None and full_fsync is not None:
@@ -66,7 +57,6 @@ def flush_descriptor(descriptor: int) -> None:
 
 
 def flush_directory(directory: Path) -> None:
-    """Flush the directory descriptor after a directory-entry change."""
     descriptor = os.open(directory, os.O_RDONLY)
     try:
         flush_descriptor(descriptor)

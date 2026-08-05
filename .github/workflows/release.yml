@@ -38,6 +38,5 @@ jobs:
       - run: uv run pytest
       - run: uv build
       # Publishes via PyPI Trusted Publishing (OIDC) — no API token.
-      # Requires this repo/workflow to be registered as a (pending)
-      # publisher for the dr-store project on pypi.org.
+      # Requires this repo and workflow to be registered as a PyPI publisher.
       - uses: pypa/gh-action-pypi-publish@release/v1

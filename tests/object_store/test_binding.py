@@ -1,14 +1,3 @@
-"""Object Store: the exact four-row key-to-reference binding table.
-
-Rows mirror the design table one-to-one:
-
-    | existing state | requested | required result           |
-    | Unbound        | any ref   | Bind                      |
-    | Bound to A     | A         | Same (idempotent success) |
-    | Bound to A     | B         | Conflict (keep A)         |
-    | Bound to A     | overwrite | no such path exists       |
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -45,7 +34,6 @@ def test_row3_different_reference_conflicts_and_keeps_winner(
         store.bind(KEY, REF_B)
     assert excinfo.value.existing == REF_A
     assert excinfo.value.requested == REF_B
-    # The durable winner is preserved unchanged.
     assert store.resolve(KEY) == REF_A
 
 

@@ -1,17 +1,3 @@
-"""Backend-neutral storage contract for the Object Store.
-
-A backend provides two atomic compare-and-set primitives -- one for the
-append-only object table, one for the append-only binding table -- plus point
-reads. All contract semantics (hash verification, idempotent replay, conflict
-typing) live in :mod:`dr_store.object_store`. Atomicity is shared by every
-backend; persistence and durability are implementation-specific.
-
-The record value crossing this boundary is the *canonical JSON text* of the
-complete stored record: dr-store hashes and canonicalizes exactly once,
-above the backend, so every backend stores identical bytes and no backend can
-introduce a second canonicalization dialect.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,12 +6,7 @@ from typing import Protocol
 
 @dataclass(frozen=True, slots=True)
 class PutOutcome:
-    """Outcome of :meth:`Backend.put_object`.
-
-    ``inserted`` is ``True`` when this call created the row. When ``False``,
-    the key was already present and ``stored_schema``/``stored_canonical``
-    carry the untouched existing row for the caller to compare.
-    """
+    """Atomic put result; ``inserted=False`` carries the stored row."""
 
     inserted: bool
     stored_schema: str
@@ -34,12 +15,7 @@ class PutOutcome:
 
 @dataclass(frozen=True, slots=True)
 class BindOutcome:
-    """Outcome of :meth:`Backend.bind`.
-
-    ``bound`` is ``True`` when this call created the binding. When ``False``,
-    the key was already bound and ``existing_schema``/``existing_content_hash``
-    carry the untouched stored winner.
-    """
+    """Atomic bind result; ``bound=False`` carries the existing binding."""
 
     bound: bool
     existing_schema: str
@@ -47,7 +23,7 @@ class BindOutcome:
 
 
 class Backend(Protocol):
-    """Atomic primitives for the two append-only tables."""
+    """Atomic object and binding operations."""
 
     def put_object(
         self,
@@ -56,13 +32,11 @@ class Backend(Protocol):
         content_hash: str,
         canonical: str,
     ) -> PutOutcome:
-        """Atomically insert one object row if the key is absent.
+        """Insert ``(schema, content_hash)`` without overwriting.
 
-        The key is ``(schema, content_hash)``. If absent, insert and report
-        ``inserted``. If already present, report ``existed`` and return the
-        stored canonical text and its stored schema unchanged -- never
-        overwrite. The caller decides whether an ``existed`` outcome is an
-        idempotent replay or a conflict.
+        ``inserted=False`` returns the untouched row for conflict handling.
+        ``canonical`` is canonical JSON text; a backend defines no other
+        canonicalization dialect.
         """
         ...
 
@@ -72,14 +46,9 @@ class Backend(Protocol):
         schema: str,
         content_hash: str,
     ) -> tuple[str, str] | None:
-        """Return ``(stored_schema, canonical)`` for a reference key.
+        """Look up exact schema first, then any row with the same content hash.
 
-        Prefer the exact ``(schema, content_hash)`` row. When no such row
-        exists but the same content is filed under a *different* schema,
-        return that other row's ``(stored_schema, canonical)`` so the store
-        can raise a schema mismatch rather than presenting as a missing
-        object. Return ``None`` only when nothing is stored at
-        ``content_hash`` under any schema.
+        Return ``None`` only when no schema has that content hash.
         """
         ...
 
@@ -90,16 +59,10 @@ class Backend(Protocol):
         schema: str,
         content_hash: str,
     ) -> BindOutcome:
-        """Atomically bind ``key`` to ``(schema, content_hash)`` if unbound.
+        """Bind ``key`` without overwriting an existing binding.
 
-        If ``key`` is unbound, create the binding and report ``bound``. If
-        already bound, report ``existed`` and return the existing
-        ``(schema, content_hash)`` unchanged -- never overwrite. The caller
-        decides whether an ``existed`` outcome is idempotent success or a
-        different-reference conflict.
+        ``bound=False`` returns the untouched binding for conflict handling.
         """
         ...
 
-    def get_binding(self, *, key: str) -> tuple[str, str] | None:
-        """Return the ``(schema, content_hash)`` bound to ``key``, or None."""
-        ...
+    def get_binding(self, *, key: str) -> tuple[str, str] | None: ...

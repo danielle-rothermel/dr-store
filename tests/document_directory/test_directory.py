@@ -1,5 +1,3 @@
-"""Document Directory allocation, name safety, and facade wiring."""
-
 from __future__ import annotations
 
 import datetime as dt
@@ -34,8 +32,6 @@ UNSAFE_NAMES = (
 
 
 class _FrozenDatetime(dt.datetime):
-    """A datetime whose ``now`` never advances, pinning allocated names."""
-
     @classmethod
     def now(cls, tz: dt.tzinfo | None = None) -> dt.datetime:
         return FROZEN_NOW.astimezone(tz) if tz else FROZEN_NOW

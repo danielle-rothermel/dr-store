@@ -1,5 +1,3 @@
-"""Named factories for comparative Memory and SQLite contract tests."""
-
 from __future__ import annotations
 
 from collections.abc import Callable

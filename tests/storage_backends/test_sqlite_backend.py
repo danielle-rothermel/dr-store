@@ -1,5 +1,3 @@
-"""SQLite-only persistence, rollback, and process contention evidence."""
-
 from __future__ import annotations
 
 import multiprocessing
@@ -152,8 +150,7 @@ def _run_process_contenders(
     operation: Operation,
     values: list[str],
 ) -> list[ProcessResult]:
-    # Schema construction is deliberately complete before the contenders are
-    # released; concurrent first construction is not part of this evidence.
+    # Concurrent first initialization is outside this contention test's scope.
     SqliteBackend(db_path)
     context = multiprocessing.get_context("spawn")
     release = context.Event()

@@ -1,5 +1,3 @@
-"""ObjectStore API shape and heuristic module-vocabulary tripwires."""
-
 from __future__ import annotations
 
 import pkgutil
@@ -7,8 +5,7 @@ import re
 
 import dr_store
 
-# These words are a heuristic guard for observable package vocabulary. Naming
-# checks cannot prove that implementation or behavior is domain-neutral.
+# Naming is only a heuristic for observable vocabulary, not domain neutrality.
 FORBIDDEN_PUBLIC_WORDS = frozenset(
     {
         "rollout",
@@ -38,7 +35,6 @@ def _tokens(name: str) -> set[str]:
 
 
 def test_public_module_vocabulary_tripwire() -> None:
-    """Heuristically guard observable module names."""
     module_names = [
         ("module", module.name)
         for module in pkgutil.walk_packages(

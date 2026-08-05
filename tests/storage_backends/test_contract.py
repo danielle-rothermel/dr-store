@@ -1,5 +1,3 @@
-"""Direct semantic conformance shared by Memory and SQLite backends."""
-
 from __future__ import annotations
 
 import concurrent.futures
@@ -67,7 +65,6 @@ def test_put_absent_replay_and_competing_value(
         stored_schema=SCHEMA,
         stored_canonical=CANONICAL,
     )
-    # The competing write reports, and leaves, the original winner.
     assert backend.get_object(
         schema=SCHEMA,
         content_hash=CONTENT_HASH,
@@ -132,7 +129,6 @@ def test_bind_absent_replay_and_competing_reference(
         existing_schema=SCHEMA,
         existing_content_hash=CONTENT_HASH,
     )
-    # The competing bind reports, and leaves, the original winner.
     assert backend.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
 
 

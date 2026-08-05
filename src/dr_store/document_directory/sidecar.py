@@ -1,5 +1,3 @@
-"""Streamed binary Sidecar writing, retention, and verification."""
-
 from __future__ import annotations
 
 import hashlib
@@ -26,7 +24,6 @@ _REQUIRED_OPEN_FLAGS = (
 
 
 def _require_regular_file(metadata: os.stat_result, path: Path) -> None:
-    """Reject a descriptor whose inspected target is not a regular file."""
     if not stat.S_ISREG(metadata.st_mode):
         raise SidecarVerificationError(
             f"sidecar {str(path)!r} is not a regular file"
@@ -34,12 +31,6 @@ def _require_regular_file(metadata: os.stat_result, path: Path) -> None:
 
 
 def _validate_cap(cap: int | None, *, role: str) -> None:
-    """Raise unless ``cap`` is an unset or non-negative byte count.
-
-    A negative cap has no truncation meaning: it would evict more bytes than
-    the stream offered, so a summary could report more ``dropped`` than
-    ``produced``.
-    """
     if cap is not None and cap < 0:
         raise AllocationError(
             f"{role} must be a non-negative byte count, got {cap!r}"
@@ -48,17 +39,10 @@ def _validate_cap(cap: int | None, *, role: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class SidecarSummary:
-    """What one finalized Sidecar stored, and what it discarded.
+    """Stored segment accounting and SHA-256 digest.
 
-    ``head_length`` and ``tail_length`` are the stored segment lengths in
-    bytes, in file order (head segment then tail segment). ``produced`` is the
-    total number of bytes offered to the writer and ``dropped`` the number the
-    caps discarded, so ``produced == head_length + tail_length + dropped``.
-    ``digest`` is the Sidecar Digest: the full 64-character lowercase SHA-256
-    of the stored bytes.
-
-    dr-store never serializes a summary; callers project it into their own
-    models and extract read-back expectations from there.
+    ``produced == head_length + tail_length + dropped``; ``digest`` covers
+    the stored head followed by the stored tail.
     """
 
     head_length: int
@@ -69,23 +53,12 @@ class SidecarSummary:
 
 
 class SidecarWriter:
-    """Push-style writer for one Sidecar, owning truncation mechanics.
+    """Incrementally retain capped head and tail bytes.
 
-    The caller owns only the cap values. ``head_cap`` bytes fill first; a ring
-    buffer keeps the last ``tail_cap`` bytes of everything after that, and the
-    stored file is the head segment followed by the tail segment. No caps is
-    unbounded: an unbounded ``head_cap`` streams every byte to the head
-    segment, so nothing ever reaches the tail. ``tail_cap=0`` is head-only, and
-    so is an unset ``tail_cap`` under a finite ``head_cap``: the tail buffer is
-    bounded by ``tail_cap``, never by the stream. A negative cap is rejected
-    before the Sidecar file is opened, so the accounting a summary reports
-    holds for every writer that exists.
-
-    A :class:`SidecarSummary` exists only after :meth:`finalize`, so a Manifest
-    embedding a Sidecar Digest structurally cannot precede the Sidecar's flush.
-    Finalization flushes the file descriptor but not the containing directory
-    entry, so it does not promise that a newly created Sidecar name survives
-    loss of the machine or filesystem cache.
+    An unset head cap retains the whole stream and leaves no tail. With a
+    finite head, an unset or zero tail cap discards the remainder. Negative
+    caps are rejected before opening the file. Finalization flushes the file
+    descriptor but not its directory entry.
     """
 
     def __init__(
@@ -113,12 +86,10 @@ class SidecarWriter:
             ) from exc
 
     def write(self, chunk: bytes) -> None:
-        """Offer bytes to the Sidecar, applying the caps.
+        """Offer bytes under the configured caps.
 
-        A write failure is translated to :class:`AllocationError`, but the
-        writer is not closed or moved to a terminal state. Its accounting may
-        already include the offered chunk, so callers must abandon a writer
-        after an error; retry and later finalization have no supported result.
+        After an error, abandon the writer: accounting may include the chunk,
+        and retry or finalization has no supported result.
         """
         self._produced += len(chunk)
         remainder = chunk
@@ -141,7 +112,6 @@ class SidecarWriter:
             self._dropped += overflow
 
     def _store_head(self, part: bytes) -> None:
-        """Append ``part`` to the head segment on disk and to the digest."""
         try:
             self._handle.write(part)
         except (OSError, ValueError) as exc:
@@ -152,7 +122,7 @@ class SidecarWriter:
         self._head_length += len(part)
 
     def finalize(self) -> SidecarSummary:
-        """Append the tail segment, flush its descriptor, and summarize."""
+        """Return the summary after flushing and closing the stored bytes."""
         tail = bytes(self._tail)
         try:
             self._handle.write(tail)
@@ -182,14 +152,10 @@ def verify_sidecar(
     expected_head_length: int,
     expected_tail_length: int,
 ) -> None:
-    """Verify a regular direct child through one pinned descriptor.
+    """Verify a regular child through pinned, no-follow descriptors.
 
-    This path requires directory-relative ``os.open`` plus the platform flags
-    needed to refuse final symlinks for both the directory authority and its
-    child, avoid blocking on special files, keep descriptors out of child
-    processes, and require the directory itself.
-    There is deliberately no path-based fallback because any precheck followed
-    by a normal open would reintroduce a name-resolution race.
+    There is no path fallback because a precheck followed by open would race
+    name resolution.
     """
     sidecar_path = directory / name
     missing_flags = [

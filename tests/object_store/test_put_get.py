@@ -1,5 +1,3 @@
-"""Object Store immutable put and verified get, against every backend."""
-
 from __future__ import annotations
 
 import hashlib
@@ -30,7 +28,6 @@ if TYPE_CHECKING:
 
 SCHEMA = "example.record"
 RECORD: Jsonable = {"payload": {"a": 1, "b": [2, 3]}, "provenance": "x"}
-# A distinct object with identical canonical content, for replay tests.
 RECORD_REPLAY: Jsonable = {
     "payload": {"a": 1, "b": [2, 3]},
     "provenance": "x",
@@ -97,7 +94,6 @@ def test_identical_put_is_idempotent_success(store: ObjectStore) -> None:
 def test_key_order_variation_is_still_idempotent(
     store: ObjectStore,
 ) -> None:
-    # Same canonical value under a different insertion order.
     _, status1 = store.put(SCHEMA, ORDER_A)
     _, status2 = store.put(SCHEMA, ORDER_B)
     assert status1 is PutStatus.STORED
@@ -153,9 +149,6 @@ def test_get_detects_corrupted_content(
 def test_get_detects_non_json_corruption(
     controlled_backend: ControlledBackend,
 ) -> None:
-    # Corrupt the stored canonical text into bytes that do not even parse as
-    # JSON (bit rot, truncation, a partial write). The verified read must
-    # surface this as a typed contract error, never a bare JSONDecodeError.
     ref = ObjectReference.for_record(SCHEMA, RECORD)
     store = _store_with_controlled_canonical(
         controlled_backend,
@@ -169,10 +162,7 @@ def test_get_detects_non_json_corruption(
 def test_get_detects_non_finite_corruption(
     controlled_backend: ControlledBackend,
 ) -> None:
-    # json.loads accepts NaN/Infinity, so a poisoned canonical text carrying
-    # a non-finite token parses yet fails strict validation. The verified
-    # read must surface this as a typed contract error, never a leaked
-    # StrictJsonError.
+    # json.loads accepts NaN, so strict JSON validation fails after parsing.
     ref = ObjectReference.for_record(SCHEMA, RECORD)
     store = _store_with_controlled_canonical(
         controlled_backend,
@@ -186,10 +176,7 @@ def test_get_detects_non_finite_corruption(
 def test_get_detects_non_canonical_bytes(
     controlled_backend: ControlledBackend,
 ) -> None:
-    # Byte-level drift that still decodes and hashes identically is
-    # corruption: {"a": 1} (with a space) decodes to the same value as the
-    # canonical {"a":1}, so verify_record passes, but the raw bytes differ
-    # from the canonical form and an idempotent put replay would reject them.
+    # Whitespace changes the stored bytes without changing the decoded value.
     ref = ObjectReference.for_record(SCHEMA, {"a": 1})
     store = _store_with_controlled_canonical(
         controlled_backend,
@@ -223,9 +210,6 @@ def test_get_translates_stored_content_outside_the_canonical_profile(
 def test_same_content_under_different_schema_both_store(
     store: ObjectStore,
 ) -> None:
-    # The typed key is (schema, content_hash): identical content filed under
-    # two different schemas are two distinct objects. Both puts succeed and
-    # each resolves to its own record; neither is a spurious conflict.
     ref_one, status_one = store.put("schema.one", {"a": 1})
     ref_two, status_two = store.put("schema.two", {"a": 1})
     assert status_one is PutStatus.STORED
@@ -239,9 +223,7 @@ def test_same_content_under_different_schema_both_store(
 def test_different_content_at_same_hash_conflicts_without_overwrite(
     controlled_backend: ControlledBackend,
 ) -> None:
-    # Simulate a SHA-256 collision: poison the backend so the content-hash
-    # key holds *different* canonical content, then prove a contract put of
-    # the real record raises rather than overwriting the poisoned row.
+    # Poison the hash key with different bytes to simulate a collision.
     ref = ObjectReference.for_record(SCHEMA, RECORD)
     controlled_backend.set_object(
         schema=ref.schema,

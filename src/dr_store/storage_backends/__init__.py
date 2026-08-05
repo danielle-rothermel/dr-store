@@ -1,11 +1,3 @@
-"""Backend implementations for the Object Store.
-
-All backends satisfy the :class:`Backend` protocol and are interchangeable
-behind :class:`~dr_store.object_store.ObjectStore`. Contract semantics live in
-the store. Backends share atomic compare-and-set primitives; persistence and
-durability are implementation-specific.
-"""
-
 from __future__ import annotations
 
 from dr_store.storage_backends.contract import Backend, BindOutcome, PutOutcome

@@ -1,5 +1,3 @@
-"""ObjectReference construction, validation, and Content Hash rules."""
-
 from __future__ import annotations
 
 import dataclasses
@@ -98,7 +96,7 @@ def test_reference_rejects_invalid_content_hash(bad_hash: object) -> None:
 def test_reference_is_frozen_and_hashable() -> None:
     ref = ObjectReference.for_record("example.record", {"a": 1})
     with pytest.raises(dataclasses.FrozenInstanceError):
-        setattr(ref, "schema", "other")  # noqa: B010 -- assert frozen
+        setattr(ref, "schema", "other")  # noqa: B010
     assert hash(ref) == hash(
         ObjectReference(schema=ref.schema, content_hash=ref.content_hash)
     )
