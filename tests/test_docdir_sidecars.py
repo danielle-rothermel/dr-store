@@ -164,27 +164,22 @@ def test_accounting_holds_for_every_chunking(
     ("head_cap", "tail_cap"),
     [(-5, -5), (-1, 60), (100, -1)],
 )
-def test_a_negative_cap_is_a_cap_of_zero(
+def test_a_negative_cap_is_rejected(
     tmp_path: Path,
     head_cap: int,
     tail_cap: int,
 ) -> None:
-    # A negative cap stores nothing under it rather than over-counting the
-    # eviction, so dropped can never exceed produced.
-    path, summary = _write(
-        tmp_path,
-        STREAM,
-        head_cap=head_cap,
-        tail_cap=tail_cap,
-    )
-    expected = STREAM[: max(head_cap, 0)] or b""
-    if tail_cap > 0:
-        expected += STREAM[-tail_cap:]
-    assert path.read_bytes() == expected
-    assert summary.head_length == max(head_cap, 0)
-    assert summary.tail_length == max(tail_cap, 0)
-    total = summary.head_length + summary.tail_length + summary.dropped
-    assert total == summary.produced == len(STREAM)
+    # A negative cap has no truncation meaning: unrejected, it would evict
+    # more bytes than the stream offered and report dropped > produced.
+    directory = _allocate(tmp_path)
+    with pytest.raises(AllocationError):
+        directory.open_sidecar(
+            SIDECAR_NAME,
+            head_cap=head_cap,
+            tail_cap=tail_cap,
+        )
+    # Rejection precedes the open, so no Sidecar file was created.
+    assert not (directory.path / SIDECAR_NAME).exists()
 
 
 def test_an_unset_tail_cap_stores_only_the_head(tmp_path: Path) -> None:

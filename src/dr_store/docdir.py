@@ -74,6 +74,19 @@ def _validate_safe_name(
         )
 
 
+def _validate_cap(cap: int | None, *, role: str) -> None:
+    """Raise unless ``cap`` is an unset or non-negative byte count.
+
+    A negative cap has no truncation meaning: it would evict more bytes
+    than the stream offered, so a summary could report more ``dropped``
+    than ``produced``.
+    """
+    if cap is not None and cap < 0:
+        raise AllocationError(
+            f"{role} must be a non-negative byte count, got {cap!r}"
+        )
+
+
 def _flush_descriptor(descriptor: int) -> None:
     """Force written bytes to the storage medium, not just the OS cache.
 
@@ -132,8 +145,8 @@ class SidecarWriter:
     the head segment, so nothing ever reaches the tail. ``tail_cap=0`` is
     head-only, and so is an unset ``tail_cap`` under a finite ``head_cap``:
     the tail buffer is bounded by ``tail_cap``, never by the stream. A
-    negative cap is a cap of zero, so the accounting a summary reports
-    holds for any cap value a caller passes.
+    negative cap is rejected before the Sidecar file is opened, so the
+    accounting a summary reports holds for every writer that exists.
 
     A :class:`SidecarSummary` exists only after :meth:`finalize`, so a
     Manifest embedding a Sidecar Digest structurally cannot precede the
@@ -147,9 +160,11 @@ class SidecarWriter:
         head_cap: int | None = None,
         tail_cap: int | None = None,
     ) -> None:
+        _validate_cap(head_cap, role="head_cap")
+        _validate_cap(tail_cap, role="tail_cap")
         self._path = path
-        self._head_cap = None if head_cap is None else max(head_cap, 0)
-        self._tail_cap = 0 if tail_cap is None else max(tail_cap, 0)
+        self._head_cap = head_cap
+        self._tail_cap = 0 if tail_cap is None else tail_cap
         self._head_length = 0
         self._produced = 0
         self._tail = bytearray()

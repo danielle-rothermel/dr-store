@@ -136,10 +136,11 @@ class AllocationError(DocumentDirectoryError):
     """A Document Directory or one of its Sidecars faulted on the write side.
 
     Raised when a name the component creates is not a safe single segment,
-    when the generated directory already exists (a collision is surfaced,
-    never retried), when the underlying ``mkdir`` fails, and when opening,
-    writing, or durably flushing a Sidecar file fails. The originating OS
-    error is preserved as ``__cause__``.
+    when a Sidecar cap is a negative byte count, when the generated
+    directory already exists (a collision is surfaced, never retried), when
+    the underlying ``mkdir`` fails, and when opening, writing, or durably
+    flushing a Sidecar file fails. The originating OS error, when there is
+    one, is preserved as ``__cause__``.
     """
 
 
