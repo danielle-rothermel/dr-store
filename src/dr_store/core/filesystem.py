@@ -45,12 +45,15 @@ def validate_safe_name(
 
 
 def flush_descriptor(descriptor: int) -> None:
-    """Force written bytes to the storage medium, not just the OS cache.
+    """Request that written bytes reach the storage medium.
 
     macOS ``fsync`` only pushes to the drive's write cache, so the platform
     ladder is ``F_FULLFSYNC`` first and ``os.fsync`` as the fallback -- where
     ``fcntl`` itself is absent, where the fcntl command is absent, and where
-    the filesystem rejects it.
+    the filesystem rejects it. Every ``OSError`` from ``F_FULLFSYNC`` currently
+    takes that fallback, including errors that may represent an I/O failure
+    rather than an unsupported command; callers must not infer that a
+    successful fallback proves the stronger full-flush request succeeded.
     """
     full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
     if fcntl is not None and full_fsync is not None:

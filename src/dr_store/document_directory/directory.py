@@ -55,7 +55,7 @@ class DocumentDirectory:
     :meth:`allocate` creates the directory and returns the instance naming it.
     :meth:`read_manifest` reads a directory named by the caller, while
     :meth:`verify_sidecar` verifies a direct child of this instance's
-    directory. Every :meth:`publish` is a durable atomic replace and is
+    directory. Every :meth:`publish` uses an atomic replace and is
     last-write-wins: the component owns no lifecycle state and never inspects
     the payload it stores.
     """
@@ -87,6 +87,11 @@ class DocumentDirectory:
         reuse and never a retry loop. ``root`` is caller-owned and must already
         exist. ``prefix`` and ``manifest_name`` are validated safe single path
         segments before anything touches disk.
+
+        Allocation does not flush the caller-owned root directory. The new
+        directory is therefore visible after the call returns, but this method
+        does not promise that its directory entry survives loss of the machine
+        or filesystem cache.
         """
         validate_safe_name(prefix, role="prefix")
         validate_safe_name(manifest_name, role="manifest_name")
@@ -101,12 +106,18 @@ class DocumentDirectory:
         return cls(path, manifest_name)
 
     def publish(self, manifest: Jsonable) -> None:
-        """Durably replace the Manifest with ``manifest``, atomically.
+        """Replace the Manifest with ``manifest`` atomically.
 
         The complete canonical JSON is written to a temp file in the same
         directory, flushed, atomically renamed onto the Manifest name, and the
         directory entry is flushed. A reader therefore sees either no Manifest
         or one complete previously-published Manifest, never a partial one.
+
+        Replacement precedes the directory flush. If that final flush fails,
+        this method raises :class:`~dr_store.core.errors.ManifestPublishError`
+        even though the new Manifest may already be visible; the exception does
+        not imply rollback. These steps support persistence but ordinary
+        process-death visibility is not evidence of power-loss durability.
         """
         try:
             canonical = canonical_json(validate_strict_json(manifest))

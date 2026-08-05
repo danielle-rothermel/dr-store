@@ -83,6 +83,9 @@ class SidecarWriter:
 
     A :class:`SidecarSummary` exists only after :meth:`finalize`, so a Manifest
     embedding a Sidecar Digest structurally cannot precede the Sidecar's flush.
+    Finalization flushes the file descriptor but not the containing directory
+    entry, so it does not promise that a newly created Sidecar name survives
+    loss of the machine or filesystem cache.
     """
 
     def __init__(
@@ -110,7 +113,13 @@ class SidecarWriter:
             ) from exc
 
     def write(self, chunk: bytes) -> None:
-        """Offer bytes to the Sidecar, applying the caps."""
+        """Offer bytes to the Sidecar, applying the caps.
+
+        A write failure is translated to :class:`AllocationError`, but the
+        writer is not closed or moved to a terminal state. Its accounting may
+        already include the offered chunk, so callers must abandon a writer
+        after an error; retry and later finalization have no supported result.
+        """
         self._produced += len(chunk)
         remainder = chunk
         if self._head_cap is None:
@@ -143,7 +152,7 @@ class SidecarWriter:
         self._head_length += len(part)
 
     def finalize(self) -> SidecarSummary:
-        """Append the tail segment, flush durably, and return the summary."""
+        """Append the tail segment, flush its descriptor, and summarize."""
         tail = bytes(self._tail)
         try:
             self._handle.write(tail)

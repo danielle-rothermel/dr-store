@@ -193,3 +193,17 @@ class SidecarWriter:
     def write(self, chunk: bytes) -> None: ...
     def finalize(self) -> SidecarSummary: ...
 ```
+
+The filesystem operations have intentionally narrow persistence semantics.
+Manifest publication flushes the temporary file, atomically replaces the
+Manifest, and then flushes the directory. A failure of that last flush raises
+even though the replacement may already be visible; it does not roll the
+Manifest back. Allocation does not flush the caller-owned root directory, and
+Sidecar finalization does not flush the Sidecar's directory entry. Abrupt
+process-death visibility therefore does not establish power-loss durability.
+On systems exposing `F_FULLFSYNC`, dr-store falls back to `fsync` after any
+`F_FULLFSYNC` `OSError`, including errors that may not mean "unsupported."
+
+A failed Sidecar `write` raises `AllocationError` but does not close or poison
+the writer, and accounting may already include the failed chunk. Callers must
+abandon that writer; retrying it or finalizing it has no supported outcome.
