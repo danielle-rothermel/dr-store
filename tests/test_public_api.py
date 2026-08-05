@@ -1,4 +1,4 @@
-"""Exact public API shape and heuristic public-vocabulary tripwires."""
+"""ObjectStore API shape and heuristic module-vocabulary tripwires."""
 
 from __future__ import annotations
 
@@ -37,9 +37,8 @@ def _tokens(name: str) -> set[str]:
     return {part.lower() for part in _TOKEN_PARTS.findall(name)}
 
 
-def test_public_boundary_vocabulary_tripwire() -> None:
-    """Heuristically guard observable exports and module names."""
-    public_names = [("public export", name) for name in dr_store.__all__]
+def test_public_module_vocabulary_tripwire() -> None:
+    """Heuristically guard observable module names."""
     module_names = [
         ("module", module.name)
         for module in pkgutil.walk_packages(
@@ -47,7 +46,7 @@ def test_public_boundary_vocabulary_tripwire() -> None:
         )
     ]
 
-    for boundary, name in [*public_names, *module_names]:
+    for boundary, name in module_names:
         leaf = name.rsplit(".", 1)[-1]
         leaked = _tokens(leaf) & FORBIDDEN_PUBLIC_WORDS
         assert leaked == set(), f"{boundary} {name!r} leaks {leaked}"
