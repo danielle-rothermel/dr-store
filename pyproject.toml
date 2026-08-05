@@ -1,7 +1,7 @@
 [project]
 name = "dr-store"
-version = "0.1.1"
-description = "Generic append-only content-addressed object store with immutable put, verified get, and atomic key-to-reference binding, plus the Document Directory: one atomic canonical-JSON manifest and streamed binary sidecars."
+version = "0.1.2"
+description = "Storage primitives for content-addressed records and document artifacts."
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -26,7 +26,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "dr-serialize>=0.1.0",
+    "dr-serialize>=0.1.2",
 ]
 
 [project.urls]

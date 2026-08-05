@@ -32,12 +32,8 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: false
-      - run: uv sync --locked
-      - run: uv run ruff check .
-      - run: uv run ty check
-      - run: uv run pytest
+      - run: scripts/pre-check.sh
       - run: uv build
       # Publishes via PyPI Trusted Publishing (OIDC) — no API token.
-      # Requires this repo/workflow to be registered as a (pending)
-      # publisher for the dr-store project on pypi.org.
+      # Requires this repo and workflow to be registered as a PyPI publisher.
       - uses: pypa/gh-action-pypi-publish@release/v1

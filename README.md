@@ -1,94 +1,85 @@
 # dr-store
 
-Generic append-only content-addressed object store for the dr-* stack.
+[![CI](https://github.com/danielle-rothermel/dr-store/actions/workflows/ci.yml/badge.svg)](https://github.com/danielle-rothermel/dr-store/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/dr-store.svg)](https://pypi.org/project/dr-store/)
 
-`dr-store` owns three things and nothing else:
+[Definitions](https://danielle-rothermel.github.io/dr-store/) ·
+[Terms](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/terms.toml) ·
+[Contracts](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/contracts.toml) ·
+[Changelog](https://github.com/danielle-rothermel/dr-store/blob/main/CHANGELOG.md) ·
+[dr-serialize](https://github.com/danielle-rothermel/dr-serialize)
 
-1. **Immutable put** — an absent typed `(schema, content_hash)` key
-   atomically accepts a verified complete canonical record value; replay of
-   the same canonical value is idempotent success; different content at the
-   same key is a typed conflict and never overwrites the stored value.
-2. **Verified get** — every read recomputes and verifies the Content Hash
-   and schema declared by the `ObjectReference`; missing, schema-mismatched,
-   or corrupted content fails with a typed error.
-3. **Atomic key-to-reference binding** — one generic compare-and-set that
-   binds an opaque caller-owned key to an `ObjectReference`: an unbound key
-   binds; the same reference replays idempotently; a different reference
-   conflicts and never overwrites the winner. No overwrite path is exposed.
+dr-store provides domain-neutral storage primitives for immutable records and
+document artifacts:
 
-The Content Hash is the full 64-character lowercase SHA-256 digest of the
-complete canonical persisted record, canonicalized through
-[`dr-serialize`](https://github.com/danielle-rothermel/dr-serialize)'s
-canonical JSON. `dr-store` does not invent a second canonicalization
-dialect, and a Content Hash is not an Identity Hash.
+- **[Content addressing](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/content_addressing.py)**
+  identifies complete records by their declared schemas and SHA-256 hashes of
+  their Canonical JSON Text under dr-serialize's frozen profile.
+- **[Object Store](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/object_store.py)**
+  provides immutable puts, verified reads, and atomic bindings from opaque
+  caller-owned keys to object references.
+- **[Storage backends](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/storage_backends)**
+  supply the Object Store's atomic, append-only operations. `MemoryBackend` is
+  process-local; `SqliteBackend` persists data for cross-process use.
+- **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
+  publishes one canonical Manifest beside streamed binary Sidecars.
+- **[Core infrastructure](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/core)**
+  provides typed failures, single-segment name validation, and filesystem flush
+  helpers.
 
-The [vocabulary sheet](https://danielle-rothermel.github.io/dr-store/)
-(source: `.defs/vocab.html`) is the authoritative statement of the
-contracts this repo implements — the append-only content-addressed object
-store and the Document Directory: the terms, the guarantees, what is in
-and out of scope, and the mapping from each term to the exported names.
+## Installation
 
-## Document Directory
+dr-store requires Python 3.12 or newer.
 
-The Document Directory stores what a single immutable record cannot: one
-allocated directory with exactly one writer, one atomically-replaced
-canonical-JSON **Manifest**, and zero or more streamed binary **Sidecars**.
-
-```python
-from dr_store import DocumentDirectory
-
-directory = DocumentDirectory.allocate(
-    root, prefix="run", manifest_name="record.json"
-)
-directory.publish(manifest)                    # atomic durable replace
-writer = directory.open_sidecar("stdout.bin", head_cap=..., tail_cap=...)
-writer.write(chunk)
-summary = writer.finalize()                    # -> SidecarSummary
-directory.publish(final_manifest)              # summaries embedded by caller
+```console
+python -m pip install dr-store
 ```
 
-- **Atomic durable publish** — each `publish()` writes the complete
-  canonical JSON to a temp file in the same directory, flushes it
-  (`F_FULLFSYNC` where available, `os.fsync` otherwise), renames it onto
-  the manifest name, and flushes the directory entry. After abrupt process
-  death a reader sees either no Manifest or one complete previously
-  published Manifest — never a partial one. The claim is scoped to local
-  macOS filesystems; network mounts and cloud-synchronized directories are
-  outside it.
-- **Writer-owned truncation** — `head_cap` bytes fill first and a ring
-  buffer keeps the last `tail_cap` bytes of the remainder, stored as head
-  segment then tail segment in one file. No caps is unbounded; an unset
-  `tail_cap` is head-only, so the tail buffer is bounded by `tail_cap` and
-  never by the stream. The `SidecarSummary` reports the
-  stored segment lengths alongside `produced` and `dropped` byte counts,
-  plus the Sidecar Digest: the full 64-character lowercase SHA-256 of the
-  stored bytes. A Sidecar Digest is not a Content Hash — its input is raw
-  bytes, not a canonical record.
-- **Verified read-back** — `read_manifest()` accepts only strict canonical
-  JSON; `verify_sidecar()` checks stored bytes against the digest and
-  total segment length the caller extracted from its own Manifest. Every
-  fault is a typed error under `DocumentDirectoryError`.
+## Usage
 
-The component is domain-neutral in the same way the Object Store is, and
-narrower still: it knows no lifecycle state, never reads a field out of a
-Manifest payload, never computes a retention policy, and never owns
-threads or child processes. Concurrent allocation under one root is
-collision-free; each allocated directory has one writer by construction,
-not by locking. The vocabulary sheet's Document Directory section states
-its terms and guarantees.
+```python
+from dr_store import MemoryBackend, ObjectStore
 
-## Ecosystem
+store = ObjectStore(MemoryBackend())
+reference, _ = store.put("example.note.v1", {"title": "hello"})
+store.bind("notes/latest", reference)
 
-`dr-store` depends only on `dr-serialize` for canonical JSON and strict
-finite-JSON validation. It carries no Whetstone, Rollout, workflow, retry,
-or campaign vocabulary; the public contract is domain-neutral.
+assert store.resolve("notes/latest") == reference
+assert store.get(reference) == {"title": "hello"}
+```
 
-## Backends
+Use `SqliteBackend(path)` when the stored objects and bindings must persist
+across processes. The rendered
+[definitions](https://danielle-rothermel.github.io/dr-store/), authoritative
+[terms](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/terms.toml),
+and binding
+[contracts](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/contracts.toml)
+describe the vocabulary, public-export mappings, and behavioral boundaries.
 
-- **in-memory** (`MemoryBackend`) — for tests and single-process use.
-- **sqlite** (`SqliteBackend`) — durable and safe under concurrent
-  cross-process use via serialized transactions.
+## Filesystem and failure semantics
 
-Both satisfy the same backend-neutral contract, exercised by a shared
-concurrency test proving parallel binds of one unbound key produce exactly
-one winner.
+A Document Directory is intended for caller-coordinated single-writer use;
+dr-store does not enforce that policy with a lock. Allocation uses a timestamp
+and UUID4, but a generated-name collision raises `AllocationError` rather than
+being retried. Allocation does not flush the caller-owned root directory.
+
+Manifest publication writes and flushes a temporary file, replaces the Manifest
+in the same directory, and then flushes the Document Directory. All-or-nothing
+visibility depends on the underlying filesystem honoring atomic same-directory
+replacement; network, synchronized, or other filesystems whose rename semantics
+are not established are outside current evidence. A failure of the final flush
+raises even though the replacement may already be visible, and it does not roll
+the Manifest back. These operations do not promise power-loss durability.
+
+Name validation prevents lexical traversal syntax only. Manifest reads and
+Sidecar creation and writes follow existing final-component symlinks, so those
+paths require trusted, caller-controlled directory contents. Sidecar
+finalization flushes the Sidecar descriptor before returning its summary, but it
+does not flush the Sidecar's directory entry or impose ordering on an arbitrary
+Manifest publication. Sidecar verification is the no-follow path: it refuses
+final-component symlinks for both the Document Directory and named child,
+requires a regular direct child, and reads from the descriptor it inspected.
+
+A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
+open and its accounting state advanced. The writer is unusable by contract and
+must be abandoned; retrying it or finalizing it has no supported outcome.

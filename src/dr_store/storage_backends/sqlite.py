@@ -1,17 +1,3 @@
-"""Durable SQLite backend safe under concurrent cross-process use.
-
-The append-only object and binding tables are ordinary SQLite tables with
-primary keys. Each compare-and-set primitive runs inside one ``BEGIN
-IMMEDIATE`` transaction: the write lock is taken before the read, so two
-processes racing to bind the same unbound key serialize -- exactly one wins
-the insert and the other observes the winner's row in the same transaction.
-``INSERT OR IGNORE`` makes the insert a no-op when the key already exists,
-so no binding is ever overwritten.
-
-WAL mode is enabled for cross-process read/write concurrency; a busy timeout
-lets a blocked writer wait for the current transaction rather than failing.
-"""
-
 from __future__ import annotations
 
 import sqlite3
@@ -19,7 +5,7 @@ import threading
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from dr_store.backends.types import BindOutcome, PutOutcome
+from dr_store.storage_backends.contract import BindOutcome, PutOutcome
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -44,17 +30,15 @@ CREATE TABLE IF NOT EXISTS bindings (
 
 
 class SqliteBackend:
-    """Durable append-only object and binding tables over SQLite.
+    """Persistent SQLite object and binding storage.
 
-    Pass a filesystem path for durable cross-process storage. The connection
-    is per-thread (SQLite connections are not shareable across threads); all
-    cross-process coordination happens through the database file's locks.
+    Initialize before concurrent use. Thereafter, per-thread connections
+    coordinate object and binding operations across processes through SQLite.
     """
 
     def __init__(self, path: str | Path) -> None:
         self._path = str(path)
         self._local = threading.local()
-        # Initialize schema once via a throwaway bootstrap connection.
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
             conn.commit()
@@ -122,9 +106,7 @@ class SqliteBackend:
         schema: str,
         content_hash: str,
     ) -> tuple[str, str] | None:
-        # Prefer the exact (schema, content_hash) row. When none exists but
-        # the same content is filed under a different schema, return that row
-        # so the store can raise a schema mismatch rather than not-found.
+        # Alternate-schema lookup distinguishes mismatch from missing content.
         row = self._conn.execute(
             "SELECT schema, canonical FROM objects "
             "WHERE content_hash = ? ORDER BY schema = ? DESC LIMIT 1",

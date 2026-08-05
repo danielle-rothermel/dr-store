@@ -1,6 +1,6 @@
-@import "https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&display=swap";
+@import url("https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&display=swap");
 
-/* ── v2 vocabulary (see SKILL.md §6, references/rules.md) ──────────────────
+/* ── Visual vocabulary ────────────────────────────────────────────────────
    Hue bindings — one hue = one meaning:
      --accent #1866b4  links + navigation ONLY
      --anchor #6f42c1  semantic scan anchors (.key) + callouts — never a link
@@ -82,7 +82,7 @@ a { color: var(--accent); }
 .grid-4, .cols4, .l1 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .full { grid-column: 1 / -1; }
 
-/* ── Parallel panels (ultrawide layout system, references/layout.md) ──────
+/* ── Parallel panels (ultrawide layout system) ────────────────────────────
    Side-by-side documents-in-miniature for cross-referenceable sections —
    NOT snaking columns. Single-column stack (DOM order) below 1600px.
    Sticky panel heads keep each panel's question in view while scrolling. */
@@ -166,8 +166,6 @@ code {
 
 /* Colophon: ALL process metadata (sources, provenance, ids, honest scope
    notes). Reader-relevant honesty stays in context above, in plain language. */
-.colophon { margin-top: 46px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
-.colophon code { background: var(--code-bg); }
 
 body.with-toc { display: grid; grid-template-columns: 270px minmax(0, 1fr); }
 nav.toc { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 28px 20px; border-right: 1px solid var(--line); background: var(--surface); font-size: 14.5px; }

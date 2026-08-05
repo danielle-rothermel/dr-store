@@ -28,8 +28,7 @@ jobs:
       - name: Stage site from .defs
         run: |
           mkdir -p _site
-          cp .defs/doc.css .defs/favicon.svg .defs/vocab.html _site/
-          cp .defs/vocab.html _site/index.html
+          cp -R .defs/* _site/
       - uses: actions/upload-pages-artifact@v5
         with:
           path: _site

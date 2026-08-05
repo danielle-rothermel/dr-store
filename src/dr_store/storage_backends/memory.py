@@ -1,25 +1,16 @@
-"""In-memory backend for tests and single-process use.
-
-Two dictionaries under one lock implement the append-only object and
-binding tables. Atomicity holds within a single process only; for durable
-cross-process use choose :class:`~dr_store.backends.sqlite.SqliteBackend`.
-"""
-
 from __future__ import annotations
 
 import threading
 
-from dr_store.backends.types import BindOutcome, PutOutcome
+from dr_store.storage_backends.contract import BindOutcome, PutOutcome
 
 
 class MemoryBackend:
-    """Process-local append-only object and binding tables."""
+    """Thread-safe, process-local object and binding storage."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # (schema, content_hash) -> canonical
         self._objects: dict[tuple[str, str], str] = {}
-        # key -> (schema, content_hash)
         self._bindings: dict[str, tuple[str, str]] = {}
 
     def put_object(
@@ -51,10 +42,7 @@ class MemoryBackend:
         content_hash: str,
     ) -> tuple[str, str] | None:
         with self._lock:
-            # Prefer the exact (schema, content_hash) row. When none exists
-            # but the same content is filed under a different schema, return
-            # that row so the store can raise a schema mismatch, not
-            # not-found.
+            # Alternate schemas distinguish mismatch from missing content.
             exact = self._objects.get((schema, content_hash))
             if exact is not None:
                 return (schema, exact)

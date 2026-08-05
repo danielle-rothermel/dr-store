@@ -1,0 +1,199 @@
+#:schema ./terms.schema.json
+
+[[terms]]
+name = "record"
+definition = """
+A complete strict JSON value that carries everything the caller means to \
+persist as one content-addressed value."""
+categories = ["content addressing", "object storage"]
+
+[[terms]]
+name = "schema"
+definition = """
+A caller-declared label for the shape and meaning of a record. The label is \
+opaque to storage and distinguishes references to the same content under \
+different declared shapes."""
+categories = ["content addressing", "object storage"]
+part_of = ["object reference"]
+
+[[terms]]
+name = "canonical JSON"
+definition = """
+The single deterministic UTF-8 JSON text selected for an accepted value by a \
+declared canonical profile. Equivalent accepted values have the same text \
+regardless of incidental formatting or object-key order."""
+categories = ["content addressing", "object storage", "document artifacts"]
+
+[[terms]]
+name = "hash"
+definition = """
+A deterministic fixed-length value computed by a declared algorithm over \
+exact declared input bytes; its qualified name supplies its role and input \
+semantics."""
+categories = ["content addressing", "document artifacts"]
+
+[[terms]]
+name = "key"
+definition = """
+An opaque caller-owned string naming one place in a binding table. Storage \
+does not parse the string or assign it domain meaning."""
+categories = ["object storage"]
+part_of = ["binding"]
+
+[[terms]]
+name = "binding"
+definition = """
+A single-assignment association from a key to one object reference. Once \
+established, it is not replaced, cleared, or rebound."""
+categories = ["object storage"]
+part_of = ["object store"]
+
+[[terms]]
+name = "idempotent replay"
+definition = """
+A repeated write of the value already stored at the same place. It succeeds \
+without creating or changing stored content."""
+categories = ["object storage"]
+
+[[terms]]
+name = "conflict"
+definition = """
+An attempted write of a different value at an occupied single-assignment \
+place. The attempt reports a typed conflict outcome and leaves the existing \
+value unchanged."""
+categories = ["object storage"]
+
+[[terms]]
+name = "append-only"
+definition = """
+The property that stored associations are added but never mutated or removed \
+through the storage contract."""
+categories = ["object storage"]
+
+[[terms]]
+name = "compare-and-set"
+definition = """
+An atomic operation that stores a value only when its place is empty and \
+otherwise preserves and reports the existing value."""
+categories = ["object storage"]
+
+[[terms]]
+name = "content hash"
+definition = """
+The full 64-character lowercase SHA-256 hash of a complete record's canonical \
+JSON bytes. It addresses the complete stored value rather than a \
+caller-selected identity subset."""
+exported_symbols = [
+  "compute_content_hash",
+  "is_content_hash",
+  "CONTENT_HASH_LENGTH",
+]
+categories = ["content addressing", "object storage"]
+is_a = ["hash"]
+part_of = ["object reference"]
+
+[[terms]]
+name = "object reference"
+definition = """
+A validated content-addressed handle composed of a declared schema and the \
+full content hash of one record."""
+exported_symbols = ["ObjectReference", "ReferenceValidationError"]
+categories = ["content addressing", "object storage"]
+part_of = ["binding"]
+
+[[terms]]
+name = "object store"
+definition = """
+The append-only mapping from object references to immutable records together \
+with the single-assignment mapping from caller-owned keys to those references."""
+exported_symbols = ["ObjectStore", "StoreError"]
+categories = ["object storage"]
+
+[[terms]]
+name = "immutable put"
+definition = """
+The operation that derives a record's object reference and establishes its \
+stored association once. An identical replay succeeds, while different \
+content at the same reference conflicts without replacement."""
+exported_symbols = ["PutStatus", "ObjectConflictError"]
+categories = ["object storage"]
+
+[[terms]]
+name = "verified get"
+definition = """
+The resolution of an object reference to a record only after the stored \
+schema, canonical representation, and content hash have been checked against \
+that reference."""
+exported_symbols = [
+  "ObjectNotFoundError",
+  "SchemaMismatchError",
+  "ContentHashMismatchError",
+]
+categories = ["object storage"]
+
+[[terms]]
+name = "atomic key-to-reference binding"
+definition = """
+The compare-and-set operation that establishes a binding for an unbound key, \
+treats the same reference as an idempotent replay, and preserves the existing \
+reference on conflict."""
+exported_symbols = ["BindStatus", "BindingConflictError"]
+categories = ["object storage"]
+is_a = ["compare-and-set"]
+
+[[terms]]
+name = "backend"
+definition = """
+The storage boundary that supplies atomic insert-if-absent operations and \
+point reads for object and binding tables. Persistence scope belongs to each \
+backend implementation."""
+exported_symbols = [
+  "Backend",
+  "MemoryBackend",
+  "SqliteBackend",
+  "PutOutcome",
+  "BindOutcome",
+]
+categories = ["object storage"]
+
+[[terms]]
+name = "document directory"
+definition = """
+One allocated directory intended for caller-coordinated single-writer use, \
+providing one manifest location and zero or more sidecars. Writer coordination \
+and retention remain caller responsibilities."""
+exported_symbols = [
+  "DocumentDirectory",
+  "AllocationError",
+  "DocumentDirectoryError",
+]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "manifest"
+definition = """
+The single canonical JSON document published by same-directory replacement \
+for a document directory. Its caller-owned payload is the source of truth for \
+the meaning and completeness of any sidecars it describes."""
+exported_symbols = ["ManifestPublishError", "ManifestReadError"]
+categories = ["document artifacts"]
+part_of = ["document directory"]
+
+[[terms]]
+name = "sidecar"
+definition = """
+A raw-bytes artifact written incrementally beside a manifest, optionally \
+retaining bounded head and tail segments. It is not self-describing; its \
+meaning and completeness come from caller-owned metadata."""
+exported_symbols = ["SidecarWriter", "SidecarSummary"]
+categories = ["document artifacts"]
+part_of = ["document directory"]
+
+[[terms]]
+name = "sidecar digest"
+definition = """
+The full 64-character lowercase SHA-256 hash of a sidecar's stored bytes after \
+any truncation. Its input is raw bytes, so it is not a content hash."""
+exported_symbols = ["SidecarVerificationError"]
+categories = ["document artifacts"]
+is_a = ["hash"]

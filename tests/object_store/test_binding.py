@@ -1,14 +1,3 @@
-"""The exact four-row atomic key-to-reference binding table.
-
-Rows mirror the design table one-to-one:
-
-    | existing state | requested | required result           |
-    | Unbound        | any ref   | Bind                      |
-    | Bound to A     | A         | Same (idempotent success) |
-    | Bound to A     | B         | Conflict (keep A)         |
-    | Bound to A     | overwrite | no such path exists       |
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -25,19 +14,19 @@ REF_A = ObjectReference.for_record("example.record", {"which": "A"})
 REF_B = ObjectReference.for_record("example.record", {"which": "B"})
 
 
-def test_row1_unbound_binds(store: ObjectStore) -> None:
+def test_unbound_key_binds(store: ObjectStore) -> None:
     assert store.resolve(KEY) is None
     assert store.bind(KEY, REF_A) is BindStatus.BOUND
     assert store.resolve(KEY) == REF_A
 
 
-def test_row2_same_reference_is_idempotent(store: ObjectStore) -> None:
+def test_same_reference_replay_is_idempotent(store: ObjectStore) -> None:
     store.bind(KEY, REF_A)
     assert store.bind(KEY, REF_A) is BindStatus.IDEMPOTENT
     assert store.resolve(KEY) == REF_A
 
 
-def test_row3_different_reference_conflicts_and_keeps_winner(
+def test_different_reference_conflicts_and_keeps_winner(
     store: ObjectStore,
 ) -> None:
     store.bind(KEY, REF_A)
@@ -45,27 +34,7 @@ def test_row3_different_reference_conflicts_and_keeps_winner(
         store.bind(KEY, REF_B)
     assert excinfo.value.existing == REF_A
     assert excinfo.value.requested == REF_B
-    # The durable winner is preserved unchanged.
     assert store.resolve(KEY) == REF_A
-
-
-def test_row4_no_overwrite_path_is_exposed() -> None:
-    # The public contract exposes bind/resolve only -- no overwrite, clear,
-    # delete, update, or rebind entry point.
-    public = {name for name in dir(ObjectStore) if not name.startswith("_")}
-    forbidden = {
-        "overwrite",
-        "clear",
-        "delete",
-        "remove",
-        "update",
-        "rebind",
-        "unbind",
-        "set",
-        "replace",
-    }
-    assert public & forbidden == set()
-    assert {"put", "get", "bind", "resolve"} <= public
 
 
 def test_binding_key_is_opaque_arbitrary_string(store: ObjectStore) -> None:

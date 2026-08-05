@@ -1,0 +1,170 @@
+[[contracts]]
+title = "Content hashes use the canonical JSON profile"
+statement = """
+Content hashing validates a complete strict JSON record and computes its full \
+lowercase SHA-256 hash through the frozen canonical JSON profile; storage does \
+not define a second canonicalization or hash input."""
+rationale = """
+One canonical profile keeps stored addresses reproducible and prevents the \
+storage layer from silently assigning different bytes to the same accepted \
+record. A content hash covers the complete record, not caller-selected \
+identity facts."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/content_addressing/test_content_addressing.py"
+
+[[contracts]]
+title = "Object references validate their declared parts"
+statement = """
+An object reference contains a non-empty string schema and a 64-character \
+lowercase hexadecimal content hash; construction rejects any other shape \
+before the reference reaches storage."""
+rationale = """
+Validating the schema and digest shape at the reference boundary prevents \
+malformed handles from entering object or binding operations. This validation \
+does not claim that referenced content already exists."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/content_addressing/test_content_addressing.py"
+
+[[contracts]]
+title = "Object puts are immutable"
+statement = """
+An immutable put stores validated canonical record text at an absent schema \
+and content-hash pair, treats identical canonical text as an idempotent replay, \
+and raises a typed conflict for different text while preserving the existing \
+stored row."""
+rationale = """
+Insert-if-absent semantics make a reference stable after its first successful \
+write. The conflict path remains explicit even though a differing value at the \
+same full digest should be exceptional."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/object_store/test_put_get.py"
+
+[[contracts]]
+title = "Object gets verify stored content"
+statement = """
+Every object get resolves the requested schema and content hash, parses the \
+stored text as strict JSON within the canonical profile, recomputes the \
+reference hash and canonical text, and returns the record only when all checks \
+agree; missing, wrong-schema, and corrupt content fail through typed errors."""
+rationale = """
+The backend is a storage mechanism rather than a trust boundary, so reads do \
+not accept stored bytes merely because they occupy the requested location."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/object_store/test_put_get.py"
+
+[[contracts]]
+title = "Bindings are single-assignment"
+statement = """
+Binding an unbound caller-owned key stores one object reference atomically; \
+replaying the same reference is idempotent, and requesting a different \
+reference raises a typed conflict that preserves the existing winner. The \
+object-store surface exposes no clear, overwrite, or rebind operation."""
+rationale = """
+Single assignment makes a successful key resolution stable while allowing \
+concurrent contenders to observe one correlated winner."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/object_store/test_binding.py"
+
+[[contracts]]
+title = "Backends own atomicity and declare persistence scope"
+statement = """
+Every backend supplies atomic insert-if-absent operations for object rows and \
+bindings plus point reads. The in-memory backend is process-local; the SQLite \
+backend retains committed rows across reopen and supports cross-process \
+contention without claiming power-loss durability."""
+rationale = """
+The object store owns hashing, verification, idempotency, and typed conflicts, \
+while the backend owns the atomic storage primitive those rules require. \
+Persistence is stated per implementation rather than generalized into an \
+unsupported durability guarantee."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/storage_backends/test_contract.py tests/storage_backends/test_sqlite_backend.py"
+
+[[contracts]]
+title = "Callers own domain meaning"
+statement = """
+Schemas and binding keys are opaque strings, and manifest payload fields are \
+opaque strict JSON. Callers own their meaning, identity selection, lifecycle, \
+retention, cap policy, and writer coordination; storage does not infer those \
+domain rules."""
+rationale = """
+Keeping domain policy outside the foundational storage boundary lets the same \
+primitives serve unrelated consumers without silently redefining their data."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/object_store/test_binding.py::test_binding_key_is_opaque_arbitrary_string tests/document_directory/test_manifest.py::test_publish_writes_canonical_bytes_without_temp_residue"
+
+[[contracts]]
+title = "Document Directory allocation never reuses a collision"
+statement = """
+Allocation validates the prefix and manifest name as single path segments and \
+creates one fresh directory named from that prefix, a UTC timestamp, and a \
+UUID. A generated-name collision raises a typed error without retry or reuse, \
+and allocation does not flush the caller-owned root directory."""
+rationale = """
+A collision must remain visible rather than attaching a new artifact to an \
+existing directory. Not flushing the root keeps the durability boundary \
+truthful: allocation alone does not promise survival across power loss."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/document_directory/test_directory.py"
+
+[[contracts]]
+title = "Manifest replacement is filesystem-conditional"
+statement = """
+Manifest publication validates canonical-profile input, writes and flushes a \
+complete temporary file, replaces the manifest in the same directory, and \
+then flushes that directory. All-or-nothing visibility depends on the \
+filesystem's same-directory replacement semantics; callers coordinate writers, \
+and no power-loss durability is promised."""
+rationale = """
+A write, descriptor-flush, or replacement failure leaves the prior manifest \
+in place, while a directory-flush failure can be reported after the new \
+manifest is already visible. The last writer wins when callers publish \
+without external coordination."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/document_directory/test_manifest.py"
+
+[[contracts]]
+title = "Manifest reads require exact canonical bytes"
+statement = """
+A manifest read returns a payload only when the file is one complete UTF-8 \
+strict JSON value within the canonical profile and its stored bytes exactly \
+equal that value's canonical JSON bytes; every read or validation fault raises \
+a typed manifest-read error."""
+rationale = """
+Exact read-back rejects malformed, non-strict, out-of-profile, and merely \
+equivalent non-canonical documents instead of normalizing corruption or \
+external modification on read."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/document_directory/test_manifest.py"
+
+[[contracts]]
+title = "Sidecar finalization reports stored-byte accounting"
+statement = """
+A sidecar writer retains bytes under caller-supplied head and tail caps and, \
+on successful finalization, flushes and closes its file descriptor before \
+returning stored segment lengths, produced and dropped byte counts, and the \
+SHA-256 digest of exactly the stored bytes. Finalization does not flush the \
+directory entry or impose ordering on manifest publication."""
+rationale = """
+The summary makes truncation and the verified byte sequence explicit while \
+avoiding stronger persistence or publication-order claims. A caller abandons \
+a writer after a write failure because further use has no supported outcome."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/document_directory/test_sidecar_writer.py"
+
+[[contracts]]
+title = "Sidecar verification pins no-follow descriptors"
+statement = """
+Sidecar verification opens the named document directory and its regular direct \
+child with required no-follow, directory-relative flags, reads from the child \
+descriptor it inspected, and verifies the caller-supplied non-negative head and \
+tail lengths plus digest. It rejects final-component symlinks and fails closed \
+when the \
+required platform support is unavailable."""
+rationale = """
+Pinned descriptors prevent a checked child name from being swapped to a \
+different final object before reading. This boundary does not claim containment \
+for ancestor path resolution, durability, or safety for sidecar creation and \
+manifest reads, which follow their documented path behavior."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/document_directory/test_sidecar_verification.py"
