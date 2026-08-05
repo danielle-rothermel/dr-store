@@ -22,3 +22,22 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ty check
       - run: uv run pytest
+      - name: Verify built wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="$(mktemp -d)"
+          wheel_env="$(mktemp -d)"
+          uv build --wheel --out-dir "$artifact_dir"
+          uv export --locked --no-dev --no-emit-project \
+            --output-file "$artifact_dir/requirements.txt"
+          uv venv --python "${{ matrix.python-version }}" "$wheel_env"
+          uv pip install --python "$wheel_env/bin/python" \
+            --requirement "$artifact_dir/requirements.txt"
+          uv pip install --python "$wheel_env/bin/python" --no-deps \
+            "$artifact_dir"/*.whl
+          (
+            cd "$wheel_env"
+            "$wheel_env/bin/python" -I - "$GITHUB_WORKSPACE" \
+              < "$GITHUB_WORKSPACE/tests/verify_built_wheel.py"
+          )

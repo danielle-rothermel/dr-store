@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 from typing import TYPE_CHECKING
 
 import pytest
-from dr_serialize import canonical_json
+from dr_serialize import StrictJsonError
 
 from dr_store import (
     CONTENT_HASH_LENGTH,
@@ -24,21 +23,29 @@ if TYPE_CHECKING:
 VALID_HASH = "a" * 64
 
 
-def test_content_hash_is_full_lowercase_sha256_over_canonical_json() -> None:
+def test_content_hash_is_exact_canonical_sha256() -> None:
     record: Jsonable = {"b": 2, "a": [1, 2, 3]}
-    expected = hashlib.sha256(
-        canonical_json(record).encode("utf-8")
-    ).hexdigest()
     actual = compute_content_hash(record)
-    assert actual == expected
+    assert (
+        actual
+        == "17df395fb77661fb2f96417b64819b03367b9a00303e18b0445ac09534f134e1"
+    )
+    assert actual == compute_content_hash({"a": [1, 2, 3], "b": 2})
     assert len(actual) == CONTENT_HASH_LENGTH
     assert actual == actual.lower()
 
 
-def test_content_hash_is_key_order_independent() -> None:
-    assert compute_content_hash({"a": 1, "b": 2}) == compute_content_hash(
-        {"b": 2, "a": 1}
-    )
+@pytest.mark.parametrize(
+    "record",
+    [
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="infinity"),
+        pytest.param(object(), id="non-json-object"),
+    ],
+)
+def test_content_hash_rejects_non_strict_json(record: object) -> None:
+    with pytest.raises(StrictJsonError):
+        compute_content_hash(record)  # ty: ignore[invalid-argument-type]
 
 
 def test_is_content_hash_accepts_only_64_lowercase_hex() -> None:
@@ -49,22 +56,16 @@ def test_is_content_hash_accepts_only_64_lowercase_hex() -> None:
     assert not is_content_hash("g" * 64)
 
 
-def test_reference_rejects_empty_schema() -> None:
-    with pytest.raises(ReferenceValidationError):
-        ObjectReference(schema="", content_hash=VALID_HASH)
-
-
 @pytest.mark.parametrize(
-    "bad_hash",
-    ["A" * 64, "a" * 63, "a" * 65, "z" * 64, "", "not-a-hash"],
+    "bad_schema",
+    [
+        pytest.param("", id="empty"),
+        pytest.param(None, id="none"),
+        pytest.param(123, id="integer"),
+        pytest.param(b"bytes", id="bytes"),
+    ],
 )
-def test_reference_rejects_malformed_content_hash(bad_hash: str) -> None:
-    with pytest.raises(ReferenceValidationError):
-        ObjectReference(schema="example.record", content_hash=bad_hash)
-
-
-@pytest.mark.parametrize("bad_schema", [None, 123, b"bytes"])
-def test_reference_rejects_non_string_schema(bad_schema: object) -> None:
+def test_reference_rejects_invalid_schema(bad_schema: object) -> None:
     with pytest.raises(ReferenceValidationError):
         ObjectReference(
             schema=bad_schema,  # ty: ignore[invalid-argument-type]
@@ -72,10 +73,21 @@ def test_reference_rejects_non_string_schema(bad_schema: object) -> None:
         )
 
 
-@pytest.mark.parametrize("bad_hash", [None, 123, b"a" * 64])
-def test_reference_rejects_non_string_content_hash(
-    bad_hash: object,
-) -> None:
+@pytest.mark.parametrize(
+    "bad_hash",
+    [
+        pytest.param("A" * 64, id="uppercase"),
+        pytest.param("a" * 63, id="short"),
+        pytest.param("a" * 65, id="long"),
+        pytest.param("z" * 64, id="non-hex"),
+        pytest.param("", id="empty"),
+        pytest.param("not-a-hash", id="malformed"),
+        pytest.param(None, id="none"),
+        pytest.param(123, id="integer"),
+        pytest.param(b"a" * 64, id="bytes"),
+    ],
+)
+def test_reference_rejects_invalid_content_hash(bad_hash: object) -> None:
     with pytest.raises(ReferenceValidationError):
         ObjectReference(
             schema="example.record",
