@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, BinaryIO, Self, cast
 
 import pytest
 
@@ -58,6 +58,8 @@ def test_a_reader_sees_old_then_new_across_atomic_replace(
     temp_path = directory.path / f"{MANIFEST_NAME}.tmp"
     before_replace = threading.Event()
     allow_replace = threading.Event()
+    after_replace = threading.Event()
+    allow_completion = threading.Event()
     failures: list[BaseException] = []
     original_replace = Path.replace
 
@@ -66,6 +68,11 @@ def test_a_reader_sees_old_then_new_across_atomic_replace(
             before_replace.set()
             if not allow_replace.wait(WATCHDOG_SECONDS):
                 raise TimeoutError("replace release gate was not opened")
+            replaced = original_replace(path, target)
+            after_replace.set()
+            if not allow_completion.wait(WATCHDOG_SECONDS):
+                raise TimeoutError("publication release gate was not opened")
+            return replaced
         return original_replace(path, target)
 
     monkeypatch.setattr(Path, "replace", gated_replace)
@@ -84,13 +91,64 @@ def test_a_reader_sees_old_then_new_across_atomic_replace(
             b'{"sidecars":["stdout.bin"],"state":"finished"}'
         )
         assert _read(directory) == FIRST
+        allow_replace.set()
+        assert after_replace.wait(WATCHDOG_SECONDS)
+        assert _read(directory) == SECOND
     finally:
         allow_replace.set()
+        allow_completion.set()
         publishing.join(timeout=WATCHDOG_SECONDS)
 
     assert not publishing.is_alive()
     assert failures == []
     assert _read(directory) == SECOND
+    assert not temp_path.exists()
+
+
+class _FailingWriteHandle:
+    def __init__(self, wrapped: BinaryIO) -> None:
+        self._wrapped = wrapped
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        _exc_type: object,
+        _exc: object,
+        _traceback: object,
+    ) -> None:
+        self._wrapped.close()
+
+    def write(self, _chunk: bytes) -> int:
+        raise OSError("write failed")
+
+
+def test_write_failure_preserves_old_manifest_and_cleans_temp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = _allocate(tmp_path)
+    directory.publish(FIRST)
+    temp_path = directory.path / f"{MANIFEST_NAME}.tmp"
+    original_open = Path.open
+
+    def fail_write_open(
+        path: Path,
+        mode: str,
+    ) -> BinaryIO | _FailingWriteHandle:
+        wrapped = cast("BinaryIO", original_open(path, mode))
+        if path == temp_path:
+            return _FailingWriteHandle(wrapped)
+        return wrapped
+
+    monkeypatch.setattr(Path, "open", fail_write_open)
+
+    with pytest.raises(ManifestPublishError) as caught:
+        directory.publish(SECOND)
+
+    assert isinstance(caught.value.__cause__, OSError)
+    assert _read(directory) == FIRST
     assert not temp_path.exists()
 
 
