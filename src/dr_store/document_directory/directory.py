@@ -28,8 +28,10 @@ from dr_serialize import (
 
 from dr_store.core.errors import (
     AllocationError,
+    DocumentDirectoryError,
     ManifestPublishError,
     ManifestReadError,
+    SidecarVerificationError,
 )
 from dr_store.core.filesystem import (
     flush_descriptor,
@@ -51,10 +53,11 @@ class DocumentDirectory:
     """One allocated directory holding one Manifest and its Sidecars.
 
     :meth:`allocate` creates the directory and returns the instance naming it.
-    The two read paths, :meth:`read_manifest` and :meth:`verify_sidecar`, are
-    class methods that need no allocation. Every :meth:`publish` is a durable
-    atomic replace and is last-write-wins: the component owns no lifecycle
-    state and never inspects the payload it stores.
+    :meth:`read_manifest` reads a directory named by the caller, while
+    :meth:`verify_sidecar` verifies a direct child of this instance's
+    directory. Every :meth:`publish` is a durable atomic replace and is
+    last-write-wins: the component owns no lifecycle state and never inspects
+    the payload it stores.
     """
 
     def __init__(self, path: Path, manifest_name: str) -> None:
@@ -134,20 +137,29 @@ class DocumentDirectory:
         tail_cap: int | None = None,
     ) -> SidecarWriter:
         """Open a Sidecar for incremental writing beside the Manifest."""
-        validate_safe_name(name, role="sidecar name")
-        if name.casefold() in {
-            self._manifest_name.casefold(),
-            self._temp_path.name.casefold(),
-        }:
-            raise AllocationError(
-                f"sidecar name {name!r} is reserved by the manifest of "
-                f"{str(self._path)!r}"
-            )
+        self._validate_sidecar_name(name, error=AllocationError)
         return SidecarWriter(
             self._path / name,
             head_cap=head_cap,
             tail_cap=tail_cap,
         )
+
+    def _validate_sidecar_name(
+        self,
+        name: str,
+        *,
+        error: type[DocumentDirectoryError],
+    ) -> None:
+        """Require one safe, non-Manifest direct-child name."""
+        validate_safe_name(name, role="sidecar name", error=error)
+        if name.casefold() in {
+            self._manifest_name.casefold(),
+            self._temp_path.name.casefold(),
+        }:
+            raise error(
+                f"sidecar name {name!r} is reserved by the manifest of "
+                f"{str(self._path)!r}"
+            )
 
     @classmethod
     def read_manifest(
@@ -185,18 +197,26 @@ class DocumentDirectory:
             )
         return payload
 
-    @classmethod
     def verify_sidecar(
-        cls,
-        path: str | Path,
+        self,
+        name: str,
         *,
         expected_digest: str,
         expected_head_length: int,
         expected_tail_length: int,
     ) -> None:
-        """Check a Sidecar file at ``path`` against caller expectations."""
+        """Verify one regular direct-child Sidecar without following it.
+
+        ``name`` follows the same safe single-segment and reserved-name rules
+        as :meth:`open_sidecar`. Verification refuses a final-component
+        symlink for both this Document Directory and the named child, requires
+        the child to be a regular file, and streams bounded reads from the
+        exact descriptor whose file type was inspected.
+        """
+        self._validate_sidecar_name(name, error=SidecarVerificationError)
         _verify_sidecar(
-            path,
+            self._path,
+            name,
             expected_digest=expected_digest,
             expected_head_length=expected_head_length,
             expected_tail_length=expected_tail_length,
