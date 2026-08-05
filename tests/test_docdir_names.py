@@ -90,9 +90,7 @@ def test_concurrent_allocation_under_one_root_never_collides(
             manifest_name=MANIFEST_NAME,
         ).path
 
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=ALLOCATORS
-    ) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=ALLOCATORS) as pool:
         futures = [pool.submit(worker) for _ in range(ALLOCATORS)]
         paths = [future.result() for future in futures]
 

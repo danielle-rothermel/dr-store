@@ -231,9 +231,12 @@ def test_kill_after_final_publish_embeds_the_verified_sidecar(
 def test_reader_never_observes_a_partial_manifest_across_republish(
     child: _Child,
 ) -> None:
-    # A concurrent reader in this process observes the manifest between the
-    # child's publishes; the atomic replace means every observation is one
-    # complete document, never a prefix of one.
+    # This process reads the manifest after each of the child's publishes
+    # has announced completion, so every observation falls in a quiescent
+    # window: what it pins is that a committed publish leaves one complete
+    # document behind across repeated replacement, not that a reader racing
+    # a writer sees no prefix. That race is pinned in
+    # tests/test_docdir_manifest.py.
     allocated = child.step("allocate")
     path = Path(str(allocated["path"]))
     child.step("publish-first")

@@ -24,9 +24,9 @@ dialect, and a Content Hash is not an Identity Hash.
 
 The [vocabulary sheet](https://danielle-rothermel.github.io/dr-store/)
 (source: `.defs/vocab.html`) is the authoritative statement of the
-append-only content-addressed object storage contract this repo
-implements: the terms, the guarantees, what is in and out of scope, and
-the mapping from each term to the exported names.
+contracts this repo implements — the append-only content-addressed object
+store and the Document Directory: the terms, the guarantees, what is in
+and out of scope, and the mapping from each term to the exported names.
 
 ## Document Directory
 

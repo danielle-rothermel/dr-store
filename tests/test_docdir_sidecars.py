@@ -269,10 +269,18 @@ def test_sidecar_names_are_validated(tmp_path: Path) -> None:
 
 def test_manifest_reserved_sidecar_names_are_rejected(tmp_path: Path) -> None:
     # One directory holds exactly one Manifest: a Sidecar may occupy
-    # neither its path nor the temp path publish renames onto it.
+    # neither its path nor the temp path publish renames onto it. A
+    # case-insensitive filesystem resolves a case variant onto that same
+    # file, so the case variants are reserved too.
     directory = _allocate(tmp_path)
     directory.publish({"state": "started"})
-    for reserved in (MANIFEST_NAME, f"{MANIFEST_NAME}.tmp"):
+    for reserved in (
+        MANIFEST_NAME,
+        f"{MANIFEST_NAME}.tmp",
+        MANIFEST_NAME.upper(),
+        MANIFEST_NAME.capitalize(),
+        f"{MANIFEST_NAME}.tmp".upper(),
+    ):
         with pytest.raises(AllocationError, match="reserved"):
             directory.open_sidecar(reserved)
     assert (directory.path / MANIFEST_NAME).read_bytes() != b""

@@ -96,20 +96,6 @@ def test_a_missing_full_fsync_command_falls_back_to_fsync(
     assert synced == [descriptor]
 
 
-def test_a_missing_fcntl_module_falls_back_to_fsync(
-    descriptor: int,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # fcntl does not exist off POSIX; the package still imports and the
-    # ladder still reaches the storage medium through os.fsync.
-    monkeypatch.setattr(docdir, "fcntl", None)
-    synced = _record_fsync(monkeypatch)
-
-    docdir._flush_descriptor(descriptor)
-
-    assert synced == [descriptor]
-
-
 def test_flush_directory_flushes_the_directory_descriptor(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

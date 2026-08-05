@@ -21,13 +21,13 @@ cross-process coordination is claimed.
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from dr_serialize import (
     Jsonable,
@@ -42,16 +42,6 @@ from dr_store.errors import (
     ManifestReadError,
     SidecarVerificationError,
 )
-
-if TYPE_CHECKING:
-    from types import ModuleType
-
-try:  # POSIX only; the flush ladder falls back to os.fsync without it.
-    import fcntl as _fcntl
-
-    fcntl: ModuleType | None = _fcntl
-except ImportError:  # pragma: no cover - exercised only off POSIX
-    fcntl = None
 
 _UNSAFE_NAME_CHARACTERS = frozenset({"/", "\\", "\x00"})
 _RESERVED_NAMES = frozenset({"", ".", ".."})
@@ -82,11 +72,10 @@ def _flush_descriptor(descriptor: int) -> None:
 
     macOS ``fsync`` only pushes to the drive's write cache, so the platform
     ladder is ``F_FULLFSYNC`` first and ``os.fsync`` as the fallback -- where
-    ``fcntl`` itself is absent, where the fcntl command is absent, and where
-    the filesystem rejects it.
+    the fcntl command is absent and where the filesystem rejects it.
     """
     full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
-    if fcntl is not None and full_fsync is not None:
+    if full_fsync is not None:
         try:
             fcntl.fcntl(descriptor, full_fsync)
         except OSError:
@@ -111,9 +100,9 @@ class SidecarSummary:
     ``head_length`` and ``tail_length`` are the stored segment lengths in
     bytes, in file order (head segment then tail segment). ``produced`` is
     the total number of bytes offered to the writer and ``dropped`` the
-    number the caps discarded, so ``produced == head_length + tail_length +
-    dropped`` always holds. ``digest`` is the Sidecar Digest: the full
-    64-character lowercase SHA-256 of the stored bytes.
+    number the caps discarded, so under non-negative caps ``produced ==
+    head_length + tail_length + dropped``. ``digest`` is the Sidecar
+    Digest: the full 64-character lowercase SHA-256 of the stored bytes.
 
     dr-store never serializes a summary; callers project it into their own
     models and extract read-back expectations from there.
@@ -157,7 +146,6 @@ class SidecarWriter:
         self._tail = bytearray()
         self._dropped = 0
         self._digest = hashlib.sha256()
-        self._summary: SidecarSummary | None = None
         try:
             self._handle = path.open("wb")
         except OSError as exc:
@@ -223,43 +211,31 @@ class SidecarWriter:
         finally:
             self._handle.close()
         self._digest.update(tail)
-        self._summary = SidecarSummary(
+        return SidecarSummary(
             head_length=self._head_length,
             tail_length=len(tail),
             produced=self._produced,
             dropped=self._dropped,
             digest=self._digest.hexdigest(),
         )
-        self._tail.clear()
-        return self._summary
 
 
 class DocumentDirectory:
     """One allocated directory holding one Manifest and its Sidecars.
 
-    :meth:`allocate` is the only way to obtain an instance, so an instance
-    always names a directory this process created and the one-writer
-    property holds by construction. The two read paths,
-    :meth:`read_manifest` and :meth:`verify_sidecar`, are class methods that
-    need no allocation. Every :meth:`publish` is a durable atomic replace
-    and is last-write-wins: the component owns no lifecycle state and never
+    :meth:`allocate` creates the directory and returns the instance naming
+    it. The two read paths, :meth:`read_manifest` and
+    :meth:`verify_sidecar`, are class methods that need no allocation.
+    Every :meth:`publish` is a durable atomic replace and is
+    last-write-wins: the component owns no lifecycle state and never
     inspects the payload it stores.
     """
 
-    _path: Path
-    _manifest_name: str
-    _manifest_path: Path
-    _temp_path: Path
-
-    @classmethod
-    def _bind(cls, path: Path, manifest_name: str) -> DocumentDirectory:
-        """Wrap a directory :meth:`allocate` has just created."""
-        directory = object.__new__(cls)
-        directory._path = path
-        directory._manifest_name = manifest_name
-        directory._manifest_path = path / manifest_name
-        directory._temp_path = path / f"{manifest_name}{_TEMP_SUFFIX}"
-        return directory
+    def __init__(self, path: Path, manifest_name: str) -> None:
+        self._path = path
+        self._manifest_name = manifest_name
+        self._manifest_path = path / manifest_name
+        self._temp_path = path / f"{manifest_name}{_TEMP_SUFFIX}"
 
     @property
     def path(self) -> Path:
@@ -292,7 +268,7 @@ class DocumentDirectory:
             raise AllocationError(
                 f"could not allocate document directory {str(path)!r}"
             ) from exc
-        return cls._bind(path, manifest_name)
+        return cls(path, manifest_name)
 
     def publish(self, manifest: Jsonable) -> None:
         """Durably replace the Manifest with ``manifest``, atomically.
@@ -341,12 +317,18 @@ class DocumentDirectory:
         ``name`` is a validated safe single path segment, and may name
         neither the Manifest nor the temp file :meth:`publish` renames onto
         it: one directory holds exactly one Manifest, so a Sidecar can never
-        occupy or destroy its path. The caps are the caller's whole
-        contribution to truncation: ``head_cap`` bytes fill first and a ring
-        buffer keeps the last ``tail_cap`` bytes of the remainder.
+        occupy or destroy its path. The reserved comparison is
+        case-insensitive, because a case-insensitive filesystem resolves a
+        case variant onto the very same file. The caps are the caller's
+        whole contribution to truncation: ``head_cap`` bytes fill first and
+        a ring buffer keeps the last ``tail_cap`` bytes of the remainder.
         """
         _validate_safe_name(name, role="sidecar name")
-        if name in (self._manifest_name, self._temp_path.name):
+        reserved = (
+            self._manifest_name.casefold(),
+            self._temp_path.name.casefold(),
+        )
+        if name.casefold() in reserved:
             raise AllocationError(
                 f"sidecar name {name!r} is reserved by the manifest of "
                 f"{str(self._path)!r}"
@@ -385,7 +367,6 @@ class DocumentDirectory:
         except (
             UnicodeDecodeError,
             json.JSONDecodeError,
-            RecursionError,
             StrictJsonError,
         ) as exc:
             raise ManifestReadError(

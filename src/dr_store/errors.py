@@ -149,8 +149,7 @@ class ManifestPublishError(DocumentDirectoryError):
 
     Raised when the payload is not strict finite JSON and when the
     temp-write, flush, atomic replace, or directory flush fails. The
-    originating OS or validation error is preserved as ``__cause__``; a
-    failed publish never replaces the previously published Manifest.
+    originating OS or validation error is preserved as ``__cause__``.
     """
 
 
