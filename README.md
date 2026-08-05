@@ -4,26 +4,36 @@
 [![PyPI](https://img.shields.io/pypi/v/dr-store.svg)](https://pypi.org/project/dr-store/)
 
 [Definitions](https://danielle-rothermel.github.io/dr-store/) ·
-[Changelog](CHANGELOG.md) ·
+[Terms](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/terms.toml) ·
+[Contracts](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/contracts.toml) ·
+[Changelog](https://github.com/danielle-rothermel/dr-store/blob/main/CHANGELOG.md) ·
 [dr-serialize](https://github.com/danielle-rothermel/dr-serialize)
 
 dr-store provides domain-neutral storage primitives for immutable records and
 document artifacts:
 
-- **[Content addressing](src/dr_store/content_addressing.py)**
+- **[Content addressing](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/content_addressing.py)**
   identifies complete records by their declared schemas and SHA-256 hashes of
   their Canonical JSON Text under dr-serialize's frozen profile.
-- **[Object Store](src/dr_store/object_store.py)**
+- **[Object Store](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/object_store.py)**
   provides immutable puts, verified reads, and atomic bindings from opaque
   caller-owned keys to object references.
-- **[Storage backends](src/dr_store/storage_backends)**
+- **[Storage backends](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/storage_backends)**
   supply the Object Store's atomic, append-only operations. `MemoryBackend` is
   process-local; `SqliteBackend` persists data for cross-process use.
-- **[Document Directory](src/dr_store/document_directory)**
+- **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
   publishes one canonical Manifest beside streamed binary Sidecars.
-- **[Core infrastructure](src/dr_store/core)**
+- **[Core infrastructure](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/core)**
   provides typed failures, single-segment name validation, and filesystem flush
   helpers.
+
+## Installation
+
+dr-store requires Python 3.12 or newer.
+
+```console
+python -m pip install dr-store
+```
 
 ## Usage
 
@@ -39,8 +49,12 @@ assert store.get(reference) == {"title": "hello"}
 ```
 
 Use `SqliteBackend(path)` when the stored objects and bindings must persist
-across processes. The [definitions](https://danielle-rothermel.github.io/dr-store/)
-describe the full vocabulary and map it to the public exports.
+across processes. The rendered
+[definitions](https://danielle-rothermel.github.io/dr-store/), authoritative
+[terms](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/terms.toml),
+and binding
+[contracts](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/contracts.toml)
+describe the vocabulary, public-export mappings, and behavioral boundaries.
 
 ## Filesystem and failure semantics
 
@@ -66,6 +80,6 @@ Manifest publication. Sidecar verification is the no-follow path: it refuses
 final-component symlinks for both the Document Directory and named child,
 requires a regular direct child, and reads from the descriptor it inspected.
 
-A failed Sidecar `write` raises `AllocationError` but does not close or poison
-the writer, and accounting may already include the failed chunk. Callers must
-abandon that writer; retrying it or finalizing it has no supported outcome.
+A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
+open and its accounting state advanced. The writer is unusable by contract and
+must be abandoned; retrying it or finalizing it has no supported outcome.

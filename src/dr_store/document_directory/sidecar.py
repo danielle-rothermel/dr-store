@@ -166,7 +166,7 @@ def verify_sidecar(
     if not _OPEN_SUPPORTS_DIR_FD or missing_flags:
         detail = ", ".join(missing_flags) or "os.open(dir_fd=...)"
         raise SidecarVerificationError(
-            "atomic no-follow Sidecar verification is unsupported: "
+            "descriptor-pinned no-follow Sidecar verification is unsupported: "
             f"missing {detail}"
         )
 

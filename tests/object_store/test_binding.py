@@ -14,19 +14,19 @@ REF_A = ObjectReference.for_record("example.record", {"which": "A"})
 REF_B = ObjectReference.for_record("example.record", {"which": "B"})
 
 
-def test_row1_unbound_binds(store: ObjectStore) -> None:
+def test_unbound_key_binds(store: ObjectStore) -> None:
     assert store.resolve(KEY) is None
     assert store.bind(KEY, REF_A) is BindStatus.BOUND
     assert store.resolve(KEY) == REF_A
 
 
-def test_row2_same_reference_is_idempotent(store: ObjectStore) -> None:
+def test_same_reference_replay_is_idempotent(store: ObjectStore) -> None:
     store.bind(KEY, REF_A)
     assert store.bind(KEY, REF_A) is BindStatus.IDEMPOTENT
     assert store.resolve(KEY) == REF_A
 
 
-def test_row3_different_reference_conflicts_and_keeps_winner(
+def test_different_reference_conflicts_and_keeps_winner(
     store: ObjectStore,
 ) -> None:
     store.bind(KEY, REF_A)

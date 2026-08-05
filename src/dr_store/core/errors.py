@@ -56,7 +56,7 @@ class ObjectNotFoundError(StoreError):
 
 
 class ObjectConflictError(StoreError):
-    """Preserves the occupied key without exposing its stored content."""
+    """Preserves the occupied object row without exposing stored content."""
 
     def __init__(self, *, schema: str, content_hash: str) -> None:
         self.schema = schema

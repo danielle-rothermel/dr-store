@@ -46,10 +46,10 @@ class ObjectStore:
         schema: str,
         record: Jsonable,
     ) -> tuple[ObjectReference, PutStatus]:
-        """Store a record without overwriting its typed content-hash key.
+        """Store a record without overwriting its object row.
 
         Identical canonical text is idempotent; different text at the same
-        key raises :class:`ObjectConflictError`.
+        schema and content-hash pair raises :class:`ObjectConflictError`.
         """
         validated = validate_strict_json(record)
         canonical = canonical_json(validated)
@@ -101,7 +101,7 @@ class ObjectStore:
                 actual="<stored content is outside the canonical profile>",
                 schema=reference.schema,
             ) from exc
-        # Canonical bytes remain invariant after decoding.
+        # Stored text must equal its canonical re-encoding.
         if verified_canonical != canonical:
             raise ContentHashMismatchError(
                 expected=reference.content_hash,

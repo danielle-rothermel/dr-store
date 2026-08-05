@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+hook_directory="$(
+    cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+    pwd -P
+)"
+repository_root="$(
+    cd -- "${hook_directory}/../.."
+    pwd -P
+)"
+
+if ! git -C "${repository_root}" diff --quiet --; then
+    printf '%s\n' \
+        'pre-check validates the index only when it matches the worktree; resolve unstaged tracked changes first.' >&2
+    exit 1
+fi
+
+untracked_files="$(
+    git -C "${repository_root}" ls-files --others --exclude-standard
+)"
+if [[ -n "${untracked_files}" ]]; then
+    printf '%s\n' \
+        'pre-check validates the index only when it matches the worktree; resolve untracked nonignored files first.' >&2
+    exit 1
+fi
+
+exec "${repository_root}/scripts/pre-check.sh"

@@ -40,7 +40,7 @@ wheels = [
 
 [[package]]
 name = "dr-serialize"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "../dr-serialize" }
 dependencies = [
     { name = "pydantic" },
@@ -59,7 +59,7 @@ dev = [
 
 [[package]]
 name = "dr-store"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "dr-serialize" },

@@ -223,7 +223,7 @@ def test_same_content_under_different_schema_both_store(
 def test_different_content_at_same_hash_conflicts_without_overwrite(
     controlled_backend: ControlledBackend,
 ) -> None:
-    # Poison the hash key with different bytes to simulate a collision.
+    # Populate the schema and content-hash pair with collision bytes.
     ref = ObjectReference.for_record(SCHEMA, RECORD)
     controlled_backend.set_object(
         schema=ref.schema,

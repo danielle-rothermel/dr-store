@@ -38,9 +38,10 @@ _TEMP_SUFFIX = ".tmp"
 
 
 class DocumentDirectory:
-    """One atomic last-write-wins Manifest plus streamed Sidecars.
+    """One last-write-wins Manifest published by same-directory replacement.
 
-    The caller coordinates writer exclusivity; this class does not enforce it.
+    Sidecars are streamed beside it. The caller coordinates writer exclusivity;
+    this class does not enforce it.
     """
 
     def __init__(self, path: Path, manifest_name: str) -> None:
@@ -81,7 +82,7 @@ class DocumentDirectory:
         return cls(path, manifest_name)
 
     def publish(self, manifest: Jsonable) -> None:
-        """Atomically replace the Manifest with canonical JSON.
+        """Replace the Manifest in the same directory with canonical JSON.
 
         Atomic visibility depends on filesystem same-directory replace
         semantics.

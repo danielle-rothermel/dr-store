@@ -6,22 +6,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Project metadata targets 0.1.2. Publication remains gated on replacing the
+temporary editable dr-serialize source with the required registry release.
+
 ### Changed
 
 - `DocumentDirectory.verify_sidecar` accepts a lexically valid direct-child
-  Sidecar name
-  on a directory instance. Verification opens the Document Directory as its
-  authority, refuses final-component symlinks for both that directory and its
-  named child, requires a regular child file, and streams bounded reads from
-  the exact descriptor it inspected. Platforms without directory-relative
-  no-follow opens fail closed.
-- Reorganized the implementation around the top-level functional areas
+  Sidecar name on a directory instance instead of an arbitrary path.
+  Verification opens the Document Directory as its authority, refuses
+  final-component symlinks for both that directory and its named child,
+  requires a regular child file, and streams bounded reads from the exact
+  descriptor it inspected. Platforms without directory-relative no-follow
+  opens fail closed.
+- Enforced dr-serialize's Canonical JSON Text profile bounds before Object
+  Store writes and Manifest publication. Caller records outside the profile
+  fail before reaching a backend; stored objects outside the profile raise
+  `ContentHashMismatchError`, while Manifest publication and read-back raise
+  `ManifestPublishError` and `ManifestReadError`, respectively.
+- Reorganized package source and tests around the top-level functional areas
   `content_addressing`, `object_store`, `storage_backends`, and
   `document_directory`, with supporting errors and filesystem mechanics under
-  `core`. The flat `dr_store` exports and their behavior are unchanged.
-  Internal module paths are a hard cutover with no compatibility aliases;
-  existing pickle payloads tied to the previous defining modules are not
-  compatible with this layout.
+  `core`. The root `dr_store` export names remain unchanged. Internal module
+  paths are a hard cutover with no compatibility aliases; existing pickle
+  payloads tied to the previous defining modules are incompatible with this
+  layout.
+- Reworked the README around the package's functional capabilities, filesystem
+  semantics, and failure boundaries, and migrated Definitions from a
+  hand-authored page to authoritative TOML terms and contracts rendered in the
+  browser.
+- Replaced scheduler-dependent tests with direct backend contracts, explicit
+  synchronization gates, scoped process-death cases, and exact isolated-wheel
+  layout verification.
+- Consolidated local and CI validation behind one canonical pre-check, added a
+  repository-local pre-commit hook that delegates to it, retained Depot-backed
+  CI runners, and prepared tag-gated release checks for 0.1.2 without treating
+  the temporary editable dependency as registry-ready.
+
+### Fixed
+
+- Corrected the README, Definitions page, and 0.1.0 and 0.1.1 release notes to
+  distinguish persistence, same-directory replacement visibility, and
+  descriptor flushing from power-loss durability, and to document
+  final-component symlink and failed Sidecar-writer limitations.
 
 ## [0.1.1] - 2026-08-05
 
