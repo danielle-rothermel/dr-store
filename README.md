@@ -9,16 +9,185 @@
 **dr-store provides domain-neutral storage primitives for immutable records and durable document artifacts.**
 It is organized into these functional areas:
 
-- **Object references and content hashing** identify complete records by their
-  declared schemas and the SHA-256 digests of their canonical JSON
-  representations.
-- **Object storage** provides immutable puts, verified reads, and atomic
-  caller-owned key bindings with idempotent replay and typed conflicts.
-- **Storage backends** supply interchangeable atomic persistence operations,
-  with in-memory and SQLite implementations included.
-- **Document directories** manage atomically published canonical-JSON manifests
-  alongside streamed binary sidecars with bounded retention and read-back
-  verification.
-- **Typed failures** distinguish invalid references, missing or corrupted
-  content, conflicting writes, publication failures, and sidecar verification
-  failures.
+- **[Content addressing](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/content_addressing.py)**
+  identifies complete records by their declared schemas and canonical-content
+  hashes.
+- **[Object Store](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/object_store.py)**
+  provides immutable puts, verified reads, and atomic caller-owned key
+  bindings.
+- **[Storage backends](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/storage_backends)**
+  provide interchangeable atomic persistence operations.
+- **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
+  manages canonical manifests and streamed binary sidecars.
+- **[Infrastructure](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/core)**
+  supports the functional areas:
+    - [Typed failures](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/core/errors.py)
+      distinguish storage, publication, and verification failures.
+    - [Filesystem support](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/core/filesystem.py)
+      owns safe names and durable flush operations.
+
+## Content Addressing
+
+A complete record is addressed by its declared schema and the SHA-256 digest
+of its canonical JSON. References validate their own shape and can verify that
+a record still resolves to the same content.
+
+```python
+CONTENT_HASH_LENGTH = 64
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectReference:
+    schema: str
+    content_hash: str
+
+    @classmethod
+    def for_record(cls, schema: str, record: Jsonable) -> ObjectReference: ...
+
+    def verify_record(self, record: Jsonable) -> None: ...
+
+
+def compute_content_hash(record: Jsonable) -> str: ...
+def is_content_hash(value: str) -> bool: ...
+```
+
+## Object Store
+
+The Object Store owns immutable record storage, verified reads, and atomic
+bindings from opaque caller-owned keys to object references. Repeating the
+same write is idempotent; conflicting writes preserve the existing value.
+
+```python
+class PutStatus(Enum):
+    STORED = "stored"
+    IDEMPOTENT = "idempotent"
+
+
+class BindStatus(Enum):
+    BOUND = "bound"
+    IDEMPOTENT = "idempotent"
+
+
+class ObjectStore:
+    def __init__(self, backend: Backend) -> None: ...
+
+    def put(
+        self,
+        schema: str,
+        record: Jsonable,
+    ) -> tuple[ObjectReference, PutStatus]: ...
+
+    def get(self, reference: ObjectReference) -> Jsonable: ...
+    def bind(self, key: str, reference: ObjectReference) -> BindStatus: ...
+    def resolve(self, key: str) -> ObjectReference | None: ...
+```
+
+## Storage Backends
+
+The backend protocol is the atomic persistence boundary beneath the Object
+Store. `MemoryBackend` provides process-local storage, while `SqliteBackend`
+provides durable cross-process storage through the same contract.
+
+```python
+@dataclass(frozen=True, slots=True)
+class PutOutcome:
+    inserted: bool
+    stored_schema: str
+    stored_canonical: str
+
+
+@dataclass(frozen=True, slots=True)
+class BindOutcome:
+    bound: bool
+    existing_schema: str
+    existing_content_hash: str
+
+
+class Backend(Protocol):
+    def put_object(
+        self,
+        *,
+        schema: str,
+        content_hash: str,
+        canonical: str,
+    ) -> PutOutcome: ...
+
+    def get_object(
+        self,
+        *,
+        schema: str,
+        content_hash: str,
+    ) -> tuple[str, str] | None: ...
+
+    def bind(
+        self,
+        *,
+        key: str,
+        schema: str,
+        content_hash: str,
+    ) -> BindOutcome: ...
+
+    def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
+```
+
+## Document Directory
+
+A Document Directory holds one atomically published canonical-JSON manifest
+and zero or more streamed binary sidecars. The manifest remains the caller's
+source of truth; the directory owns publication, retention, and verification
+mechanics without interpreting the payload.
+
+```python
+class DocumentDirectory:
+    @classmethod
+    def allocate(
+        cls,
+        root: str | Path,
+        *,
+        prefix: str,
+        manifest_name: str,
+    ) -> DocumentDirectory: ...
+
+    def publish(self, manifest: Jsonable) -> None: ...
+
+    def open_sidecar(
+        self,
+        name: str,
+        *,
+        head_cap: int | None = None,
+        tail_cap: int | None = None,
+    ) -> SidecarWriter: ...
+
+    @classmethod
+    def read_manifest(
+        cls,
+        path: str | Path,
+        *,
+        manifest_name: str,
+    ) -> Jsonable: ...
+
+    @classmethod
+    def verify_sidecar(
+        cls,
+        path: str | Path,
+        *,
+        expected_digest: str,
+        expected_head_length: int,
+        expected_tail_length: int,
+    ) -> None: ...
+```
+
+```python
+@dataclass(frozen=True, slots=True)
+class SidecarSummary:
+    head_length: int
+    tail_length: int
+    produced: int
+    dropped: int
+    digest: str
+
+
+class SidecarWriter:
+    def write(self, chunk: bytes) -> None: ...
+    def finalize(self) -> SidecarSummary: ...
+```
