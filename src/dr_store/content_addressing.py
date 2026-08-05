@@ -18,7 +18,10 @@ from dr_serialize import (
     validate_strict_json,
 )
 
-from dr_store.errors import ContentHashMismatchError, ReferenceValidationError
+from dr_store.core.errors import (
+    ContentHashMismatchError,
+    ReferenceValidationError,
+)
 
 CONTENT_HASH_LENGTH = 64
 _HEX_DIGITS = frozenset("0123456789abcdef")

@@ -1,4 +1,4 @@
-"""Immutable put and verified get, against every backend."""
+"""Object Store immutable put and verified get, against every backend."""
 
 from __future__ import annotations
 

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from dr_store import docdir
+from dr_store.core import filesystem
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -50,7 +50,7 @@ def descriptor(tmp_path: Path) -> Iterator[int]:
 
 def _record_fsync(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     synced: list[int] = []
-    monkeypatch.setattr(docdir.os, "fsync", synced.append)
+    monkeypatch.setattr(filesystem.os, "fsync", synced.append)
     return synced
 
 
@@ -59,10 +59,10 @@ def test_full_fsync_is_used_when_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = _RecordingFcntl(available=True)
-    monkeypatch.setattr(docdir, "fcntl", fake)
+    monkeypatch.setattr(filesystem, "fcntl", fake)
     synced = _record_fsync(monkeypatch)
 
-    docdir._flush_descriptor(descriptor)
+    filesystem.flush_descriptor(descriptor)
 
     assert fake.commands == [(descriptor, FULL_FSYNC)]
     assert synced == []
@@ -73,10 +73,10 @@ def test_a_refused_full_fsync_falls_back_to_fsync(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = _RecordingFcntl(available=True, refuses=True)
-    monkeypatch.setattr(docdir, "fcntl", fake)
+    monkeypatch.setattr(filesystem, "fcntl", fake)
     synced = _record_fsync(monkeypatch)
 
-    docdir._flush_descriptor(descriptor)
+    filesystem.flush_descriptor(descriptor)
 
     assert fake.commands == [(descriptor, FULL_FSYNC)]
     assert synced == [descriptor]
@@ -87,10 +87,10 @@ def test_a_missing_full_fsync_command_falls_back_to_fsync(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = _RecordingFcntl(available=False)
-    monkeypatch.setattr(docdir, "fcntl", fake)
+    monkeypatch.setattr(filesystem, "fcntl", fake)
     synced = _record_fsync(monkeypatch)
 
-    docdir._flush_descriptor(descriptor)
+    filesystem.flush_descriptor(descriptor)
 
     assert fake.commands == []
     assert synced == [descriptor]
@@ -102,12 +102,12 @@ def test_flush_directory_flushes_the_directory_descriptor(
 ) -> None:
     seen: list[os.stat_result] = []
     monkeypatch.setattr(
-        docdir,
-        "_flush_descriptor",
+        filesystem,
+        "flush_descriptor",
         lambda descriptor: seen.append(os.fstat(descriptor)),
     )
 
-    docdir._flush_directory(tmp_path)
+    filesystem.flush_directory(tmp_path)
 
     assert len(seen) == 1
     assert seen[0].st_ino == tmp_path.stat().st_ino

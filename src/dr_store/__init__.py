@@ -29,19 +29,13 @@ or campaign vocabulary.
 
 from __future__ import annotations
 
-from dr_store.backends import (
-    Backend,
-    BindOutcome,
-    MemoryBackend,
-    PutOutcome,
-    SqliteBackend,
+from dr_store.content_addressing import (
+    CONTENT_HASH_LENGTH,
+    ObjectReference,
+    compute_content_hash,
+    is_content_hash,
 )
-from dr_store.docdir import (
-    DocumentDirectory,
-    SidecarSummary,
-    SidecarWriter,
-)
-from dr_store.errors import (
+from dr_store.core.errors import (
     AllocationError,
     BindingConflictError,
     ContentHashMismatchError,
@@ -55,16 +49,22 @@ from dr_store.errors import (
     SidecarVerificationError,
     StoreError,
 )
-from dr_store.references import (
-    CONTENT_HASH_LENGTH,
-    ObjectReference,
-    compute_content_hash,
-    is_content_hash,
+from dr_store.document_directory import (
+    DocumentDirectory,
+    SidecarSummary,
+    SidecarWriter,
 )
-from dr_store.store import (
+from dr_store.object_store import (
     BindStatus,
     ObjectStore,
     PutStatus,
+)
+from dr_store.storage_backends import (
+    Backend,
+    BindOutcome,
+    MemoryBackend,
+    PutOutcome,
+    SqliteBackend,
 )
 
 __all__ = [

@@ -1,23 +1,49 @@
 """Backend-neutral storage contract for the Object Store.
 
 A backend provides two atomic compare-and-set primitives -- one for the
-append-only object table, one for the append-only binding table -- plus
-point reads. All contract semantics (hash verification, idempotent replay,
-conflict typing) live in :mod:`dr_store.store`; a backend only guarantees
+append-only object table, one for the append-only binding table -- plus point
+reads. All contract semantics (hash verification, idempotent replay, conflict
+typing) live in :mod:`dr_store.object_store`; a backend only guarantees
 atomicity and durability of the two primitives.
 
 The record value crossing this boundary is the *canonical JSON text* of the
 complete persisted record: dr-store hashes and canonicalizes exactly once,
-above the backend, so every backend stores identical bytes and no backend
-can introduce a second canonicalization dialect.
+above the backend, so every backend stores identical bytes and no backend can
+introduce a second canonicalization dialect.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from dataclasses import dataclass
+from typing import Protocol
 
-if TYPE_CHECKING:
-    from dr_store.backends.types import BindOutcome, PutOutcome
+
+@dataclass(frozen=True, slots=True)
+class PutOutcome:
+    """Outcome of :meth:`Backend.put_object`.
+
+    ``inserted`` is ``True`` when this call created the row. When ``False``,
+    the key was already present and ``stored_schema``/``stored_canonical``
+    carry the untouched existing row for the caller to compare.
+    """
+
+    inserted: bool
+    stored_schema: str
+    stored_canonical: str
+
+
+@dataclass(frozen=True, slots=True)
+class BindOutcome:
+    """Outcome of :meth:`Backend.bind`.
+
+    ``bound`` is ``True`` when this call created the binding. When ``False``,
+    the key was already bound and ``existing_schema``/``existing_content_hash``
+    carry the untouched durable winner.
+    """
+
+    bound: bool
+    existing_schema: str
+    existing_content_hash: str
 
 
 class Backend(Protocol):

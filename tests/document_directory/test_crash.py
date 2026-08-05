@@ -1,4 +1,4 @@
-"""Crash consistency: SIGKILL at each commit point, no partial Manifest.
+"""Document Directory crash consistency at every commit point.
 
 A child process is driven step by step over a pipe. It performs one commit
 point per command and announces completion with an explicit event line; the

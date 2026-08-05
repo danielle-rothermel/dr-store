@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from dr_store.references import ObjectReference
+    from dr_store.content_addressing import ObjectReference
 
 
 class StoreError(Exception):

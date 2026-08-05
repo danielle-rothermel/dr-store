@@ -1,4 +1,4 @@
-"""Allocation, atomic durable publish, and verified Manifest read.
+"""Document Directory allocation, publish, and Manifest read-back.
 
 Every publish is one durable atomic replace: a reader sees either no
 Manifest or one complete previously-published Manifest, which a reader
@@ -22,8 +22,8 @@ from dr_store import (
     DocumentDirectory,
     ManifestPublishError,
     ManifestReadError,
-    docdir,
 )
+from dr_store.document_directory import directory as directory_module
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -84,9 +84,9 @@ def test_a_name_collision_is_surfaced_and_never_reused(
     # mkdir(exist_ok=False) makes that a typed error, never a silent reuse
     # and never a retry loop.
     fixed = uuid.UUID(int=0)
-    monkeypatch.setattr(docdir.uuid, "uuid4", lambda: fixed)
+    monkeypatch.setattr(directory_module.uuid, "uuid4", lambda: fixed)
     monkeypatch.setattr(
-        docdir.dt,
+        directory_module.dt,
         "datetime",
         _FrozenDatetime,
     )

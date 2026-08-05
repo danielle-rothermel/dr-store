@@ -1,4 +1,4 @@
-"""Concurrent binds of one unbound key produce exactly one winner.
+"""Storage backend concurrency produces exactly one binding winner.
 
 Every loser must observe either idempotent same-reference success or an
 explicit different-reference conflict -- never a second successful bind and

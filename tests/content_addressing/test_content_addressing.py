@@ -11,12 +11,12 @@ from dr_serialize import canonical_json
 
 from dr_store import (
     CONTENT_HASH_LENGTH,
+    ContentHashMismatchError,
     ObjectReference,
     ReferenceValidationError,
     compute_content_hash,
     is_content_hash,
 )
-from dr_store.errors import ContentHashMismatchError
 
 if TYPE_CHECKING:
     from dr_serialize import Jsonable

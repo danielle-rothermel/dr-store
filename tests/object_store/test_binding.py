@@ -1,4 +1,4 @@
-"""The exact four-row atomic key-to-reference binding table.
+"""Object Store: the exact four-row key-to-reference binding table.
 
 Rows mirror the design table one-to-one:
 

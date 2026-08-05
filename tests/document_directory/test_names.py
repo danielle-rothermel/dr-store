@@ -1,4 +1,4 @@
-"""Safe-name validation and collision-free concurrent allocation.
+"""Document Directory names and collision-free concurrent allocation.
 
 Prefixes, Manifest names, and Sidecar names are single path segments: a name
 carrying a separator, a NUL byte, or a reserved ``.``/``..`` can never
