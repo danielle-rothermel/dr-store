@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
-<title>dr-store · The storage contracts this repo owns</title>
+<title>dr-store · The object storage contract this repo owns</title>
 <style>
   /* Page-local tokens. Purple (--anchor) = main-point accents (.key/.must);
      blue (--accent) = term links (.term-ref), matching doc.css link hue. */
@@ -21,11 +21,11 @@
 <body>
 <main class="wide">
 
-<h1>The dr-store storage contracts</h1>
+<h1>The dr-store object storage contract</h1>
 <p class="dek">A reference for the terms and guarantees that bind dr-store.</p>
 <div class="byline">dr-store · 2026-07-24</div>
 
-<p>This is the vocabulary of the append-only content-addressed object store dr-store implements: the <span class="key">terms</span>, the <span class="key">guarantees</span> that bind this repo, what is in and out of <span class="key">scope</span>, and the <span class="key">mapping</span> from each term to the names actually exported by <a href="https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/__init__.py"><code>dr_store</code></a>. The <a href="#document-directory">Document Directory</a> section states the second, disjoint contract: one durable directory holding an atomic manifest plus streamed sidecars.</p>
+<p>This is the vocabulary of the append-only content-addressed object store dr-store implements: the <span class="key">terms</span>, the <span class="key">guarantees</span> that bind this repo, what is in and out of <span class="key">scope</span>, and the <span class="key">mapping</span> from each term to the names actually exported by <a href="https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/__init__.py"><code>dr_store</code></a>.</p>
 
 <div class="section-head" id="terms"><h2>Terms</h2></div>
 
@@ -184,7 +184,7 @@
   <li><span class="must">Publishes</span> through <a class="term-ref" href="#term-atomic-publish">atomic publish</a> every time, flushing file and directory with <code>F_FULLFSYNC</code> where available and <code>fsync</code> as the fallback.</li>
   <li><span class="must">Computes</span> the <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a> incrementally and finalizes it when the <a class="term-ref" href="#term-sidecar">sidecar</a> is flushed, so a <a class="term-ref" href="#term-manifest">manifest</a> embedding a digest structurally cannot precede that flush.</li>
   <li><span class="must">Reports</span> <code>produced</code> and <code>dropped</code> byte counts alongside the stored segment lengths, so a <a class="term-ref" href="#term-truncation">truncated</a> sidecar states exactly what it discarded.</li>
-  <li><span class="must">Verifies</span> a read-back <a class="term-ref" href="#term-manifest">manifest</a> as strict <span class="key">and canonical</span> JSON, and a <a class="term-ref" href="#term-sidecar">sidecar</a> against caller-supplied segment lengths and <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>; each fault is a typed error preserving the original OS or decoding exception.</li>
+  <li><span class="must">Verifies</span> a read-back <a class="term-ref" href="#term-manifest">manifest</a> as strict <span class="key">and canonical</span> JSON, and a <a class="term-ref" href="#term-sidecar">sidecar</a> against a caller-supplied total length and <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>; each fault is a typed error preserving the original OS or decoding exception.</li>
   <li>The component knows <span class="key">no lifecycle, no manifest schema, no retention policy, and no processes</span>: state machines, payload fields, cap computation, and output draining all belong to the caller.</li>
 </ul>
 
@@ -215,7 +215,7 @@
     <tr>
       <td><a class="term-ref" href="#term-sidecar-digest">Sidecar Digest</a></td>
       <td><code>SidecarVerificationError</code></td>
-      <td>The <code>DocumentDirectory.verify_sidecar</code> class method checks stored bytes against a caller-supplied digest and segment lengths; a length or digest disagreement, or an unreadable file, raises <code>SidecarVerificationError</code>.</td>
+      <td>The <code>DocumentDirectory.verify_sidecar</code> class method checks stored bytes against a caller-supplied digest and total segment length; a length or digest disagreement, or an unreadable file, raises <code>SidecarVerificationError</code>.</td>
     </tr>
     <tr>
       <td>Document Directory errors</td>
@@ -227,7 +227,7 @@
 </div>
 
 <div class="colophon">
-  <p><strong>Scope.</strong> This sheet is the authoritative statement of the two storage contracts dr-store implements: the append-only content-addressed object store and the Document Directory. Exported names match <code>src/dr_store/__init__.py</code>.</p>
+  <p><strong>Scope.</strong> This sheet is the authoritative statement of the append-only content-addressed object storage contract dr-store implements. Exported names match <code>src/dr_store/__init__.py</code>.</p>
 </div>
 
 </main>

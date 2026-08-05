@@ -105,6 +105,11 @@ class _Child:
         event: dict[str, object] = json.loads(line)
         return event
 
+    @property
+    def is_running(self) -> bool:
+        """Whether the child has not yet terminated."""
+        return self._process.poll() is None
+
     def kill_now(self) -> None:
         """Deliver SIGKILL and wait for the terminal outcome."""
         self._process.send_signal(signal.SIGKILL)
@@ -120,7 +125,7 @@ class _Child:
 def child(tmp_path: Path) -> Iterator[_Child]:
     running = _Child(tmp_path)
     yield running
-    if running._process.poll() is None:
+    if running.is_running:
         running.kill_now()
 
 

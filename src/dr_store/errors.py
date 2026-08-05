@@ -133,12 +133,14 @@ class DocumentDirectoryError(Exception):
 
 
 class AllocationError(DocumentDirectoryError):
-    """A Document Directory could not be allocated under its root.
+    """A Document Directory or one of its Sidecars could not be created.
 
-    Raised when a name component is not a safe single segment, when the
-    generated directory already exists (a collision is surfaced, never
-    retried), and when the underlying ``mkdir`` fails. The originating OS
-    error is preserved as ``__cause__``.
+    Raised when a name component is not a safe single segment, when a
+    Sidecar name is one the Manifest reserves, when the generated directory
+    already exists (a collision is surfaced, never retried), when the
+    underlying ``mkdir`` fails, and when opening, writing, or durably
+    flushing a Sidecar file fails. The originating OS error is preserved as
+    ``__cause__``.
     """
 
 

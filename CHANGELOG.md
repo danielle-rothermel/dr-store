@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `exist_ok=False` so a collision is typed rather than retried), publishes
   one atomically-replaced canonical-JSON Manifest, and opens streamed
   binary Sidecars beside it. Prefixes, Manifest names, and Sidecar names
-  are validated safe single path segments.
+  are validated safe single path segments, and a Sidecar may name neither
+  the Manifest nor the temp file `publish()` renames onto it.
 - Atomic durable publish: every `publish()` writes the complete canonical
   JSON to a temp file in the same directory, flushes it with `F_FULLFSYNC`
   where available and `os.fsync` otherwise, atomically renames it onto the
@@ -28,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   SHA-256 of the stored bytes, which is not a Content Hash.
 - Verified read paths `DocumentDirectory.read_manifest` (strict *and*
   canonical JSON) and `DocumentDirectory.verify_sidecar` (caller-supplied
-  digest and segment lengths), keeping the component schema-blind.
+  digest and total segment length), keeping the component schema-blind.
 - Typed error taxonomy rooted at `DocumentDirectoryError`, independent of
   `StoreError`: `AllocationError`, `ManifestPublishError`,
   `ManifestReadError`, and `SidecarVerificationError`, each preserving the

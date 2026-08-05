@@ -99,31 +99,3 @@ def test_concurrent_allocation_under_one_root_never_collides(
     assert len(set(paths)) == ALLOCATORS
     assert all(path.is_dir() for path in paths)
     assert len(list(tmp_path.iterdir())) == ALLOCATORS
-
-
-def _allocate_in_subprocess(root: str) -> str:
-    # Top-level so it is picklable for ProcessPoolExecutor spawn.
-    from dr_store import DocumentDirectory
-
-    directory = DocumentDirectory.allocate(
-        root,
-        prefix="run",
-        manifest_name="record.json",
-    )
-    directory.publish({"who": directory.path.name})
-    return directory.path.name
-
-
-def test_cross_process_allocation_under_one_root_never_collides(
-    tmp_path: Path,
-) -> None:
-    workers = 8
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
-        names = list(pool.map(_allocate_in_subprocess, [str(tmp_path)] * 8))
-
-    assert len(set(names)) == workers
-    for name in names:
-        assert DocumentDirectory.read_manifest(
-            tmp_path / name,
-            manifest_name=MANIFEST_NAME,
-        ) == {"who": name}

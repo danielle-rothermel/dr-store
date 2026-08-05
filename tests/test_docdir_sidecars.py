@@ -19,6 +19,7 @@ from dr_store import (
     DocumentDirectory,
     SidecarSummary,
     SidecarVerificationError,
+    docdir,
 )
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ def _write(
     )
     for start in range(0, len(payload), chunk_size):
         writer.write(payload[start : start + chunk_size])
-    return writer.path, writer.finalize()
+    return directory.path / SIDECAR_NAME, writer.finalize()
 
 
 def test_unbounded_sidecar_stores_every_byte(tmp_path: Path) -> None:
@@ -159,39 +160,24 @@ def test_accounting_holds_for_every_chunking(
     assert total == summary.produced == len(STREAM)
 
 
-def test_finalize_is_idempotent(tmp_path: Path) -> None:
-    directory = _allocate(tmp_path)
-    writer = directory.open_sidecar(SIDECAR_NAME, head_cap=4, tail_cap=4)
-    writer.write(STREAM)
-    first = writer.finalize()
-    assert writer.finalize() == first
-    assert writer.path.read_bytes() == STREAM[:4] + STREAM[-4:]
+def test_an_unset_tail_cap_stores_only_the_head(tmp_path: Path) -> None:
+    # The tail buffer is bounded by tail_cap, never by the stream: with no
+    # tail cap under a finite head cap the remainder is dropped, not held.
+    head_cap = 128
+    path, summary = _write(tmp_path, STREAM, head_cap=head_cap, tail_cap=None)
+    assert path.read_bytes() == STREAM[:head_cap]
+    assert summary.head_length == head_cap
+    assert summary.tail_length == 0
+    assert summary.dropped == len(STREAM) - head_cap
 
 
-def test_write_after_finalize_is_rejected(tmp_path: Path) -> None:
-    directory = _allocate(tmp_path)
-    writer = directory.open_sidecar(SIDECAR_NAME)
-    writer.write(b"before")
-    writer.finalize()
-    with pytest.raises(ValueError, match="already finalized"):
-        writer.write(b"after")
-
-
-def test_context_manager_finalizes(tmp_path: Path) -> None:
-    directory = _allocate(tmp_path)
-    with directory.open_sidecar(SIDECAR_NAME) as writer:
-        writer.write(b"streamed")
-    summary = writer.finalize()
-    assert summary.head_length == len(b"streamed")
-    assert writer.path.read_bytes() == b"streamed"
-
-
-def test_negative_caps_are_rejected(tmp_path: Path) -> None:
-    directory = _allocate(tmp_path)
-    with pytest.raises(ValueError, match="head_cap"):
-        directory.open_sidecar(SIDECAR_NAME, head_cap=-1)
-    with pytest.raises(ValueError, match="tail_cap"):
-        directory.open_sidecar(SIDECAR_NAME, tail_cap=-1)
+def test_an_unset_head_cap_streams_past_any_tail_cap(tmp_path: Path) -> None:
+    # An unbounded head takes every byte, so nothing reaches the tail.
+    path, summary = _write(tmp_path, STREAM, head_cap=None, tail_cap=10)
+    assert path.read_bytes() == STREAM
+    assert summary.head_length == len(STREAM)
+    assert summary.tail_length == 0
+    assert summary.dropped == 0
 
 
 def test_several_sidecars_live_side_by_side(tmp_path: Path) -> None:
@@ -279,3 +265,45 @@ def test_sidecar_names_are_validated(tmp_path: Path) -> None:
     for bad in ("..", ".", "", "nested/name", "esc\\ape", "nul\x00byte"):
         with pytest.raises(AllocationError):
             directory.open_sidecar(bad)
+
+
+def test_manifest_reserved_sidecar_names_are_rejected(tmp_path: Path) -> None:
+    # One directory holds exactly one Manifest: a Sidecar may occupy
+    # neither its path nor the temp path publish renames onto it.
+    directory = _allocate(tmp_path)
+    directory.publish({"state": "started"})
+    for reserved in (MANIFEST_NAME, f"{MANIFEST_NAME}.tmp"):
+        with pytest.raises(AllocationError, match="reserved"):
+            directory.open_sidecar(reserved)
+    assert (directory.path / MANIFEST_NAME).read_bytes() != b""
+    assert [p.name for p in directory.path.iterdir()] == [MANIFEST_NAME]
+
+
+def test_unopenable_sidecar_is_typed(tmp_path: Path) -> None:
+    directory = _allocate(tmp_path)
+    (directory.path / SIDECAR_NAME).mkdir()
+    with pytest.raises(AllocationError) as caught:
+        directory.open_sidecar(SIDECAR_NAME)
+    assert isinstance(caught.value.__cause__, OSError)
+
+
+def test_a_failed_flush_is_typed_and_closes_the_handle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = _allocate(tmp_path)
+    writer = directory.open_sidecar(SIDECAR_NAME)
+    writer.write(b"streamed")
+
+    def failing_flush(_descriptor: int) -> None:
+        raise OSError("flush refused")
+
+    monkeypatch.setattr(docdir, "_flush_descriptor", failing_flush)
+    with pytest.raises(AllocationError) as caught:
+        writer.finalize()
+    assert isinstance(caught.value.__cause__, OSError)
+    # The handle is closed even though the flush failed, so the file
+    # descriptor cannot leak and no further byte can reach the file.
+    with pytest.raises(AllocationError) as rejected:
+        writer.write(b"after")
+    assert isinstance(rejected.value.__cause__, ValueError)

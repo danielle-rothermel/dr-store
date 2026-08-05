@@ -21,7 +21,6 @@ cross-process coordination is claimed.
 from __future__ import annotations
 
 import datetime as dt
-import fcntl
 import hashlib
 import json
 import os
@@ -45,7 +44,14 @@ from dr_store.errors import (
 )
 
 if TYPE_CHECKING:
-    from types import TracebackType
+    from types import ModuleType
+
+try:  # POSIX only; the flush ladder falls back to os.fsync without it.
+    import fcntl as _fcntl
+
+    fcntl: ModuleType | None = _fcntl
+except ImportError:  # pragma: no cover - exercised only off POSIX
+    fcntl = None
 
 _UNSAFE_NAME_CHARACTERS = frozenset({"/", "\\", "\x00"})
 _RESERVED_NAMES = frozenset({"", ".", ".."})
@@ -61,8 +67,6 @@ def _validate_safe_name(name: str, *, role: str) -> str:
     contains no path separator or NUL byte, so it can only ever name a
     child of the directory it is joined to.
     """
-    if not isinstance(name, str):
-        raise AllocationError(f"{role} must be a string, got {name!r}")
     if name in _RESERVED_NAMES:
         raise AllocationError(f"{role} must be a safe name, got {name!r}")
     if any(char in _UNSAFE_NAME_CHARACTERS for char in name):
@@ -77,11 +81,12 @@ def _flush_descriptor(descriptor: int) -> None:
     """Force written bytes to the storage medium, not just the OS cache.
 
     macOS ``fsync`` only pushes to the drive's write cache, so the platform
-    ladder is ``F_FULLFSYNC`` first and ``os.fsync`` as the fallback -- both
-    where the fcntl command is absent and where the filesystem rejects it.
+    ladder is ``F_FULLFSYNC`` first and ``os.fsync`` as the fallback -- where
+    ``fcntl`` itself is absent, where the fcntl command is absent, and where
+    the filesystem rejects it.
     """
     full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
-    if full_fsync is not None:
+    if fcntl is not None and full_fsync is not None:
         try:
             fcntl.fcntl(descriptor, full_fsync)
         except OSError:
@@ -127,7 +132,10 @@ class SidecarWriter:
     The caller owns only the cap values. ``head_cap`` bytes fill first; a
     ring buffer keeps the last ``tail_cap`` bytes of everything after that,
     and the stored file is the head segment followed by the tail segment.
-    ``None`` for both caps is unbounded; ``tail_cap=0`` is head-only.
+    No caps is unbounded: an unbounded ``head_cap`` streams every byte to
+    the head segment, so nothing ever reaches the tail. ``tail_cap=0`` is
+    head-only, and so is an unset ``tail_cap`` under a finite ``head_cap``:
+    the tail buffer is bounded by ``tail_cap``, never by the stream.
 
     A :class:`SidecarSummary` exists only after :meth:`finalize`, so a
     Manifest embedding a Sidecar Digest structurally cannot precede the
@@ -141,25 +149,21 @@ class SidecarWriter:
         head_cap: int | None = None,
         tail_cap: int | None = None,
     ) -> None:
-        if head_cap is not None and head_cap < 0:
-            raise ValueError(f"head_cap must not be negative, got {head_cap}")
-        if tail_cap is not None and tail_cap < 0:
-            raise ValueError(f"tail_cap must not be negative, got {tail_cap}")
         self._path = path
         self._head_cap = head_cap
-        self._tail_cap = tail_cap
+        self._tail_cap = 0 if tail_cap is None else tail_cap
         self._head_length = 0
         self._produced = 0
         self._tail = bytearray()
         self._dropped = 0
         self._digest = hashlib.sha256()
         self._summary: SidecarSummary | None = None
-        self._handle = path.open("wb")
-
-    @property
-    def path(self) -> Path:
-        """Filesystem path of the Sidecar file being written."""
-        return self._path
+        try:
+            self._handle = path.open("wb")
+        except OSError as exc:
+            raise AllocationError(
+                f"could not open sidecar {str(path)!r}"
+            ) from exc
 
     def write(self, chunk: bytes) -> None:
         """Offer bytes to the Sidecar, applying the caps.
@@ -169,26 +173,16 @@ class SidecarWriter:
         oldest buffered bytes once ``tail_cap`` is reached. Every offered
         byte counts toward ``produced`` whether or not it is stored.
         """
-        if self._summary is not None:
-            raise ValueError("sidecar writer is already finalized")
         self._produced += len(chunk)
         remainder = chunk
         if self._head_cap is None:
-            self._handle.write(chunk)
-            self._digest.update(chunk)
-            self._head_length += len(chunk)
+            self._store_head(chunk)
             return
         room = self._head_cap - self._head_length
         if room > 0:
-            head_part = chunk[:room]
-            self._handle.write(head_part)
-            self._digest.update(head_part)
-            self._head_length += len(head_part)
+            self._store_head(chunk[:room])
             remainder = chunk[room:]
         if not remainder:
-            return
-        if self._tail_cap is None:
-            self._tail.extend(remainder)
             return
         if self._tail_cap == 0:
             self._dropped += len(remainder)
@@ -199,22 +193,36 @@ class SidecarWriter:
             del self._tail[:overflow]
             self._dropped += overflow
 
+    def _store_head(self, part: bytes) -> None:
+        """Append ``part`` to the head segment on disk and to the digest."""
+        try:
+            self._handle.write(part)
+        except (OSError, ValueError) as exc:
+            raise AllocationError(
+                f"could not write sidecar {str(self._path)!r}"
+            ) from exc
+        self._digest.update(part)
+        self._head_length += len(part)
+
     def finalize(self) -> SidecarSummary:
         """Append the tail segment, flush durably, and return the summary.
 
-        Idempotent: repeated calls return the same summary without a second
-        write or flush. The Sidecar Digest is computed over the stored bytes
-        in file order -- head segment then tail segment -- and is finalized
-        here.
+        The Sidecar Digest is computed over the stored bytes in file order
+        -- head segment then tail segment -- and is finalized here. The file
+        handle is closed whether or not the flush succeeds.
         """
-        if self._summary is not None:
-            return self._summary
         tail = bytes(self._tail)
-        self._handle.write(tail)
+        try:
+            self._handle.write(tail)
+            self._handle.flush()
+            _flush_descriptor(self._handle.fileno())
+        except (OSError, ValueError) as exc:
+            raise AllocationError(
+                f"could not flush sidecar {str(self._path)!r}"
+            ) from exc
+        finally:
+            self._handle.close()
         self._digest.update(tail)
-        self._handle.flush()
-        _flush_descriptor(self._handle.fileno())
-        self._handle.close()
         self._summary = SidecarSummary(
             head_length=self._head_length,
             tail_length=len(tail),
@@ -225,50 +233,38 @@ class SidecarWriter:
         self._tail.clear()
         return self._summary
 
-    def __enter__(self) -> SidecarWriter:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        if self._summary is None:
-            self.finalize()
-
 
 class DocumentDirectory:
     """One allocated directory holding one Manifest and its Sidecars.
 
-    Construct through :meth:`allocate`; the two read paths,
+    :meth:`allocate` is the only way to obtain an instance, so an instance
+    always names a directory this process created and the one-writer
+    property holds by construction. The two read paths,
     :meth:`read_manifest` and :meth:`verify_sidecar`, are class methods that
     need no allocation. Every :meth:`publish` is a durable atomic replace
     and is last-write-wins: the component owns no lifecycle state and never
     inspects the payload it stores.
     """
 
-    def __init__(self, path: Path, *, manifest_name: str) -> None:
-        self._path = path
-        self._manifest_name = _validate_safe_name(
-            manifest_name,
-            role="manifest_name",
-        )
+    _path: Path
+    _manifest_name: str
+    _manifest_path: Path
+    _temp_path: Path
+
+    @classmethod
+    def _bind(cls, path: Path, manifest_name: str) -> DocumentDirectory:
+        """Wrap a directory :meth:`allocate` has just created."""
+        directory = object.__new__(cls)
+        directory._path = path
+        directory._manifest_name = manifest_name
+        directory._manifest_path = path / manifest_name
+        directory._temp_path = path / f"{manifest_name}{_TEMP_SUFFIX}"
+        return directory
 
     @property
     def path(self) -> Path:
         """Filesystem path of the allocated directory."""
         return self._path
-
-    @property
-    def manifest_name(self) -> str:
-        """Single-segment file name the Manifest is published under."""
-        return self._manifest_name
-
-    @property
-    def manifest_path(self) -> Path:
-        """Filesystem path of the published Manifest."""
-        return self._path / self._manifest_name
 
     @classmethod
     def allocate(
@@ -282,21 +278,21 @@ class DocumentDirectory:
 
         The directory is created with ``exist_ok=False`` so a collision is a
         typed :class:`~dr_store.errors.AllocationError`, never a silent
-        reuse and never a retry loop; a missing ``root`` is created along
-        the way. ``prefix`` and ``manifest_name`` are validated safe single
-        path segments before anything touches disk.
+        reuse and never a retry loop. ``root`` is caller-owned and must
+        already exist. ``prefix`` and ``manifest_name`` are validated safe
+        single path segments before anything touches disk.
         """
         _validate_safe_name(prefix, role="prefix")
         _validate_safe_name(manifest_name, role="manifest_name")
         stamp = dt.datetime.now(dt.UTC).strftime(_TIMESTAMP_FORMAT)
         path = Path(root) / f"{prefix}-{stamp}-{uuid.uuid4()}"
         try:
-            path.mkdir(parents=True, exist_ok=False)
+            path.mkdir(exist_ok=False)
         except OSError as exc:
             raise AllocationError(
                 f"could not allocate document directory {str(path)!r}"
             ) from exc
-        return cls(path, manifest_name=manifest_name)
+        return cls._bind(path, manifest_name)
 
     def publish(self, manifest: Jsonable) -> None:
         """Durably replace the Manifest with ``manifest``, atomically.
@@ -316,21 +312,21 @@ class DocumentDirectory:
             canonical = canonical_json(validate_strict_json(manifest))
         except (StrictJsonError, TypeError, ValueError) as exc:
             raise ManifestPublishError(
-                f"manifest for {str(self.manifest_path)!r} is not strict "
+                f"manifest for {str(self._manifest_path)!r} is not strict "
                 "finite JSON"
             ) from exc
-        temp_path = self._path / f"{self._manifest_name}{_TEMP_SUFFIX}"
         try:
-            with temp_path.open("wb") as handle:
+            with self._temp_path.open("wb") as handle:
                 handle.write(canonical.encode("utf-8"))
                 handle.flush()
                 _flush_descriptor(handle.fileno())
             # Path.replace is os.replace: one same-filesystem atomic rename.
-            temp_path.replace(self.manifest_path)
+            self._temp_path.replace(self._manifest_path)
             _flush_directory(self._path)
         except OSError as exc:
+            self._temp_path.unlink(missing_ok=True)
             raise ManifestPublishError(
-                f"could not publish manifest {str(self.manifest_path)!r}"
+                f"could not publish manifest {str(self._manifest_path)!r}"
             ) from exc
 
     def open_sidecar(
@@ -342,12 +338,19 @@ class DocumentDirectory:
     ) -> SidecarWriter:
         """Open a Sidecar for incremental writing beside the Manifest.
 
-        ``name`` is a validated safe single path segment. The caps are the
-        caller's whole contribution to truncation: ``head_cap`` bytes fill
-        first, a ring buffer keeps the last ``tail_cap`` bytes of the
-        remainder, and ``None`` means unbounded.
+        ``name`` is a validated safe single path segment, and may name
+        neither the Manifest nor the temp file :meth:`publish` renames onto
+        it: one directory holds exactly one Manifest, so a Sidecar can never
+        occupy or destroy its path. The caps are the caller's whole
+        contribution to truncation: ``head_cap`` bytes fill first and a ring
+        buffer keeps the last ``tail_cap`` bytes of the remainder.
         """
         _validate_safe_name(name, role="sidecar name")
+        if name in (self._manifest_name, self._temp_path.name):
+            raise AllocationError(
+                f"sidecar name {name!r} is reserved by the manifest of "
+                f"{str(self._path)!r}"
+            )
         return SidecarWriter(
             self._path / name,
             head_cap=head_cap,
@@ -382,6 +385,7 @@ class DocumentDirectory:
         except (
             UnicodeDecodeError,
             json.JSONDecodeError,
+            RecursionError,
             StrictJsonError,
         ) as exc:
             raise ManifestReadError(
@@ -406,7 +410,9 @@ class DocumentDirectory:
 
         The component stays schema-blind: the caller extracts the expected
         Sidecar Digest and segment lengths from its own Manifest and passes
-        them in. A total-length or digest disagreement raises
+        them in. A stored Sidecar carries no segment boundary, so the two
+        lengths are checked as their sum -- the digest is what pins the
+        stored bytes exactly. A total-length or digest disagreement raises
         :class:`~dr_store.errors.SidecarVerificationError`, as does a
         Sidecar that cannot be read.
         """
