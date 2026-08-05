@@ -16,6 +16,11 @@ three things and nothing else:
   reference replays idempotently; a different reference conflicts, keeping
   the durable winner; no overwrite path is exposed.
 
+Alongside the Object Store, dr-store provides the **Document Directory**: a
+durable crash-consistent directory holding one atomically-replaced
+canonical-JSON Manifest plus streamed binary Sidecars, for artifacts too
+large or too incremental for a single immutable record.
+
 Canonicalization and hashing come entirely from ``dr-serialize``; dr-store
 invents no second canonicalization dialect, and a Content Hash is not an
 Identity Hash. The contract carries no Whetstone, Rollout, workflow, retry,
@@ -31,13 +36,23 @@ from dr_store.backends import (
     PutOutcome,
     SqliteBackend,
 )
+from dr_store.docdir import (
+    DocumentDirectory,
+    SidecarSummary,
+    SidecarWriter,
+)
 from dr_store.errors import (
+    AllocationError,
     BindingConflictError,
     ContentHashMismatchError,
+    DocumentDirectoryError,
+    ManifestPublishError,
+    ManifestReadError,
     ObjectConflictError,
     ObjectNotFoundError,
     ReferenceValidationError,
     SchemaMismatchError,
+    SidecarVerificationError,
     StoreError,
 )
 from dr_store.references import (
@@ -54,11 +69,16 @@ from dr_store.store import (
 
 __all__ = [
     "CONTENT_HASH_LENGTH",
+    "AllocationError",
     "Backend",
     "BindOutcome",
     "BindStatus",
     "BindingConflictError",
     "ContentHashMismatchError",
+    "DocumentDirectory",
+    "DocumentDirectoryError",
+    "ManifestPublishError",
+    "ManifestReadError",
     "MemoryBackend",
     "ObjectConflictError",
     "ObjectNotFoundError",
@@ -68,6 +88,9 @@ __all__ = [
     "PutStatus",
     "ReferenceValidationError",
     "SchemaMismatchError",
+    "SidecarSummary",
+    "SidecarVerificationError",
+    "SidecarWriter",
     "SqliteBackend",
     "StoreError",
     "compute_content_hash",

@@ -5,6 +5,11 @@ type so callers can branch on outcome without string matching. Conflicts
 (a different reference or different content at an existing key) are
 first-class *outcomes*, not bugs, and carry the preserved existing value so
 the caller can inspect the durable winner.
+
+The Object Store taxonomy is rooted at :class:`StoreError` and the Document
+Directory taxonomy at :class:`DocumentDirectoryError`; the two roots are
+independent so callers can branch on one component without catching the
+other.
 """
 
 from __future__ import annotations
@@ -121,3 +126,47 @@ class BindingConflictError(StoreError):
             f"refusing to rebind to "
             f"({requested.schema!r}, {requested.content_hash})"
         )
+
+
+class DocumentDirectoryError(Exception):
+    """Base for every Document Directory failure."""
+
+
+class AllocationError(DocumentDirectoryError):
+    """A Document Directory could not be allocated under its root.
+
+    Raised when a name component is not a safe single segment, when the
+    generated directory already exists (a collision is surfaced, never
+    retried), and when the underlying ``mkdir`` fails. The originating OS
+    error is preserved as ``__cause__``.
+    """
+
+
+class ManifestPublishError(DocumentDirectoryError):
+    """A Manifest could not be durably published.
+
+    Raised when the payload is not strict finite JSON and when the
+    temp-write, flush, atomic replace, or directory flush fails. The
+    originating OS or validation error is preserved as ``__cause__``; a
+    failed publish never replaces the previously published Manifest.
+    """
+
+
+class ManifestReadError(DocumentDirectoryError):
+    """A Manifest could not be read back as a canonical strict-JSON value.
+
+    Covers a missing file, unreadable bytes, malformed JSON, non-strict
+    JSON (a non-finite token), and bytes that decode but are not in
+    canonical form. The originating OS or decoding error is preserved as
+    ``__cause__``.
+    """
+
+
+class SidecarVerificationError(DocumentDirectoryError):
+    """Stored Sidecar bytes do not match the caller's expectations.
+
+    Raised when a segment length or the Sidecar Digest disagrees with the
+    expectation the caller extracted from its own Manifest, and when the
+    Sidecar file cannot be read. The originating OS error, when there is
+    one, is preserved as ``__cause__``.
+    """
