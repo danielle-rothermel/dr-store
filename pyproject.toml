@@ -26,7 +26,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "dr-serialize>=0.1.0",
+    "dr-serialize>=0.1.2",
 ]
 
 [project.urls]
@@ -49,9 +49,6 @@ dev = [
 
 [tool.hatch.build.targets.sdist]
 only-include = ["src"]
-
-[tool.uv.sources]
-dr-serialize = { path = "../dr-serialize", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -11,24 +11,12 @@ permissions:
 jobs:
   ci:
     runs-on: depot-ubuntu-24.04
-    defaults:
-      run:
-        working-directory: dr-store
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - name: Check out dr-store
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
-          path: dr-store
-          persist-credentials: false
-      - name: Check out pinned dr-serialize
-        uses: actions/checkout@v7
-        with:
-          repository: danielle-rothermel/dr-serialize
-          ref: ef48d980da112e6d1cb174b56cd7aec434e54047
-          path: dr-serialize
           persist-credentials: false
       - uses: astral-sh/setup-uv@v8.3.1
         with:

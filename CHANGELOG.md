@@ -6,8 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Project metadata targets 0.1.2. Publication remains gated on replacing the
-temporary editable dr-serialize source with the required registry release.
+## [0.1.2] - 2026-08-05
 
 ### Changed
 
@@ -18,11 +17,11 @@ temporary editable dr-serialize source with the required registry release.
   requires a regular child file, and streams bounded reads from the exact
   descriptor it inspected. Platforms without directory-relative no-follow
   opens fail closed.
-- Enforced dr-serialize's Canonical JSON Text profile bounds before Object
-  Store writes and Manifest publication. Caller records outside the profile
-  fail before reaching a backend; stored objects outside the profile raise
-  `ContentHashMismatchError`, while Manifest publication and read-back raise
-  `ManifestPublishError` and `ManifestReadError`, respectively.
+- Required dr-serialize 0.1.2 and enforced its Canonical JSON Text profile
+  bounds before Object Store writes and Manifest publication. Caller records
+  outside the profile fail before reaching a backend; stored objects outside
+  the profile raise `ContentHashMismatchError`, while Manifest publication and
+  read-back raise `ManifestPublishError` and `ManifestReadError`, respectively.
 - Reorganized package source and tests around the top-level functional areas
   `content_addressing`, `object_store`, `storage_backends`, and
   `document_directory`, with supporting errors and filesystem mechanics under
@@ -39,8 +38,7 @@ temporary editable dr-serialize source with the required registry release.
   layout verification.
 - Consolidated local and CI validation behind one canonical pre-check, added a
   repository-local pre-commit hook that delegates to it, retained Depot-backed
-  CI runners, and prepared tag-gated release checks for 0.1.2 without treating
-  the temporary editable dependency as registry-ready.
+  CI runners, and added tag-gated release checks for 0.1.2.
 
 ### Fixed
 
