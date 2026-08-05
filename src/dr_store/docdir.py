@@ -20,14 +20,15 @@ cross-process coordination is claimed.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
-import fcntl
 import hashlib
 import json
 import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dr_serialize import (
     Jsonable,
@@ -43,6 +44,16 @@ from dr_store.errors import (
     ManifestReadError,
     SidecarVerificationError,
 )
+
+if TYPE_CHECKING:
+    from types import ModuleType
+
+try:  # POSIX only; the flush ladder falls back to os.fsync without it.
+    import fcntl as _fcntl
+
+    fcntl: ModuleType | None = _fcntl
+except ImportError:  # pragma: no cover - exercised only off POSIX
+    fcntl = None
 
 _UNSAFE_NAME_CHARACTERS = frozenset({"/", "\\", "\x00"})
 _RESERVED_NAMES = frozenset({"", ".", ".."})
@@ -92,10 +103,11 @@ def _flush_descriptor(descriptor: int) -> None:
 
     macOS ``fsync`` only pushes to the drive's write cache, so the platform
     ladder is ``F_FULLFSYNC`` first and ``os.fsync`` as the fallback -- where
-    the fcntl command is absent and where the filesystem rejects it.
+    ``fcntl`` itself is absent, where the fcntl command is absent, and where
+    the filesystem rejects it.
     """
     full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
-    if full_fsync is not None:
+    if fcntl is not None and full_fsync is not None:
         try:
             fcntl.fcntl(descriptor, full_fsync)
         except OSError:
@@ -324,7 +336,10 @@ class DocumentDirectory:
             self._temp_path.replace(self._manifest_path)
             _flush_directory(self._path)
         except OSError as exc:
-            self._temp_path.unlink(missing_ok=True)
+            # Best-effort: a temp path that cannot be removed must not
+            # displace the publish failure the caller needs to see.
+            with contextlib.suppress(OSError):
+                self._temp_path.unlink(missing_ok=True)
             raise ManifestPublishError(
                 f"could not publish manifest {str(self._manifest_path)!r}"
             ) from exc
@@ -338,12 +353,24 @@ class DocumentDirectory:
     ) -> SidecarWriter:
         """Open a Sidecar for incremental writing beside the Manifest.
 
-        ``name`` is a validated safe single path segment. The caps are the
-        caller's whole contribution to truncation: ``head_cap`` bytes fill
-        first and a ring buffer keeps the last ``tail_cap`` bytes of the
-        remainder.
+        ``name`` is a validated safe single path segment. The Manifest name
+        and its temp name are reserved: the Sidecar file is opened for
+        truncating writes, so either would destroy a published Manifest or
+        be consumed by the next :meth:`publish`. The comparison is
+        case-insensitive because a case-insensitive filesystem resolves a
+        case variant onto the same file. The caps are the caller's whole
+        contribution to truncation: ``head_cap`` bytes fill first and a ring
+        buffer keeps the last ``tail_cap`` bytes of the remainder.
         """
         _validate_safe_name(name, role="sidecar name")
+        if name.casefold() in {
+            self._manifest_name.casefold(),
+            self._temp_path.name.casefold(),
+        }:
+            raise AllocationError(
+                f"sidecar name {name!r} is reserved by the manifest of "
+                f"{str(self._path)!r}"
+            )
         return SidecarWriter(
             self._path / name,
             head_cap=head_cap,

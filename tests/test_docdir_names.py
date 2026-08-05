@@ -19,7 +19,10 @@ from dr_store import AllocationError, DocumentDirectory, ManifestReadError
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from dr_serialize import Jsonable
+
 MANIFEST_NAME = "record.json"
+PUBLISHED: Jsonable = {"state": "started", "sidecars": []}
 UNSAFE_NAMES = (
     "",
     ".",
@@ -76,6 +79,33 @@ def test_unsafe_sidecar_name_is_rejected(tmp_path: Path, name: str) -> None:
     with pytest.raises(AllocationError):
         directory.open_sidecar(name)
     assert list(directory.path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    [MANIFEST_NAME, MANIFEST_NAME + ".tmp", MANIFEST_NAME.upper()],
+)
+def test_sidecar_cannot_take_the_manifest_or_its_temp_name(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    # open_sidecar truncates on open, so the manifest name would destroy a
+    # published manifest and the temp name would be consumed by the next
+    # publish. The case variant matters because the durability claim is
+    # scoped to case-insensitive local macOS filesystems.
+    directory = DocumentDirectory.allocate(
+        tmp_path,
+        prefix="run",
+        manifest_name=MANIFEST_NAME,
+    )
+    directory.publish(PUBLISHED)
+    with pytest.raises(AllocationError):
+        directory.open_sidecar(name)
+    read_back = DocumentDirectory.read_manifest(
+        directory.path,
+        manifest_name=MANIFEST_NAME,
+    )
+    assert read_back == PUBLISHED
 
 
 def test_concurrent_allocation_under_one_root_never_collides(

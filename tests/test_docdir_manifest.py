@@ -139,6 +139,19 @@ def test_failed_publish_leaves_no_temp_file_behind(tmp_path: Path) -> None:
     assert [p.name for p in directory.path.iterdir()] == [MANIFEST_NAME]
 
 
+def test_unremovable_temp_path_still_raises_the_typed_publish_error(
+    tmp_path: Path,
+) -> None:
+    # A directory occupying the temp path fails both the temp write and the
+    # cleanup unlink: the cleanup's own OSError must not displace the typed
+    # error or discard its cause.
+    directory = _allocate(tmp_path)
+    (directory.path / f"{MANIFEST_NAME}.tmp").mkdir()
+    with pytest.raises(ManifestPublishError) as caught:
+        directory.publish(FIRST)
+    assert isinstance(caught.value.__cause__, OSError)
+
+
 def test_publish_is_last_write_wins(tmp_path: Path) -> None:
     directory = _allocate(tmp_path)
     directory.publish(FIRST)
