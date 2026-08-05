@@ -1,6 +1,6 @@
 [project]
 name = "dr-store"
-version = "0.1.0"
+version = "0.1.1"
 description = "Generic append-only content-addressed object store with immutable put, verified get, and atomic key-to-reference binding, plus the Document Directory: one atomic canonical-JSON manifest and streamed binary sidecars."
 readme = "README.md"
 license = "MIT"
