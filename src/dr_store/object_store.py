@@ -3,8 +3,8 @@
 :class:`ObjectStore` is the whole public contract. It owns every semantic
 rule -- canonicalization (once, through dr-serialize), Content Hash
 verification on write and on every read, idempotent replay, typed
-conflicts, and the four-row atomic binding table -- and delegates only
-atomic durability to a
+conflicts, and the four-row atomic binding table -- and delegates only the
+atomic storage operations to a
 :class:`~dr_store.storage_backends.contract.Backend`.
 
 The store is deliberately domain-neutral: the binding key is an opaque
@@ -164,7 +164,7 @@ class ObjectStore:
         * **unbound + reference** -> bind, return ``BOUND``;
         * **bound to A + A** -> idempotent success, return ``IDEMPOTENT``;
         * **bound to A + B** -> raise :class:`BindingConflictError`,
-          preserving A as the durable winner;
+          preserving A as the stored winner;
         * there is no overwrite/clear/rebind path.
 
         ``key`` is opaque to the store; the caller owns its meaning.

@@ -2,7 +2,8 @@
 
 All backends satisfy the :class:`Backend` protocol and are interchangeable
 behind :class:`~dr_store.object_store.ObjectStore`. Contract semantics live in
-the store; backends only guarantee atomic, durable compare-and-set primitives.
+the store. Backends share atomic compare-and-set primitives; persistence and
+durability are implementation-specific.
 """
 
 from __future__ import annotations

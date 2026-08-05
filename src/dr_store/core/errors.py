@@ -4,7 +4,7 @@ Every failure mode named in the storage contract is a distinct exception
 type so callers can branch on outcome without string matching. Conflicts
 (a different reference or different content at an existing key) are
 first-class *outcomes*, not bugs, and carry the preserved existing value so
-the caller can inspect the durable winner.
+the caller can inspect the stored winner.
 
 The Object Store taxonomy is rooted at :class:`StoreError` and the Document
 Directory taxonomy at :class:`DocumentDirectoryError`; the two roots are
@@ -105,7 +105,7 @@ class ObjectConflictError(StoreError):
 class BindingConflictError(StoreError):
     """A key is already bound to a different ObjectReference.
 
-    The existing binding (the durable winner) is preserved unchanged and
+    The existing binding (the stored winner) is preserved unchanged and
     exposed as ``existing`` so the caller can inspect it. There is no
     overwrite path.
     """
@@ -138,14 +138,14 @@ class AllocationError(DocumentDirectoryError):
     Raised when a name the component creates is not a safe single segment,
     when a Sidecar cap is a negative byte count, when the generated
     directory already exists (a collision is surfaced, never retried), when
-    the underlying ``mkdir`` fails, and when opening, writing, or durably
-    flushing a Sidecar file fails. The originating OS error, when there is
-    one, is preserved as ``__cause__``.
+    the underlying ``mkdir`` fails, and when opening, writing, or flushing a
+    Sidecar file descriptor fails. The originating OS error, when there is one,
+    is preserved as ``__cause__``.
     """
 
 
 class ManifestPublishError(DocumentDirectoryError):
-    """A Manifest could not be durably published.
+    """A Manifest publication operation failed.
 
     Raised when the payload is not strict finite JSON and when the
     temp-write, flush, atomic replace, or directory flush fails. The

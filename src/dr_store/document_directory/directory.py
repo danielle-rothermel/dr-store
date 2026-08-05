@@ -116,8 +116,8 @@ class DocumentDirectory:
         Replacement precedes the directory flush. If that final flush fails,
         this method raises :class:`~dr_store.core.errors.ManifestPublishError`
         even though the new Manifest may already be visible; the exception does
-        not imply rollback. These steps support persistence but ordinary
-        process-death visibility is not evidence of power-loss durability.
+        not imply rollback. These flush operations do not promise power-loss
+        durability; ordinary process-death visibility does not prove it.
         """
         try:
             canonical = canonical_json(validate_strict_json(manifest))

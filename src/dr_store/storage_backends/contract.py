@@ -3,11 +3,11 @@
 A backend provides two atomic compare-and-set primitives -- one for the
 append-only object table, one for the append-only binding table -- plus point
 reads. All contract semantics (hash verification, idempotent replay, conflict
-typing) live in :mod:`dr_store.object_store`; a backend only guarantees
-atomicity and durability of the two primitives.
+typing) live in :mod:`dr_store.object_store`. Atomicity is shared by every
+backend; persistence and durability are implementation-specific.
 
 The record value crossing this boundary is the *canonical JSON text* of the
-complete persisted record: dr-store hashes and canonicalizes exactly once,
+complete stored record: dr-store hashes and canonicalizes exactly once,
 above the backend, so every backend stores identical bytes and no backend can
 introduce a second canonicalization dialect.
 """
@@ -38,7 +38,7 @@ class BindOutcome:
 
     ``bound`` is ``True`` when this call created the binding. When ``False``,
     the key was already bound and ``existing_schema``/``existing_content_hash``
-    carry the untouched durable winner.
+    carry the untouched stored winner.
     """
 
     bound: bool
@@ -47,7 +47,7 @@ class BindOutcome:
 
 
 class Backend(Protocol):
-    """Atomic, durable primitives for the two append-only tables."""
+    """Atomic primitives for the two append-only tables."""
 
     def put_object(
         self,

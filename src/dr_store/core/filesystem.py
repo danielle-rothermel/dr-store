@@ -1,4 +1,4 @@
-"""Filesystem safety and durability primitives for dr-store."""
+"""Filesystem safety and flush primitives for dr-store."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def flush_descriptor(descriptor: int) -> None:
 
 
 def flush_directory(directory: Path) -> None:
-    """Flush a directory entry so a rename survives abrupt process death."""
+    """Flush the directory descriptor after a directory-entry change."""
     descriptor = os.open(directory, os.O_RDONLY)
     try:
         flush_descriptor(descriptor)

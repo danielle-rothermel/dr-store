@@ -2,7 +2,7 @@
 
 An :class:`ObjectReference` is the typed content-addressed key of the
 Object Store: a declared record ``schema`` plus the full 64-character
-lowercase SHA-256 ``content_hash`` of the complete canonical persisted
+lowercase SHA-256 ``content_hash`` of the complete canonical stored
 record. The Content Hash is computed through dr-serialize's canonical JSON
 lane -- dr-store never invents a second canonicalization dialect -- and is
 deliberately distinct from an Identity Hash over Canonical Identity JSON.
@@ -35,7 +35,7 @@ def is_content_hash(value: str) -> bool:
 
 
 def compute_content_hash(record: Jsonable) -> str:
-    """Return the Content Hash of a complete canonical persisted record.
+    """Return the Content Hash of a complete canonical stored record.
 
     ``record`` must be strict finite JSON; it is validated before hashing so
     that a non-JSON or non-finite value fails loudly rather than producing a
@@ -51,7 +51,7 @@ class ObjectReference:
 
     ``schema`` is the declared record schema; ``content_hash`` is the full
     64-character lowercase SHA-256 hash of the complete canonical
-    persisted record. Both components are validated at construction so an
+    stored record. Both components are validated at construction so an
     ill-formed reference can never enter the store.
     """
 

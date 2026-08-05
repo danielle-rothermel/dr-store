@@ -2,7 +2,7 @@
 
 dr-store maps a typed :class:`ObjectReference` -- a declared record
 ``schema`` plus the full SHA-256 Content Hash of the complete canonical
-persisted record -- to the immutable canonical (JSON-equivalent) record
+stored record -- to the immutable canonical (JSON-equivalent) record
 value, and provides one generic atomic key-to-reference binding. It owns
 three things and nothing else:
 
@@ -14,12 +14,12 @@ three things and nothing else:
   error.
 * **Atomic key-to-reference binding** -- an unbound key binds; the same
   reference replays idempotently; a different reference conflicts, keeping
-  the durable winner; no overwrite path is exposed.
+  the stored winner; no overwrite path is exposed.
 
 Alongside the Object Store, dr-store provides the **Document Directory**: a
-durable crash-consistent directory holding one atomically-replaced
-canonical-JSON Manifest plus streamed binary Sidecars, for artifacts too
-large or too incremental for a single immutable record.
+directory with one atomically replaced canonical-JSON Manifest plus streamed
+binary Sidecars, for artifacts too large or too incremental for a single
+immutable record.
 
 Canonicalization and hashing come entirely from ``dr-serialize``; dr-store
 invents no second canonicalization dialect, and a Content Hash is not an

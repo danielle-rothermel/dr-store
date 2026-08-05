@@ -6,7 +6,7 @@
 | [Repo Definitions](https://danielle-rothermel.github.io/dr-store/) | [dr-serialize v0.1.1](https://github.com/danielle-rothermel/dr-serialize) |
 | --- | --- |
 
-**dr-store provides domain-neutral storage primitives for immutable records and durable document artifacts.**
+**dr-store provides domain-neutral storage primitives for immutable records and document artifacts with atomic Manifest publication.**
 It is organized into these functional areas:
 
 - **[Content addressing](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/content_addressing.py)**
@@ -16,7 +16,7 @@ It is organized into these functional areas:
   provides immutable puts, verified reads, and atomic caller-owned key
   bindings.
 - **[Storage backends](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/storage_backends)**
-  provide interchangeable atomic persistence operations.
+  provide interchangeable atomic storage operations.
 - **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
   manages canonical manifests and streamed binary sidecars.
 - **[Infrastructure](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/core)**
@@ -24,7 +24,7 @@ It is organized into these functional areas:
     - [Typed failures](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/core/errors.py)
       distinguish storage, publication, and verification failures.
     - [Filesystem support](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/core/filesystem.py)
-      owns safe names and durable flush operations.
+      owns safe names and flush operations.
 
 ## Content Addressing
 
@@ -84,9 +84,10 @@ class ObjectStore:
 
 ## Storage Backends
 
-The backend protocol is the atomic persistence boundary beneath the Object
-Store. `MemoryBackend` provides process-local storage, while `SqliteBackend`
-provides durable cross-process storage through the same contract.
+The backend protocol defines the atomic storage operations shared beneath the
+Object Store. Persistence and durability are implementation-specific:
+`MemoryBackend` provides process-local storage, while `SqliteBackend` provides
+durable cross-process storage.
 
 ```python
 @dataclass(frozen=True, slots=True)
