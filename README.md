@@ -1,94 +1,105 @@
 # dr-store
 
-Generic append-only content-addressed object store for the dr-* stack.
+Domain-neutral storage primitives for immutable records and durable document
+artifacts.
 
-`dr-store` owns three things and nothing else:
+## At a Glance
 
-1. **Immutable put** — an absent typed `(schema, content_hash)` key
-   atomically accepts a verified complete canonical record value; replay of
-   the same canonical value is idempotent success; different content at the
-   same key is a typed conflict and never overwrites the stored value.
-2. **Verified get** — every read recomputes and verifies the Content Hash
-   and schema declared by the `ObjectReference`; missing, schema-mismatched,
-   or corrupted content fails with a typed error.
-3. **Atomic key-to-reference binding** — one generic compare-and-set that
-   binds an opaque caller-owned key to an `ObjectReference`: an unbound key
-   binds; the same reference replays idempotently; a different reference
-   conflicts and never overwrites the winner. No overwrite path is exposed.
+- **Documentation:** [Storage contracts and vocabulary](https://danielle-rothermel.github.io/dr-store/)
+- **Package version:** `0.1.1`
+- **Python:** 3.12 or later
+- **Personally owned dependencies:**
+  - [dr-serialize](https://github.com/danielle-rothermel/dr-serialize) — current
+    release `0.1.1`; dr-store requires `>=0.1.0`
 
-The Content Hash is the full 64-character lowercase SHA-256 digest of the
-complete canonical persisted record, canonicalized through
-[`dr-serialize`](https://github.com/danielle-rothermel/dr-serialize)'s
-canonical JSON. `dr-store` does not invent a second canonicalization
-dialect, and a Content Hash is not an Identity Hash.
+## High-Level Design
 
-The [vocabulary sheet](https://danielle-rothermel.github.io/dr-store/)
-(source: `.defs/vocab.html`) is the authoritative statement of the
-contracts this repo implements — the append-only content-addressed object
-store and the Document Directory: the terms, the guarantees, what is in
-and out of scope, and the mapping from each term to the exported names.
+dr-store provides two complementary storage capabilities with shared strict
+JSON handling and typed failures:
+
+- **Object references and content hashing** identify a complete record by its
+  declared schema and the SHA-256 digest of its canonical JSON representation.
+  References validate their own shape, and stored records are reverified when
+  read.
+- **The Object Store** stores immutable records and optionally binds opaque,
+  caller-owned keys to their references. Repeating the same write is
+  idempotent; conflicting writes preserve the value that was stored first.
+- **Storage backends** supply the atomic persistence operations used by the
+  Object Store. The library includes an in-memory implementation and a SQLite
+  implementation with the same observable storage behavior.
+- **The Document Directory** manages one atomically published canonical-JSON
+  manifest alongside streamed binary sidecars. Sidecars can retain a bounded
+  head and tail of a stream, report what was kept or dropped, and be verified
+  after writing.
+- **Typed errors** distinguish invalid references, missing or corrupted
+  content, conflicting writes, publication failures, and sidecar verification
+  failures.
+
+Canonical JSON validation, rendering, and hashing come from `dr-serialize`, so
+the library uses one serialization dialect across references, stored records,
+and manifests. Domain schemas, lifecycle rules, retention policy, and the
+meaning of binding keys remain the caller's responsibility.
+
+## Object Store
+
+The Object Store is an append-only, content-addressed store for complete
+JSON-compatible records. It supports:
+
+- immutable puts addressed by schema and content hash;
+- verified reads that detect missing, mismatched, or corrupted content;
+- atomic key-to-reference bindings with no overwrite, clear, or rebind path;
+- idempotent replay of an identical record or binding; and
+- typed conflicts that preserve the existing durable value.
+
+```python
+from dr_store import MemoryBackend, ObjectStore
+
+store = ObjectStore(MemoryBackend())
+reference, put_status = store.put("example.record", {"value": 42})
+record = store.get(reference)
+
+bind_status = store.bind("latest", reference)
+assert store.resolve("latest") == reference
+```
 
 ## Document Directory
 
-The Document Directory stores what a single immutable record cannot: one
-allocated directory with exactly one writer, one atomically-replaced
-canonical-JSON **Manifest**, and zero or more streamed binary **Sidecars**.
+A Document Directory holds one canonical-JSON manifest and zero or more binary
+sidecars in an allocated directory. Manifest publication uses an atomic durable
+replace, while sidecar writers support unbounded output, head-only retention,
+or bounded head-and-tail retention.
 
 ```python
 from dr_store import DocumentDirectory
 
 directory = DocumentDirectory.allocate(
-    root, prefix="run", manifest_name="record.json"
+    root,
+    prefix="run",
+    manifest_name="record.json",
 )
-directory.publish(manifest)                    # atomic durable replace
-writer = directory.open_sidecar("stdout.bin", head_cap=..., tail_cap=...)
+directory.publish(initial_manifest)
+
+writer = directory.open_sidecar(
+    "stdout.bin",
+    head_cap=64_000,
+    tail_cap=64_000,
+)
 writer.write(chunk)
-summary = writer.finalize()                    # -> SidecarSummary
-directory.publish(final_manifest)              # summaries embedded by caller
+summary = writer.finalize()
+
+directory.publish(final_manifest)
 ```
 
-- **Atomic durable publish** — each `publish()` writes the complete
-  canonical JSON to a temp file in the same directory, flushes it
-  (`F_FULLFSYNC` where available, `os.fsync` otherwise), renames it onto
-  the manifest name, and flushes the directory entry. After abrupt process
-  death a reader sees either no Manifest or one complete previously
-  published Manifest — never a partial one. The claim is scoped to local
-  macOS filesystems; network mounts and cloud-synchronized directories are
-  outside it.
-- **Writer-owned truncation** — `head_cap` bytes fill first and a ring
-  buffer keeps the last `tail_cap` bytes of the remainder, stored as head
-  segment then tail segment in one file. No caps is unbounded; an unset
-  `tail_cap` is head-only, so the tail buffer is bounded by `tail_cap` and
-  never by the stream. The `SidecarSummary` reports the
-  stored segment lengths alongside `produced` and `dropped` byte counts,
-  plus the Sidecar Digest: the full 64-character lowercase SHA-256 of the
-  stored bytes. A Sidecar Digest is not a Content Hash — its input is raw
-  bytes, not a canonical record.
-- **Verified read-back** — `read_manifest()` accepts only strict canonical
-  JSON; `verify_sidecar()` checks stored bytes against the digest and
-  total segment length the caller extracted from its own Manifest. Every
-  fault is a typed error under `DocumentDirectoryError`.
-
-The component is domain-neutral in the same way the Object Store is, and
-narrower still: it knows no lifecycle state, never reads a field out of a
-Manifest payload, never computes a retention policy, and never owns
-threads or child processes. Concurrent allocation under one root is
-collision-free; each allocated directory has one writer by construction,
-not by locking. The vocabulary sheet's Document Directory section states
-its terms and guarantees.
-
-## Ecosystem
-
-`dr-store` depends only on `dr-serialize` for canonical JSON and strict
-finite-JSON validation. It carries no Whetstone, Rollout, workflow, retry,
-or campaign vocabulary; the public contract is domain-neutral.
+The manifest is opaque to dr-store and remains the caller's source of truth
+about its sidecars. The library verifies manifest canonicality and can verify a
+sidecar's stored length and digest, but it does not interpret manifest fields or
+own application lifecycle state.
 
 ## Backends
 
-- **in-memory** (`MemoryBackend`) — for tests and single-process use.
-- **sqlite** (`SqliteBackend`) — durable and safe under concurrent
-  cross-process use via serialized transactions.
+- `MemoryBackend` is intended for tests and single-process use.
+- `SqliteBackend` provides durable storage and serializes concurrent writes
+  across processes.
 
-Both satisfy the same backend-neutral contract, exercised by a shared
-concurrency test proving parallel binds of one unbound key produce exactly
-one winner.
+Both backends implement the same append-only object and binding operations, so
+callers choose a backend without changing Object Store semantics.
