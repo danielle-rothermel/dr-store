@@ -142,10 +142,10 @@ def test_write_failure_preserves_old_manifest_and_cleans_temp(
             return _FailingWriteHandle(wrapped)
         return wrapped
 
-    monkeypatch.setattr(Path, "open", fail_write_open)
-
-    with pytest.raises(ManifestPublishError) as caught:
-        directory.publish(SECOND)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", fail_write_open)
+        with pytest.raises(ManifestPublishError) as caught:
+            directory.publish(SECOND)
 
     assert isinstance(caught.value.__cause__, OSError)
     assert _read(directory) == FIRST
