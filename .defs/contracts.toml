@@ -157,8 +157,9 @@ title = "Sidecar verification pins no-follow descriptors"
 statement = """
 Sidecar verification opens the named document directory and its regular direct \
 child with required no-follow, directory-relative flags, reads from the child \
-descriptor it inspected, and verifies the caller-supplied total stored length \
-and digest. It rejects final-component symlinks and fails closed when the \
+descriptor it inspected, and verifies the caller-supplied non-negative head and \
+tail lengths plus digest. It rejects final-component symlinks and fails closed \
+when the \
 required platform support is unavailable."""
 rationale = """
 Pinned descriptors prevent a checked child name from being swapped to a \

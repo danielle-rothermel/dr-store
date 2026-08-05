@@ -80,6 +80,32 @@ def test_verify_sidecar_rejects_mismatched_length(
         )
 
 
+@pytest.mark.parametrize(
+    ("expected_head_length", "expected_tail_length", "role"),
+    [
+        pytest.param(-1, 2, "expected_head_length", id="negative-head"),
+        pytest.param(2, -1, "expected_tail_length", id="negative-tail"),
+    ],
+)
+def test_verify_sidecar_rejects_negative_segment_length(
+    tmp_path: Path,
+    expected_head_length: int,
+    expected_tail_length: int,
+    role: str,
+) -> None:
+    payload = b"x"
+    directory = _allocate(tmp_path)
+    (directory.path / SIDECAR_NAME).write_bytes(payload)
+
+    with pytest.raises(SidecarVerificationError, match=role):
+        directory.verify_sidecar(
+            SIDECAR_NAME,
+            expected_digest=hashlib.sha256(payload).hexdigest(),
+            expected_head_length=expected_head_length,
+            expected_tail_length=expected_tail_length,
+        )
+
+
 def test_verify_sidecar_missing_file_is_typed(tmp_path: Path) -> None:
     directory = _allocate(tmp_path)
     with pytest.raises(SidecarVerificationError) as caught:

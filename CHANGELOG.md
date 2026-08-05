@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Translated stored JSON parser limit failures into
+  `ContentHashMismatchError` and rejected negative expected Sidecar segment
+  lengths during verification.
 - Corrected the README, Definitions page, and 0.1.0 and 0.1.1 release notes to
   distinguish persistence, same-directory replacement visibility, and
   descriptor flushing from power-loss durability, and to document

@@ -157,6 +157,15 @@ def verify_sidecar(
     There is no path fallback because a precheck followed by open would race
     name resolution.
     """
+    for role, length in (
+        ("expected_head_length", expected_head_length),
+        ("expected_tail_length", expected_tail_length),
+    ):
+        if length < 0:
+            raise SidecarVerificationError(
+                f"{role} must be a non-negative byte count, got {length!r}"
+            )
+
     sidecar_path = directory / name
     missing_flags = [
         flag

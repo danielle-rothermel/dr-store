@@ -86,7 +86,7 @@ class ObjectStore:
         # Stored parse failures are corruption, not caller validation errors.
         try:
             record = validate_strict_json(json.loads(canonical))
-        except (json.JSONDecodeError, StrictJsonError) as exc:
+        except (ValueError, RecursionError, StrictJsonError) as exc:
             raise ContentHashMismatchError(
                 expected=reference.content_hash,
                 actual="<stored content is not valid strict JSON>",

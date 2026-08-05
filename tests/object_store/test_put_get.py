@@ -10,6 +10,7 @@ from dr_serialize.canonical import (
     JsonEncodeError,
 )
 
+import dr_store.object_store as object_store_module
 from dr_store import (
     ContentHashMismatchError,
     ObjectConflictError,
@@ -171,6 +172,42 @@ def test_get_detects_non_finite_corruption(
     )
     with pytest.raises(ContentHashMismatchError):
         store.get(ref)
+
+
+@pytest.mark.parametrize(
+    "parse_error",
+    [
+        pytest.param(
+            ValueError("integer conversion limit"),
+            id="integer-conversion-limit",
+        ),
+        pytest.param(
+            RecursionError("nesting limit"),
+            id="nesting-limit",
+        ),
+    ],
+)
+def test_get_translates_stored_json_parser_failures(
+    controlled_backend: ControlledBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    parse_error: Exception,
+) -> None:
+    ref = ObjectReference.for_record(SCHEMA, 0)
+    store = _store_with_controlled_canonical(
+        controlled_backend,
+        ref,
+        "0",
+    )
+
+    def fail_parse(_canonical: str) -> object:
+        raise parse_error
+
+    monkeypatch.setattr(object_store_module.json, "loads", fail_parse)
+
+    with pytest.raises(ContentHashMismatchError) as caught:
+        store.get(ref)
+
+    assert caught.value.__cause__ is parse_error
 
 
 def test_get_detects_non_canonical_bytes(
