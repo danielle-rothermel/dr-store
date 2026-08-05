@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
-<title>dr-store · The object storage contract this repo owns</title>
+<title>dr-store · The storage contracts this repo owns</title>
 <style>
   /* Page-local tokens. Purple (--anchor) = main-point accents (.key/.must);
      blue (--accent) = term links (.term-ref), matching doc.css link hue. */
@@ -21,13 +21,13 @@
 <body>
 <main class="wide">
 
-<h1>The dr-store object storage contract</h1>
+<h1>The dr-store storage contracts</h1>
 <p class="dek">A reference for the terms and guarantees that bind dr-store.</p>
 <div class="byline">dr-store · 2026-07-24</div>
 
-<p>This is the vocabulary of the append-only content-addressed object store dr-store implements: the <span class="key">terms</span>, the <span class="key">guarantees</span> that bind this repo, what is in and out of <span class="key">scope</span>, and the <span class="key">mapping</span> from each term to the names actually exported by <a href="https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/__init__.py"><code>dr_store</code></a>.</p>
+<p>This is the vocabulary of the two components dr-store implements — the append-only content-addressed object store, and the Document Directory below it: the <span class="key">terms</span>, the <span class="key">guarantees</span> that bind this repo, what is in and out of <span class="key">scope</span>, and the <span class="key">mapping</span> from each term to the names actually exported by <a href="https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/__init__.py"><code>dr_store</code></a>.</p>
 
-<div class="section-head" id="terms"><h2>Terms</h2></div>
+<div class="section-head" id="terms"><h2>Object Store Terms</h2></div>
 
 <div class="table-wrap">
 <table>
@@ -54,7 +54,7 @@
 </table>
 </div>
 
-<div class="section-head" id="guarantees"><h2>Guarantees</h2></div>
+<div class="section-head" id="guarantees"><h2>Object Store Guarantees</h2></div>
 
 <div class="callout">
   <strong>Stored Content Is Never Overwritten.</strong> Every write is <a class="term-ref" href="#term-append-only">append-only</a>: an absent place accepts a verified value, an identical value replays as idempotent success, and any differing value is a typed <a class="term-ref" href="#term-conflict">conflict</a> that preserves the existing durable value untouched.
@@ -72,7 +72,8 @@
   <li>The contract is <span class="key">domain-neutral</span>: no workflow, retry, campaign, or other domain concept appears anywhere in it.</li>
 </ul>
 
-<div class="section-head" id="scope"><h2>In vs. Out of Scope</h2></div>
+<div class="section-head" id="scope"><h2>Object Store: In vs. Out of Scope</h2></div>
+
 
 <div class="table-wrap">
 <table>
@@ -105,9 +106,9 @@
 </table>
 </div>
 
-<div class="section-head" id="exported-names"><h2>Exported Names</h2></div>
+<div class="section-head" id="exported-names"><h2>Object Store: Exported Names</h2></div>
 
-<p class="aside">Each row maps a term, or a group of supporting exports, to names in <a href="https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/__init__.py"><code>dr_store.__all__</code></a>. Every exported name appears exactly once in the names column; there are no aliases or alternate spellings. The terms <a class="term-ref" href="#term-record">record</a>, <a class="term-ref" href="#term-schema">schema</a>, <a class="term-ref" href="#term-canonical-json">canonical JSON</a>, <a class="term-ref" href="#term-hash">hash</a>, <a class="term-ref" href="#term-key">key</a>, <a class="term-ref" href="#term-binding">binding</a>, <a class="term-ref" href="#term-idempotent-replay">idempotent replay</a>, <a class="term-ref" href="#term-conflict">conflict</a>, <a class="term-ref" href="#term-append-only">append-only</a>, and <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> name concepts rather than exports, so they have no row.</p>
+<p class="aside">Each row maps a term of the object storage contract, or a group of its supporting exports, to names in <a href="https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/__init__.py"><code>dr_store.__all__</code></a>; the <a class="term-ref" href="#term-document-directory">Document Directory</a> section carries its own table for the rest. Every exported name appears exactly once across the two tables; there are no aliases or alternate spellings. The terms <a class="term-ref" href="#term-record">record</a>, <a class="term-ref" href="#term-schema">schema</a>, <a class="term-ref" href="#term-canonical-json">canonical JSON</a>, <a class="term-ref" href="#term-hash">hash</a>, <a class="term-ref" href="#term-key">key</a>, <a class="term-ref" href="#term-binding">binding</a>, <a class="term-ref" href="#term-idempotent-replay">idempotent replay</a>, <a class="term-ref" href="#term-conflict">conflict</a>, <a class="term-ref" href="#term-append-only">append-only</a>, and <a class="term-ref" href="#term-compare-and-set">compare-and-set</a> name concepts rather than exports, so they have no row.</p>
 
 <div class="table-wrap">
 <table>
@@ -157,8 +158,70 @@
 </table>
 </div>
 
+<div class="section-head" id="document-directory"><h2>Document Directory</h2></div>
+
+<p>dr-store's second component stores what a <a class="term-ref" href="#term-record">record</a> cannot: one durable directory carrying an atomically-replaced canonical-JSON <a class="term-ref" href="#term-manifest">manifest</a> plus streamed binary <a class="term-ref" href="#term-sidecar">sidecars</a>. Its vocabulary is disjoint from the object storage contract above — no term here is an <a class="term-ref" href="#term-object-reference">object reference</a>, a <a class="term-ref" href="#term-content-hash">content hash</a>, or a <a class="term-ref" href="#term-binding">binding</a> — and the <a class="term-ref" href="#term-append-only">append-only</a> contract is unchanged by it.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Term</th><th>Definition</th></tr></thead>
+  <tbody>
+    <tr><td><dfn class="term-name" id="term-document-directory">Document Directory</dfn></td><td>One allocated directory with exactly one writer, one <a class="term-ref" href="#term-manifest">manifest</a>, and zero or more <a class="term-ref" href="#term-sidecar">sidecars</a>. It is created under a caller-owned root with a generated name, and its single writer is established by construction, not by locking.</td></tr>
+    <tr><td><dfn class="term-name" id="term-manifest">Manifest</dfn></td><td>The single atomically-replaced <a class="term-ref" href="#term-canonical-json">canonical JSON</a> document of a <a class="term-ref" href="#term-document-directory">document directory</a>, and the source of truth about every <a class="term-ref" href="#term-sidecar">sidecar</a> it describes — meaning, stored segment lengths, and <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>. Its payload is opaque to dr-store, which never reads a field out of it.</td></tr>
+    <tr><td><dfn class="term-name" id="term-sidecar">Sidecar</dfn></td><td>A raw-bytes artifact written incrementally beside the <a class="term-ref" href="#term-manifest">manifest</a>, possibly truncated under caps the caller supplies, and never self-describing: nothing about a sidecar's meaning or completeness can be recovered from the sidecar alone.</td></tr>
+    <tr><td><dfn class="term-name" id="term-sidecar-digest">Sidecar Digest</dfn></td><td>The full 64-character lowercase SHA-256 <a class="term-ref" href="#term-hash">hash</a> of a <a class="term-ref" href="#term-sidecar">sidecar</a>'s stored bytes, after truncation. It is <span class="key">not a</span> <a class="term-ref" href="#term-content-hash">content hash</a>: its input is raw bytes, not the <a class="term-ref" href="#term-canonical-json">canonical JSON</a> of a <a class="term-ref" href="#term-record">record</a>.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout">
+  <strong>A Reader Never Sees A Partial Manifest.</strong> After abrupt process death a reader observes either no <a class="term-ref" href="#term-manifest">manifest</a> or one complete previously-published manifest. The claim is scoped to local macOS filesystems; network mounts and cloud-synchronized directories are outside it.
+</div>
+<ul>
+  <li><span class="must">Allocates</span> a <a class="term-ref" href="#term-document-directory">document directory</a> named <code>&lt;prefix&gt;-&lt;utc-timestamp&gt;-&lt;uuid4&gt;</code> with <span class="key">no retry loop</span>: an existing name is a typed error, never a silent reuse. Concurrent allocation under one root is collision-free.</li>
+  <li><span class="must">Validates</span> prefixes, manifest names, and sidecar names as <span class="key">safe single path segments</span> — no separator, no NUL byte, never <code>.</code> or <code>..</code> — so a name can only ever address a child of its directory.</li>
+  <li><span class="must">Publishes</span> a <a class="term-ref" href="#term-manifest">manifest</a> by writing the complete <a class="term-ref" href="#term-canonical-json">canonical JSON</a> to a temp file in the same directory and renaming it onto the manifest name, flushing file and directory with <code>F_FULLFSYNC</code> where available and <code>fsync</code> as the fallback.</li>
+  <li><span class="must">Computes</span> the <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a> incrementally and finalizes it when the <a class="term-ref" href="#term-sidecar">sidecar</a> is flushed, returning it only in a <code>SidecarSummary</code>, so a <a class="term-ref" href="#term-manifest">manifest</a> embedding a summary's digest structurally cannot precede that flush.</li>
+  <li><span class="must">Reports</span> <code>produced</code> and <code>dropped</code> byte counts alongside the stored segment lengths, so a truncated sidecar states exactly what it discarded.</li>
+  <li><span class="must">Verifies</span> a read-back <a class="term-ref" href="#term-manifest">manifest</a> as strict <span class="key">and canonical</span> JSON, and a <a class="term-ref" href="#term-sidecar">sidecar</a> against a caller-supplied total length and <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>; each fault is a typed error preserving the original OS or decoding exception.</li>
+  <li>The component knows <span class="key">no lifecycle, no manifest schema, no retention policy, and no processes</span>: state machines, payload fields, cap computation, and output draining all belong to the caller.</li>
+</ul>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Term</th><th>Exported names</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><a class="term-ref" href="#term-document-directory">Document Directory</a></td>
+      <td><code>DocumentDirectory</code>, <code>AllocationError</code></td>
+      <td>The <code>DocumentDirectory.allocate</code> class method creates the directory; an unsafe name or a failed <code>mkdir</code> raises <code>AllocationError</code>. <code>open_sidecar</code> opens a <a class="term-ref" href="#term-sidecar">sidecar</a> beside the <a class="term-ref" href="#term-manifest">manifest</a>.</td>
+    </tr>
+    <tr>
+      <td><a class="term-ref" href="#term-manifest">Manifest</a></td>
+      <td><code>ManifestPublishError</code>, <code>ManifestReadError</code></td>
+      <td>The <code>DocumentDirectory.publish</code> method durably replaces the manifest; a non-strict payload or a failed write, rename, or flush raises <code>ManifestPublishError</code>. The <code>DocumentDirectory.read_manifest</code> class method returns the stored payload; an unsafe manifest name or a missing, unreadable, malformed, non-strict, or non-<a class="term-ref" href="#term-canonical-json">canonical</a> document raises <code>ManifestReadError</code>.</td>
+    </tr>
+    <tr>
+      <td><a class="term-ref" href="#term-sidecar">Sidecar</a></td>
+      <td><code>SidecarWriter</code>, <code>SidecarSummary</code></td>
+      <td><code>SidecarWriter.write</code> offers bytes under the caps and <code>finalize</code> flushes and returns the frozen <code>SidecarSummary</code> — stored segment lengths, <code>produced</code>, <code>dropped</code>, and the <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>. dr-store never serializes a summary.</td>
+    </tr>
+    <tr>
+      <td><a class="term-ref" href="#term-sidecar-digest">Sidecar Digest</a></td>
+      <td><code>SidecarVerificationError</code></td>
+      <td>The <code>DocumentDirectory.verify_sidecar</code> class method checks stored bytes against a caller-supplied digest and total segment length; a length or digest disagreement, or an unreadable file, raises <code>SidecarVerificationError</code>.</td>
+    </tr>
+    <tr>
+      <td>Document Directory errors</td>
+      <td><code>DocumentDirectoryError</code></td>
+      <td>The base class every Document Directory failure derives from, independent of <code>StoreError</code> so a caller can branch on one component without catching the other.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
 <div class="colophon">
-  <p><strong>Scope.</strong> This sheet is the authoritative statement of the append-only content-addressed object storage contract dr-store implements. Exported names match <code>src/dr_store/__init__.py</code>.</p>
+  <p><strong>Scope.</strong> This sheet is the authoritative statement of the contracts dr-store implements: the append-only content-addressed object store and the Document Directory. Exported names match <code>src/dr_store/__init__.py</code>.</p>
 </div>
 
 </main>
