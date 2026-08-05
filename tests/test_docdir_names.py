@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from dr_store import AllocationError, DocumentDirectory
+from dr_store import AllocationError, DocumentDirectory, ManifestReadError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -61,7 +61,8 @@ def test_unsafe_manifest_name_is_rejected_on_read(
     tmp_path: Path,
     name: str,
 ) -> None:
-    with pytest.raises(AllocationError):
+    # A read path allocates nothing, so its name fault is a read fault.
+    with pytest.raises(ManifestReadError):
         DocumentDirectory.read_manifest(tmp_path, manifest_name=name)
 
 

@@ -38,6 +38,7 @@ from dr_serialize import (
 
 from dr_store.errors import (
     AllocationError,
+    DocumentDirectoryError,
     ManifestPublishError,
     ManifestReadError,
     SidecarVerificationError,
@@ -50,21 +51,27 @@ _TEMP_SUFFIX = ".tmp"
 _READ_CHUNK_BYTES = 1 << 16
 
 
-def _validate_safe_name(name: str, *, role: str) -> str:
-    """Return ``name`` if it is a safe single path segment, else raise.
+def _validate_safe_name(
+    name: str,
+    *,
+    role: str,
+    error: type[DocumentDirectoryError] = AllocationError,
+) -> None:
+    """Raise ``error`` unless ``name`` is a safe single path segment.
 
     A safe name is a non-empty string that is neither ``.`` nor ``..`` and
     contains no path separator or NUL byte, so it can only ever name a
-    child of the directory it is joined to.
+    child of the directory it is joined to. The raised class follows the
+    path the name arrived on, so a read fault never surfaces as an
+    allocation failure.
     """
     if name in _RESERVED_NAMES:
-        raise AllocationError(f"{role} must be a safe name, got {name!r}")
+        raise error(f"{role} must be a safe name, got {name!r}")
     if any(char in _UNSAFE_NAME_CHARACTERS for char in name):
-        raise AllocationError(
+        raise error(
             f"{role} must be a single path segment with no separator, "
             f"got {name!r}"
         )
-    return name
 
 
 def _flush_descriptor(descriptor: int) -> None:
@@ -100,9 +107,9 @@ class SidecarSummary:
     ``head_length`` and ``tail_length`` are the stored segment lengths in
     bytes, in file order (head segment then tail segment). ``produced`` is
     the total number of bytes offered to the writer and ``dropped`` the
-    number the caps discarded, so under non-negative caps ``produced ==
-    head_length + tail_length + dropped``. ``digest`` is the Sidecar
-    Digest: the full 64-character lowercase SHA-256 of the stored bytes.
+    number the caps discarded, so ``produced == head_length + tail_length
+    + dropped``. ``digest`` is the Sidecar Digest: the full 64-character
+    lowercase SHA-256 of the stored bytes.
 
     dr-store never serializes a summary; callers project it into their own
     models and extract read-back expectations from there.
@@ -124,7 +131,9 @@ class SidecarWriter:
     No caps is unbounded: an unbounded ``head_cap`` streams every byte to
     the head segment, so nothing ever reaches the tail. ``tail_cap=0`` is
     head-only, and so is an unset ``tail_cap`` under a finite ``head_cap``:
-    the tail buffer is bounded by ``tail_cap``, never by the stream.
+    the tail buffer is bounded by ``tail_cap``, never by the stream. A
+    negative cap is a cap of zero, so the accounting a summary reports
+    holds for any cap value a caller passes.
 
     A :class:`SidecarSummary` exists only after :meth:`finalize`, so a
     Manifest embedding a Sidecar Digest structurally cannot precede the
@@ -139,8 +148,8 @@ class SidecarWriter:
         tail_cap: int | None = None,
     ) -> None:
         self._path = path
-        self._head_cap = head_cap
-        self._tail_cap = 0 if tail_cap is None else tail_cap
+        self._head_cap = None if head_cap is None else max(head_cap, 0)
+        self._tail_cap = 0 if tail_cap is None else max(tail_cap, 0)
         self._head_length = 0
         self._produced = 0
         self._tail = bytearray()
@@ -314,25 +323,12 @@ class DocumentDirectory:
     ) -> SidecarWriter:
         """Open a Sidecar for incremental writing beside the Manifest.
 
-        ``name`` is a validated safe single path segment, and may name
-        neither the Manifest nor the temp file :meth:`publish` renames onto
-        it: one directory holds exactly one Manifest, so a Sidecar can never
-        occupy or destroy its path. The reserved comparison is
-        case-insensitive, because a case-insensitive filesystem resolves a
-        case variant onto the very same file. The caps are the caller's
-        whole contribution to truncation: ``head_cap`` bytes fill first and
-        a ring buffer keeps the last ``tail_cap`` bytes of the remainder.
+        ``name`` is a validated safe single path segment. The caps are the
+        caller's whole contribution to truncation: ``head_cap`` bytes fill
+        first and a ring buffer keeps the last ``tail_cap`` bytes of the
+        remainder.
         """
         _validate_safe_name(name, role="sidecar name")
-        reserved = (
-            self._manifest_name.casefold(),
-            self._temp_path.name.casefold(),
-        )
-        if name.casefold() in reserved:
-            raise AllocationError(
-                f"sidecar name {name!r} is reserved by the manifest of "
-                f"{str(self._path)!r}"
-            )
         return SidecarWriter(
             self._path / name,
             head_cap=head_cap,
@@ -349,12 +345,17 @@ class DocumentDirectory:
         """Read the Manifest of the directory at ``path``, verified.
 
         The stored bytes must be strict finite JSON *and* in canonical form;
-        a missing file, unreadable bytes, malformed or non-strict JSON, and
-        byte-level drift from the canonical rendering all raise
+        an unsafe ``manifest_name``, a missing file, unreadable bytes,
+        malformed or non-strict JSON, and byte-level drift from the
+        canonical rendering all raise
         :class:`~dr_store.errors.ManifestReadError` with the originating
         error preserved as ``__cause__``.
         """
-        _validate_safe_name(manifest_name, role="manifest_name")
+        _validate_safe_name(
+            manifest_name,
+            role="manifest_name",
+            error=ManifestReadError,
+        )
         manifest_path = Path(path) / manifest_name
         try:
             raw = manifest_path.read_bytes()

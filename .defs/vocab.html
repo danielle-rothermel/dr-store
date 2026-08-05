@@ -74,7 +74,6 @@
 
 <div class="section-head" id="scope"><h2>Object Store: In vs. Out of Scope</h2></div>
 
-<p class="aside">This table scopes the object storage contract above, not the whole sheet: the <a class="term-ref" href="#term-document-directory">Document Directory</a> section below states its own boundaries.</p>
 
 <div class="table-wrap">
 <table>
@@ -169,10 +168,8 @@
   <tbody>
     <tr><td><dfn class="term-name" id="term-document-directory">Document Directory</dfn></td><td>One allocated directory with exactly one writer, one <a class="term-ref" href="#term-manifest">manifest</a>, and zero or more <a class="term-ref" href="#term-sidecar">sidecars</a>. It is created under a caller-owned root with a generated name, and its single writer is established by construction, not by locking.</td></tr>
     <tr><td><dfn class="term-name" id="term-manifest">Manifest</dfn></td><td>The single atomically-replaced <a class="term-ref" href="#term-canonical-json">canonical JSON</a> document of a <a class="term-ref" href="#term-document-directory">document directory</a>, and the source of truth about every <a class="term-ref" href="#term-sidecar">sidecar</a> it describes — meaning, stored segment lengths, and <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>. Its payload is opaque to dr-store, which never reads a field out of it.</td></tr>
-    <tr><td><dfn class="term-name" id="term-sidecar">Sidecar</dfn></td><td>A raw-bytes artifact written incrementally beside the <a class="term-ref" href="#term-manifest">manifest</a>, possibly <a class="term-ref" href="#term-truncation">truncated</a>, and never self-describing: nothing about a sidecar's meaning or completeness can be recovered from the sidecar alone.</td></tr>
-    <tr><td><dfn class="term-name" id="term-sidecar-digest">Sidecar Digest</dfn></td><td>The full 64-character lowercase SHA-256 <a class="term-ref" href="#term-hash">hash</a> of a <a class="term-ref" href="#term-sidecar">sidecar</a>'s stored bytes, after <a class="term-ref" href="#term-truncation">truncation</a>. It is <span class="key">not a</span> <a class="term-ref" href="#term-content-hash">content hash</a>: its input is raw bytes, not the <a class="term-ref" href="#term-canonical-json">canonical JSON</a> of a <a class="term-ref" href="#term-record">record</a>.</td></tr>
-    <tr><td><dfn class="term-name" id="term-truncation">Truncation</dfn></td><td>The writer-owned mechanics that bound a <a class="term-ref" href="#term-sidecar">sidecar</a>: a head cap of bytes fills first and a ring buffer keeps the last tail-cap bytes of the remainder, stored as head segment then tail segment in one file. The caller owns only the cap values.</td></tr>
-    <tr><td><dfn class="term-name" id="term-atomic-publish">Atomic Publish</dfn></td><td>The durable replacement of a <a class="term-ref" href="#term-manifest">manifest</a>: the complete <a class="term-ref" href="#term-canonical-json">canonical JSON</a> is written to a temp file in the same directory, flushed, renamed onto the manifest name, and the directory entry flushed. It is last-write-wins; dr-store owns no lifecycle state and judges no transition.</td></tr>
+    <tr><td><dfn class="term-name" id="term-sidecar">Sidecar</dfn></td><td>A raw-bytes artifact written incrementally beside the <a class="term-ref" href="#term-manifest">manifest</a>, possibly truncated under caps the caller supplies, and never self-describing: nothing about a sidecar's meaning or completeness can be recovered from the sidecar alone.</td></tr>
+    <tr><td><dfn class="term-name" id="term-sidecar-digest">Sidecar Digest</dfn></td><td>The full 64-character lowercase SHA-256 <a class="term-ref" href="#term-hash">hash</a> of a <a class="term-ref" href="#term-sidecar">sidecar</a>'s stored bytes, after truncation. It is <span class="key">not a</span> <a class="term-ref" href="#term-content-hash">content hash</a>: its input is raw bytes, not the <a class="term-ref" href="#term-canonical-json">canonical JSON</a> of a <a class="term-ref" href="#term-record">record</a>.</td></tr>
   </tbody>
 </table>
 </div>
@@ -183,9 +180,9 @@
 <ul>
   <li><span class="must">Allocates</span> a <a class="term-ref" href="#term-document-directory">document directory</a> named <code>&lt;prefix&gt;-&lt;utc-timestamp&gt;-&lt;uuid4&gt;</code> with <span class="key">no retry loop</span>: an existing name is a typed error, never a silent reuse. Concurrent allocation under one root is collision-free.</li>
   <li><span class="must">Validates</span> prefixes, manifest names, and sidecar names as <span class="key">safe single path segments</span> — no separator, no NUL byte, never <code>.</code> or <code>..</code> — so a name can only ever address a child of its directory.</li>
-  <li><span class="must">Publishes</span> through <a class="term-ref" href="#term-atomic-publish">atomic publish</a> every time, flushing file and directory with <code>F_FULLFSYNC</code> where available and <code>fsync</code> as the fallback.</li>
+  <li><span class="must">Publishes</span> a <a class="term-ref" href="#term-manifest">manifest</a> by writing the complete <a class="term-ref" href="#term-canonical-json">canonical JSON</a> to a temp file in the same directory and renaming it onto the manifest name, flushing file and directory with <code>F_FULLFSYNC</code> where available and <code>fsync</code> as the fallback.</li>
   <li><span class="must">Computes</span> the <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a> incrementally and finalizes it when the <a class="term-ref" href="#term-sidecar">sidecar</a> is flushed, so a <a class="term-ref" href="#term-manifest">manifest</a> embedding a digest structurally cannot precede that flush.</li>
-  <li><span class="must">Reports</span> <code>produced</code> and <code>dropped</code> byte counts alongside the stored segment lengths, so a <a class="term-ref" href="#term-truncation">truncated</a> sidecar states exactly what it discarded.</li>
+  <li><span class="must">Reports</span> <code>produced</code> and <code>dropped</code> byte counts alongside the stored segment lengths, so a truncated sidecar states exactly what it discarded.</li>
   <li><span class="must">Verifies</span> a read-back <a class="term-ref" href="#term-manifest">manifest</a> as strict <span class="key">and canonical</span> JSON, and a <a class="term-ref" href="#term-sidecar">sidecar</a> against a caller-supplied total length and <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>; each fault is a typed error preserving the original OS or decoding exception.</li>
   <li>The component knows <span class="key">no lifecycle, no manifest schema, no retention policy, and no processes</span>: state machines, payload fields, cap computation, and output draining all belong to the caller.</li>
 </ul>
@@ -200,17 +197,12 @@
       <td>The <code>DocumentDirectory.allocate</code> class method creates the directory; an unsafe name or a failed <code>mkdir</code> raises <code>AllocationError</code>. <code>open_sidecar</code> opens a <a class="term-ref" href="#term-sidecar">sidecar</a> beside the <a class="term-ref" href="#term-manifest">manifest</a>.</td>
     </tr>
     <tr>
-      <td><a class="term-ref" href="#term-atomic-publish">Atomic Publish</a></td>
-      <td><code>ManifestPublishError</code></td>
-      <td>The <code>DocumentDirectory.publish</code> method performs one <a class="term-ref" href="#term-atomic-publish">atomic publish</a>; a non-strict payload or a failed write, rename, or flush raises <code>ManifestPublishError</code>.</td>
-    </tr>
-    <tr>
       <td><a class="term-ref" href="#term-manifest">Manifest</a></td>
-      <td><code>ManifestReadError</code></td>
-      <td>The <code>DocumentDirectory.read_manifest</code> class method returns the stored payload; a missing, unreadable, malformed, non-strict, or non-<a class="term-ref" href="#term-canonical-json">canonical</a> document raises <code>ManifestReadError</code>.</td>
+      <td><code>ManifestPublishError</code>, <code>ManifestReadError</code></td>
+      <td>The <code>DocumentDirectory.publish</code> method durably replaces the manifest; a non-strict payload or a failed write, rename, or flush raises <code>ManifestPublishError</code>. The <code>DocumentDirectory.read_manifest</code> class method returns the stored payload; an unsafe manifest name or a missing, unreadable, malformed, non-strict, or non-<a class="term-ref" href="#term-canonical-json">canonical</a> document raises <code>ManifestReadError</code>.</td>
     </tr>
     <tr>
-      <td><a class="term-ref" href="#term-sidecar">Sidecar</a> and <a class="term-ref" href="#term-truncation">truncation</a></td>
+      <td><a class="term-ref" href="#term-sidecar">Sidecar</a></td>
       <td><code>SidecarWriter</code>, <code>SidecarSummary</code></td>
       <td><code>SidecarWriter.write</code> offers bytes under the caps and <code>finalize</code> flushes and returns the frozen <code>SidecarSummary</code> — stored segment lengths, <code>produced</code>, <code>dropped</code>, and the <a class="term-ref" href="#term-sidecar-digest">sidecar digest</a>. dr-store never serializes a summary.</td>
     </tr>

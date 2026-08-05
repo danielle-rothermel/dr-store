@@ -133,14 +133,13 @@ class DocumentDirectoryError(Exception):
 
 
 class AllocationError(DocumentDirectoryError):
-    """A Document Directory or one of its Sidecars could not be created.
+    """A Document Directory or one of its Sidecars faulted on the write side.
 
-    Raised when a name component is not a safe single segment, when a
-    Sidecar name is one the Manifest reserves, when the generated directory
-    already exists (a collision is surfaced, never retried), when the
-    underlying ``mkdir`` fails, and when opening, writing, or durably
-    flushing a Sidecar file fails. The originating OS error is preserved as
-    ``__cause__``.
+    Raised when a name the component creates is not a safe single segment,
+    when the generated directory already exists (a collision is surfaced,
+    never retried), when the underlying ``mkdir`` fails, and when opening,
+    writing, or durably flushing a Sidecar file fails. The originating OS
+    error is preserved as ``__cause__``.
     """
 
 
@@ -156,10 +155,10 @@ class ManifestPublishError(DocumentDirectoryError):
 class ManifestReadError(DocumentDirectoryError):
     """A Manifest could not be read back as a canonical strict-JSON value.
 
-    Covers a missing file, unreadable bytes, malformed JSON, non-strict
-    JSON (a non-finite token), and bytes that decode but are not in
-    canonical form. The originating OS or decoding error is preserved as
-    ``__cause__``.
+    Covers a Manifest name that is not a safe single segment, a missing
+    file, unreadable bytes, malformed JSON, non-strict JSON (a non-finite
+    token), and bytes that decode but are not in canonical form. The
+    originating OS or decoding error is preserved as ``__cause__``.
     """
 
 

@@ -160,6 +160,33 @@ def test_accounting_holds_for_every_chunking(
     assert total == summary.produced == len(STREAM)
 
 
+@pytest.mark.parametrize(
+    ("head_cap", "tail_cap"),
+    [(-5, -5), (-1, 60), (100, -1)],
+)
+def test_a_negative_cap_is_a_cap_of_zero(
+    tmp_path: Path,
+    head_cap: int,
+    tail_cap: int,
+) -> None:
+    # A negative cap stores nothing under it rather than over-counting the
+    # eviction, so dropped can never exceed produced.
+    path, summary = _write(
+        tmp_path,
+        STREAM,
+        head_cap=head_cap,
+        tail_cap=tail_cap,
+    )
+    expected = STREAM[: max(head_cap, 0)] or b""
+    if tail_cap > 0:
+        expected += STREAM[-tail_cap:]
+    assert path.read_bytes() == expected
+    assert summary.head_length == max(head_cap, 0)
+    assert summary.tail_length == max(tail_cap, 0)
+    total = summary.head_length + summary.tail_length + summary.dropped
+    assert total == summary.produced == len(STREAM)
+
+
 def test_an_unset_tail_cap_stores_only_the_head(tmp_path: Path) -> None:
     # The tail buffer is bounded by tail_cap, never by the stream: with no
     # tail cap under a finite head cap the remainder is dropped, not held.
@@ -265,26 +292,6 @@ def test_sidecar_names_are_validated(tmp_path: Path) -> None:
     for bad in ("..", ".", "", "nested/name", "esc\\ape", "nul\x00byte"):
         with pytest.raises(AllocationError):
             directory.open_sidecar(bad)
-
-
-def test_manifest_reserved_sidecar_names_are_rejected(tmp_path: Path) -> None:
-    # One directory holds exactly one Manifest: a Sidecar may occupy
-    # neither its path nor the temp path publish renames onto it. A
-    # case-insensitive filesystem resolves a case variant onto that same
-    # file, so the case variants are reserved too.
-    directory = _allocate(tmp_path)
-    directory.publish({"state": "started"})
-    for reserved in (
-        MANIFEST_NAME,
-        f"{MANIFEST_NAME}.tmp",
-        MANIFEST_NAME.upper(),
-        MANIFEST_NAME.capitalize(),
-        f"{MANIFEST_NAME}.tmp".upper(),
-    ):
-        with pytest.raises(AllocationError, match="reserved"):
-            directory.open_sidecar(reserved)
-    assert (directory.path / MANIFEST_NAME).read_bytes() != b""
-    assert [p.name for p in directory.path.iterdir()] == [MANIFEST_NAME]
 
 
 def test_unopenable_sidecar_is_typed(tmp_path: Path) -> None:

@@ -36,6 +36,8 @@ FIRST: Jsonable = {"state": "started", "sidecars": []}
 SECOND: Jsonable = {"state": "finished", "sidecars": ["stdout.bin"]}
 FROZEN_NOW = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
 WATCHDOG_SECONDS = 60
+PUBLICATIONS = 256
+MINIMUM_OBSERVATIONS = 16
 
 
 class _FrozenDatetime(dt.datetime):
@@ -155,34 +157,43 @@ def test_a_racing_reader_never_observes_a_partial_manifest(
     # alternating payloads. Both start from one barrier and the reader
     # stops on an explicit event, never on elapsed time. Every observation
     # the reader collects must be one complete published document: the
-    # atomic replace admits no prefix of one.
+    # atomic replace admits no prefix of one. A torn read raises inside the
+    # reader thread, where an unasserted exception would be invisible, so
+    # the failure is carried back and asserted on here.
     directory = _allocate(tmp_path)
     directory.publish(FIRST)
     start = threading.Barrier(2)
     publishing_done = threading.Event()
     observed: list[Jsonable] = []
+    failures: list[BaseException] = []
 
     def reader() -> None:
         start.wait()
-        while not publishing_done.is_set():
-            observed.append(
-                DocumentDirectory.read_manifest(
-                    directory.path,
-                    manifest_name=MANIFEST_NAME,
+        try:
+            while not publishing_done.is_set():
+                observed.append(
+                    DocumentDirectory.read_manifest(
+                        directory.path,
+                        manifest_name=MANIFEST_NAME,
+                    )
                 )
-            )
+        except BaseException as exc:  # noqa: BLE001 - carried to the asserts
+            failures.append(exc)
 
     watching = threading.Thread(target=reader)
     watching.start()
     try:
         start.wait()
-        for index in range(256):
+        for index in range(PUBLICATIONS):
             directory.publish(SECOND if index % 2 else FIRST)
     finally:
         publishing_done.set()
         watching.join(timeout=WATCHDOG_SECONDS)
     assert not watching.is_alive()
-    assert observed
+    assert failures == []
+    # A reader that barely ran would satisfy the payload assertion
+    # vacuously, so it must have raced a meaningful share of the publishes.
+    assert len(observed) >= MINIMUM_OBSERVATIONS
     assert all(seen in (FIRST, SECOND) for seen in observed)
 
 

@@ -13,8 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `exist_ok=False` so a collision is typed rather than retried), publishes
   one atomically-replaced canonical-JSON Manifest, and opens streamed
   binary Sidecars beside it. Prefixes, Manifest names, and Sidecar names
-  are validated safe single path segments, and a Sidecar may name neither
-  the Manifest nor the temp file `publish()` renames onto it.
+  are validated safe single path segments.
 - Atomic durable publish: every `publish()` writes the complete canonical
   JSON to a temp file in the same directory, flushes it with `F_FULLFSYNC`
   where available and `os.fsync` otherwise, atomically renames it onto the
@@ -35,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `ManifestReadError`, and `SidecarVerificationError`, each preserving the
   originating OS or decoding exception as `__cause__`.
 - Vocabulary sheet section defining the Document Directory contract:
-  Manifest, Sidecar, Sidecar Digest, Truncation, and Atomic Publish.
+  Document Directory, Manifest, Sidecar, and Sidecar Digest.
 
 ## [0.1.0] - 2026-07-24
 
