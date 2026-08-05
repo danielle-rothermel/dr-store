@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Reorganized the implementation around the top-level functional areas
+  `content_addressing`, `object_store`, `storage_backends`, and
+  `document_directory`, with supporting errors and filesystem mechanics under
+  `core`. The flat `dr_store` exports and their behavior are unchanged.
+  Internal module paths are a hard cutover with no compatibility aliases;
+  existing pickle payloads tied to the previous defining modules are not
+  compatible with this layout.
+
 ## [0.1.1] - 2026-08-05
 
 ### Added

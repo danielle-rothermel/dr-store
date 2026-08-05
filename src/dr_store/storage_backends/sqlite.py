@@ -19,7 +19,7 @@ import threading
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from dr_store.backends.types import BindOutcome, PutOutcome
+from dr_store.storage_backends.contract import BindOutcome, PutOutcome
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

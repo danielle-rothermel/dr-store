@@ -1,4 +1,4 @@
-"""Sidecar truncation mechanics, accounting, and verified read-back.
+"""Document Directory Sidecar retention, accounting, and read-back.
 
 The writer owns truncation entirely: ``head_cap`` bytes fill first, a ring
 buffer keeps the last ``tail_cap`` bytes of the remainder, and the stored
@@ -19,8 +19,8 @@ from dr_store import (
     DocumentDirectory,
     SidecarSummary,
     SidecarVerificationError,
-    docdir,
 )
+from dr_store.document_directory import sidecar as sidecar_module
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -308,7 +308,7 @@ def test_a_failed_flush_is_typed_and_closes_the_handle(
     def failing_flush(_descriptor: int) -> None:
         raise OSError("flush refused")
 
-    monkeypatch.setattr(docdir, "_flush_descriptor", failing_flush)
+    monkeypatch.setattr(sidecar_module, "flush_descriptor", failing_flush)
     with pytest.raises(AllocationError) as caught:
         writer.finalize()
     assert isinstance(caught.value.__cause__, OSError)

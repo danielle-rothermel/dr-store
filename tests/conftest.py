@@ -17,7 +17,7 @@ from dr_store import MemoryBackend, ObjectStore, SqliteBackend
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from dr_store.backends.base import Backend
+    from dr_store.storage_backends.contract import Backend
 
 
 @pytest.fixture(params=["memory", "sqlite"])

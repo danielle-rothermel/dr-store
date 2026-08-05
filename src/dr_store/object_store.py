@@ -4,7 +4,8 @@
 rule -- canonicalization (once, through dr-serialize), Content Hash
 verification on write and on every read, idempotent replay, typed
 conflicts, and the four-row atomic binding table -- and delegates only
-atomic durability to a :class:`~dr_store.backends.base.Backend`.
+atomic durability to a
+:class:`~dr_store.storage_backends.contract.Backend`.
 
 The store is deliberately domain-neutral: the binding key is an opaque
 caller-owned string and no Whetstone, Rollout, workflow, retry, or campaign
@@ -24,17 +25,17 @@ from dr_serialize import (
     validate_strict_json,
 )
 
-from dr_store.errors import (
+from dr_store.content_addressing import ObjectReference
+from dr_store.core.errors import (
     BindingConflictError,
     ContentHashMismatchError,
     ObjectConflictError,
     ObjectNotFoundError,
     SchemaMismatchError,
 )
-from dr_store.references import ObjectReference
 
 if TYPE_CHECKING:
-    from dr_store.backends.base import Backend
+    from dr_store.storage_backends.contract import Backend
 
 
 class BindStatus(enum.Enum):
@@ -110,7 +111,7 @@ class ObjectStore:
         schema on every read. Raises :class:`ObjectNotFoundError` when
         nothing resolves the reference, :class:`SchemaMismatchError` when
         stored content is filed under a different schema, and
-        :class:`~dr_store.errors.ContentHashMismatchError` when stored
+        :class:`~dr_store.core.errors.ContentHashMismatchError` when stored
         content no longer hashes to its reference (corruption).
         """
         stored = self._backend.get_object(

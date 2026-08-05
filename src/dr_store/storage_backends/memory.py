@@ -2,14 +2,15 @@
 
 Two dictionaries under one lock implement the append-only object and
 binding tables. Atomicity holds within a single process only; for durable
-cross-process use choose :class:`~dr_store.backends.sqlite.SqliteBackend`.
+cross-process use choose
+:class:`~dr_store.storage_backends.sqlite.SqliteBackend`.
 """
 
 from __future__ import annotations
 
 import threading
 
-from dr_store.backends.types import BindOutcome, PutOutcome
+from dr_store.storage_backends.contract import BindOutcome, PutOutcome
 
 
 class MemoryBackend:
