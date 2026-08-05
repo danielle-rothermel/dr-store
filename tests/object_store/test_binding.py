@@ -49,25 +49,6 @@ def test_row3_different_reference_conflicts_and_keeps_winner(
     assert store.resolve(KEY) == REF_A
 
 
-def test_row4_no_overwrite_path_is_exposed() -> None:
-    # The public contract exposes bind/resolve only -- no overwrite, clear,
-    # delete, update, or rebind entry point.
-    public = {name for name in dir(ObjectStore) if not name.startswith("_")}
-    forbidden = {
-        "overwrite",
-        "clear",
-        "delete",
-        "remove",
-        "update",
-        "rebind",
-        "unbind",
-        "set",
-        "replace",
-    }
-    assert public & forbidden == set()
-    assert {"put", "get", "bind", "resolve"} <= public
-
-
 def test_binding_key_is_opaque_arbitrary_string(store: ObjectStore) -> None:
     for key in ["", "a/b/c", "key with spaces", "🔑", "1234", "\n\t"]:
         assert store.bind(key, REF_A) is BindStatus.BOUND

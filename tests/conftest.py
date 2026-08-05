@@ -1,30 +1,38 @@
-"""Shared fixtures: run the whole contract against every backend.
-
-The contract is backend-neutral, so the same behavioral tests run against
-the in-memory backend and the durable SQLite backend via one parametrized
-``store`` fixture. A behavior proven for one backend but not the other is
-not proven for the contract.
-"""
+"""Named factories for comparative Memory and SQLite contract tests."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
-from dr_store import MemoryBackend, ObjectStore, SqliteBackend
+from dr_store import Backend, MemoryBackend, ObjectStore, SqliteBackend
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from dr_store.storage_backends.contract import Backend
+type BackendFactory = Callable[[Path], Backend]
 
 
-@pytest.fixture(params=["memory", "sqlite"])
-def backend(request: pytest.FixtureRequest, tmp_path: Path) -> Backend:
-    if request.param == "memory":
-        return MemoryBackend()
-    return SqliteBackend(tmp_path / "store.db")
+def _memory_backend(_path: Path) -> Backend:
+    return MemoryBackend()
+
+
+def _sqlite_backend(path: Path) -> Backend:
+    return SqliteBackend(path)
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(_memory_backend, id="memory"),
+        pytest.param(_sqlite_backend, id="sqlite"),
+    ]
+)
+def backend_factory(request: pytest.FixtureRequest) -> BackendFactory:
+    return request.param
+
+
+@pytest.fixture
+def backend(backend_factory: BackendFactory, tmp_path: Path) -> Backend:
+    return backend_factory(tmp_path / "store.db")
 
 
 @pytest.fixture
