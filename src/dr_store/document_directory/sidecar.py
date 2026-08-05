@@ -3,13 +3,34 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
+from contextlib import suppress
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dr_store.core.errors import AllocationError, SidecarVerificationError
 from dr_store.core.filesystem import flush_descriptor
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 _READ_CHUNK_BYTES = 1 << 16
+_OPEN_SUPPORTS_DIR_FD = os.open in getattr(os, "supports_dir_fd", ())
+_REQUIRED_OPEN_FLAGS = (
+    "O_CLOEXEC",
+    "O_DIRECTORY",
+    "O_NOFOLLOW",
+    "O_NONBLOCK",
+)
+
+
+def _require_regular_file(metadata: os.stat_result, path: Path) -> None:
+    """Reject a descriptor whose inspected target is not a regular file."""
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SidecarVerificationError(
+            f"sidecar {str(path)!r} is not a regular file"
+        )
 
 
 def _validate_cap(cap: int | None, *, role: str) -> None:
@@ -145,26 +166,69 @@ class SidecarWriter:
 
 
 def verify_sidecar(
-    path: str | Path,
+    directory: Path,
+    name: str,
     *,
     expected_digest: str,
     expected_head_length: int,
     expected_tail_length: int,
 ) -> None:
-    """Check a Sidecar file at ``path`` against caller expectations."""
-    sidecar_path = Path(path)
+    """Verify a regular direct child through one pinned descriptor.
+
+    This path requires directory-relative ``os.open`` plus the platform flags
+    needed to refuse final symlinks for both the directory authority and its
+    child, avoid blocking on special files, keep descriptors out of child
+    processes, and require the directory itself.
+    There is deliberately no path-based fallback because any precheck followed
+    by a normal open would reintroduce a name-resolution race.
+    """
+    sidecar_path = directory / name
+    missing_flags = [
+        flag
+        for flag in _REQUIRED_OPEN_FLAGS
+        if not isinstance(getattr(os, flag, None), int)
+    ]
+    if not _OPEN_SUPPORTS_DIR_FD or missing_flags:
+        detail = ", ".join(missing_flags) or "os.open(dir_fd=...)"
+        raise SidecarVerificationError(
+            "atomic no-follow Sidecar verification is unsupported: "
+            f"missing {detail}"
+        )
+
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    child_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     expected_length = expected_head_length + expected_tail_length
     digest = hashlib.sha256()
     actual_length = 0
+    directory_descriptor: int | None = None
+    child_descriptor: int | None = None
     try:
-        with sidecar_path.open("rb") as stored:
-            while chunk := stored.read(_READ_CHUNK_BYTES):
-                digest.update(chunk)
-                actual_length += len(chunk)
-    except OSError as exc:
+        directory_descriptor = os.open(directory, directory_flags)
+        child_descriptor = os.open(
+            name,
+            child_flags,
+            dir_fd=directory_descriptor,
+        )
+        metadata = os.fstat(child_descriptor)
+        _require_regular_file(metadata, sidecar_path)
+        while chunk := os.read(child_descriptor, _READ_CHUNK_BYTES):
+            digest.update(chunk)
+            actual_length += len(chunk)
+    except SidecarVerificationError:
+        raise
+    except (NotImplementedError, OSError) as exc:
         raise SidecarVerificationError(
             f"could not read sidecar {str(sidecar_path)!r}"
         ) from exc
+    finally:
+        if child_descriptor is not None:
+            with suppress(OSError):
+                os.close(child_descriptor)
+        if directory_descriptor is not None:
+            with suppress(OSError):
+                os.close(directory_descriptor)
     if actual_length != expected_length:
         raise SidecarVerificationError(
             f"sidecar {str(sidecar_path)!r} length mismatch: expected "

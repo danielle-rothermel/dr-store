@@ -135,7 +135,10 @@ class Backend(Protocol):
 A Document Directory holds one atomically published canonical-JSON manifest
 and zero or more streamed binary sidecars. The manifest remains the caller's
 source of truth; the directory owns publication, retention, and verification
-mechanics without interpreting the payload.
+mechanics without interpreting the payload. Sidecar verification accepts one
+safe direct-child name, refuses final-component symlinks for both the Document
+Directory and named child, requires the child to be a regular file, and
+streams bounded reads from the same descriptor it inspected.
 
 ```python
 class DocumentDirectory:
@@ -166,10 +169,9 @@ class DocumentDirectory:
         manifest_name: str,
     ) -> Jsonable: ...
 
-    @classmethod
     def verify_sidecar(
-        cls,
-        path: str | Path,
+        self,
+        name: str,
         *,
         expected_digest: str,
         expected_head_length: int,

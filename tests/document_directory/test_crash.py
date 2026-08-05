@@ -196,8 +196,9 @@ def test_kill_after_finalize_keeps_a_verifiable_sidecar(
     finalized = child.step("finalize-sidecar")
     child.kill_now()
     path = Path(str(allocated["path"]))
-    DocumentDirectory.verify_sidecar(
-        path / SIDECAR_NAME,
+    directory = DocumentDirectory(path, MANIFEST_NAME)
+    directory.verify_sidecar(
+        SIDECAR_NAME,
         expected_digest=str(finalized["digest"]),
         expected_head_length=int(str(finalized["head_length"])),
         expected_tail_length=int(str(finalized["tail_length"])),
@@ -220,8 +221,9 @@ def test_kill_after_final_publish_embeds_the_verified_sidecar(
     child.kill_now()
     path = Path(str(allocated["path"]))
     assert _manifest_or_none(path) == SECOND
-    DocumentDirectory.verify_sidecar(
-        path / SIDECAR_NAME,
+    directory = DocumentDirectory(path, MANIFEST_NAME)
+    directory.verify_sidecar(
+        SIDECAR_NAME,
         expected_digest=str(finalized["digest"]),
         expected_head_length=int(str(finalized["head_length"])),
         expected_tail_length=int(str(finalized["tail_length"])),

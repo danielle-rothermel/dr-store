@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `DocumentDirectory.verify_sidecar` accepts a safe direct-child Sidecar name
+  on a directory instance. Verification opens the Document Directory as its
+  authority, refuses final-component symlinks for both that directory and its
+  named child, requires a regular child file, and streams bounded reads from
+  the exact descriptor it inspected. Platforms without directory-relative
+  no-follow opens fail closed.
 - Reorganized the implementation around the top-level functional areas
   `content_addressing`, `object_store`, `storage_backends`, and
   `document_directory`, with supporting errors and filesystem mechanics under
