@@ -202,9 +202,9 @@ is_a = ["hash"]
 name = "record cache"
 definition = """
 The memoization facade that binds cache keys to object references over an \
-object store and returns the stored record for a key. It adds no delete, \
-expiry, eviction, or size-cap path."""
-exported_symbols = ["RecordCache"]
+object store and returns a typed hit containing the stored record for a key. \
+It adds no delete, expiry, eviction, or size-cap path."""
+exported_symbols = ["RecordCache", "CacheHit"]
 categories = ["record caching"]
 
 [[terms]]
@@ -222,5 +222,6 @@ part_of = ["record cache"]
 name = "best-effort read"
 definition = """
 A read that reports an absent, missing, or unverifiable stored value as a miss \
-rather than a failure. Caller-argument faults are still raised."""
+rather than a failure. Invalid requested schemas and operational backend faults \
+are still raised."""
 categories = ["record caching"]

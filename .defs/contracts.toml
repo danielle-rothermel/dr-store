@@ -172,16 +172,19 @@ check = "uv run pytest -q tests/document_directory/test_sidecar_verification.py"
 [[contracts]]
 title = "Record cache reads are best-effort and entries are never rebound"
 statement = """
-A record cache read returns a record only when the key is bound and the \
-resolved reference passes a verified get under the requested schema; an \
-unbound key, missing content, schema mismatch, and corruption all report a \
-miss instead of raising. A cache put binds its key once and returns the \
-existing winner on conflict, so invalidation happens by versioning the \
-caller-owned key namespace rather than by deleting or expiring an entry."""
+A record cache read validates its requested schema before storage access and \
+returns a typed hit only when the key is bound and the resolved reference passes \
+a verified get under that schema. An unbound key, missing content, schema \
+mismatch, and unverifiable stored object or binding all report a miss; \
+operational backend failures propagate. A cache put binds its key once and \
+returns the existing winner on conflict, so invalidation happens by versioning \
+the caller-owned key namespace rather than by deleting or expiring an entry."""
 rationale = """
-Memoization must not turn a storage fault into a caller failure, while caller \
-record-validation faults stay visible. First-writer-wins keeps a deterministic \
-key stable when the caller's producer is not, and the absence of any removal \
-path leaves key versioning as the whole invalidation story."""
+Expected absence and unverifiable stored data do not prevent recomputation, \
+while invalid requested schemas, caller record-validation faults, and \
+unavailable storage stay visible. A typed hit preserves strict JSON null as a \
+record distinct from a miss. First-writer-wins keeps a deterministic key stable \
+when the caller's producer is not, and the absence of any removal path leaves \
+key versioning as the whole invalidation story."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/record_cache/test_record_cache.py"

@@ -17,6 +17,14 @@ CONTENT_HASH_LENGTH = 64
 _HEX_DIGITS = frozenset("0123456789abcdef")
 
 
+def _validate_reference_schema(schema: object) -> str:
+    if not isinstance(schema, str) or not schema:
+        raise ReferenceValidationError(
+            "ObjectReference schema must be a non-empty string"
+        )
+    return schema
+
+
 def is_content_hash(value: str) -> bool:
     return len(value) == CONTENT_HASH_LENGTH and all(
         char in _HEX_DIGITS for char in value
@@ -36,10 +44,7 @@ class ObjectReference:
     content_hash: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.schema, str) or not self.schema:
-            raise ReferenceValidationError(
-                "ObjectReference schema must be a non-empty string"
-            )
+        _validate_reference_schema(self.schema)
         if not isinstance(self.content_hash, str) or not is_content_hash(
             self.content_hash
         ):

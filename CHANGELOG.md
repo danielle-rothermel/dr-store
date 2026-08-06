@@ -8,11 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `RecordCache` memoizes records over an existing `ObjectStore`, and
+- `RecordCache` memoizes records over an existing `ObjectStore`, returning a
+  typed `CacheHit` so strict JSON null remains distinct from a miss, and
   `derive_cache_key` derives a cache key from a caller-owned namespace and a
-  payload through the canonical JSON profile. Reads report every storage-level
-  fault as a miss, a conflicting put returns the existing winner, and there is
-  no delete, expiry, or eviction path.
+  payload through the canonical JSON profile. Reads report absent, missing, and
+  unverifiable stored values as misses while invalid requested schemas and
+  operational backend faults raise. A conflicting put returns the existing
+  winner, and there is no delete, expiry, or eviction path.
 
 ## [0.1.2] - 2026-08-05
 

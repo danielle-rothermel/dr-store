@@ -31,6 +31,7 @@ from dr_store.object_store import (
     PutStatus,
 )
 from dr_store.record_cache import (
+    CacheHit,
     RecordCache,
     derive_cache_key,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "BindOutcome",
     "BindStatus",
     "BindingConflictError",
+    "CacheHit",
     "ContentHashMismatchError",
     "DocumentDirectory",
     "DocumentDirectoryError",

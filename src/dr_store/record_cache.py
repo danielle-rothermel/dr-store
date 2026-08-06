@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from dr_store.content_addressing import compute_content_hash
-from dr_store.core.errors import BindingConflictError, StoreError
+from dr_serialize import Jsonable
+
+from dr_store.content_addressing import (
+    _validate_reference_schema,
+    compute_content_hash,
+)
+from dr_store.core.errors import (
+    BindingConflictError,
+    ContentHashMismatchError,
+    ObjectNotFoundError,
+    ReferenceValidationError,
+    SchemaMismatchError,
+)
 
 if TYPE_CHECKING:
-    from dr_serialize import Jsonable
-
     from dr_store.content_addressing import ObjectReference
     from dr_store.object_store import ObjectStore
 
@@ -21,26 +31,40 @@ def derive_cache_key(namespace: str, payload: Jsonable) -> str:
     return f"{namespace}:{compute_content_hash(payload)}"
 
 
+@dataclass(frozen=True, slots=True)
+class CacheHit:
+    """A cached record, including a strict-JSON ``null`` record."""
+
+    record: Jsonable
+
+
 class RecordCache:
     """Best-effort memoization facade over an :class:`ObjectStore`."""
 
     def __init__(self, store: ObjectStore) -> None:
         self._store = store
 
-    def get(self, key: str, *, schema: str) -> Jsonable | None:
-        """Return the cached record, or ``None`` for any storage-level miss.
+    def get(self, key: str, *, schema: str) -> CacheHit | None:
+        """Return a cache hit, or ``None`` for an expected cache miss.
 
-        An unbound key, a different schema, missing content, and failed
-        verification are all misses; no storage fault reaches the caller.
+        An unbound key, a different schema, missing content, and unverifiable
+        stored data are misses. Invalid requested schemas and operational
+        backend failures raise.
         """
-        reference = self._store.resolve(key)
-        if reference is None or reference.schema != schema:
-            return None
+        validated_schema = _validate_reference_schema(schema)
         try:
+            reference = self._store.resolve(key)
+            if reference is None or reference.schema != validated_schema:
+                return None
             record = self._store.get(reference)
-        except StoreError:
+        except (
+            ContentHashMismatchError,
+            ObjectNotFoundError,
+            ReferenceValidationError,
+            SchemaMismatchError,
+        ):
             return None
-        return record
+        return CacheHit(record=record)
 
     def put(
         self,
