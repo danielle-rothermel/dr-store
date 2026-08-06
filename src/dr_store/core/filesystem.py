@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,9 @@ except ImportError:  # pragma: no cover - exercised only off POSIX
 
 _UNSAFE_NAME_CHARACTERS = frozenset({"/", "\\", "\x00"})
 _RESERVED_NAMES = frozenset({"", ".", ".."})
+_UNSUPPORTED_FULL_FSYNC_ERRNOS = frozenset(
+    {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}
+)
 
 
 def validate_safe_name(
@@ -43,14 +47,15 @@ def validate_safe_name(
 def flush_descriptor(descriptor: int) -> None:
     """Flush bytes, preferring macOS ``F_FULLFSYNC``.
 
-    Every ``OSError`` from ``F_FULLFSYNC`` falls back to ``fsync``, including
-    possible I/O failures; fallback success does not prove a full flush.
+    Filesystems that do not support ``F_FULLFSYNC`` fall back to ``fsync``.
     """
     full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
     if fcntl is not None and full_fsync is not None:
         try:
             fcntl.fcntl(descriptor, full_fsync)
-        except OSError:
+        except OSError as error:
+            if error.errno not in _UNSUPPORTED_FULL_FSYNC_ERRNOS:
+                raise
             os.fsync(descriptor)
         return
     os.fsync(descriptor)

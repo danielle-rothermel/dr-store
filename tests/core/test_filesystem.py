@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import os
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -65,18 +67,16 @@ def test_full_fsync_is_used_when_available(
 
 
 @pytest.mark.parametrize(
-    "failure",
-    [
-        OSError("F_FULLFSYNC unsupported on this filesystem"),
-        OSError(5, "input/output error"),
-    ],
-    ids=["unsupported", "io-error"],
+    "unsupported_errno",
+    [errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP],
+    ids=["einval", "enotsup", "eopnotsupp"],
 )
-def test_every_full_fsync_oserror_falls_back_to_fsync(
+def test_unsupported_full_fsync_falls_back_to_fsync(
     descriptor: int,
     monkeypatch: pytest.MonkeyPatch,
-    failure: OSError,
+    unsupported_errno: int,
 ) -> None:
+    failure = OSError(unsupported_errno, "F_FULLFSYNC unsupported")
     fake = _RecordingFcntl(available=True, failure=failure)
     monkeypatch.setattr(filesystem, "fcntl", fake)
     synced = _record_fsync(monkeypatch)
@@ -85,6 +85,33 @@ def test_every_full_fsync_oserror_falls_back_to_fsync(
 
     assert fake.commands == [(descriptor, FULL_FSYNC)]
     assert synced == [descriptor]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        OSError(errno.EIO, "input/output error"),
+        OSError(errno.EBADF, "bad descriptor"),
+        OSError(errno.EINTR, "interrupted"),
+        OSError("failure without errno"),
+    ],
+    ids=["eio", "ebadf", "eintr", "missing-errno"],
+)
+def test_full_fsync_failure_propagates_without_fsync_fallback(
+    descriptor: int,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: OSError,
+) -> None:
+    fake = _RecordingFcntl(available=True, failure=failure)
+    monkeypatch.setattr(filesystem, "fcntl", fake)
+    synced = _record_fsync(monkeypatch)
+
+    with pytest.raises(OSError, match=re.escape(str(failure))) as raised:
+        filesystem.flush_descriptor(descriptor)
+
+    assert raised.value is failure
+    assert fake.commands == [(descriptor, FULL_FSYNC)]
+    assert synced == []
 
 
 def test_a_missing_full_fsync_command_falls_back_to_fsync(
