@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import multiprocessing
+import queue
+import sqlite3
+import threading
 from typing import TYPE_CHECKING, Literal
 
 import pytest
@@ -23,6 +26,156 @@ WATCHDOG_SECONDS = 15
 Operation = Literal["put", "bind"]
 ProcessResult = tuple[str, int, bool, str, str]
 Contender = tuple[str, Operation, int, str]
+
+
+class _FakeConnection:
+    def __init__(
+        self,
+        *,
+        fail_on_execute: int | None = None,
+        close_error: BaseException | None = None,
+    ) -> None:
+        self.fail_on_execute = fail_on_execute
+        self.close_error = close_error
+        self.execute_calls = 0
+        self.close_calls = 0
+
+    def execute(self, _statement: str) -> None:
+        self.execute_calls += 1
+        if self.execute_calls == self.fail_on_execute:
+            raise RuntimeError("injected PRAGMA failure")
+
+    def executescript(self, _script: str) -> None:
+        pass
+
+    def commit(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
+
+
+def test_initialization_explicitly_closes_its_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _FakeConnection()
+
+    def connect(_path: str, **_settings: object) -> _FakeConnection:
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+
+    SqliteBackend(tmp_path / "store.db")
+
+    assert connection.close_calls == 1
+
+
+def test_partial_connection_setup_failure_closes_before_reraising(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _FakeConnection(fail_on_execute=2)
+
+    def connect(_path: str, **_settings: object) -> _FakeConnection:
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+
+    with pytest.raises(RuntimeError, match="injected PRAGMA failure"):
+        SqliteBackend(tmp_path / "store.db")
+
+    assert connection.close_calls == 1
+
+
+def _collect_thread_connections(
+    backend: SqliteBackend,
+    count: int,
+) -> list[sqlite3.Connection]:
+    ready = threading.Barrier(count + 1)
+    release = threading.Event()
+    connections: queue.Queue[sqlite3.Connection] = queue.Queue()
+
+    def connect() -> None:
+        first = backend._conn
+        ready.wait(WATCHDOG_SECONDS)
+        if not release.wait(WATCHDOG_SECONDS):
+            return
+        assert backend._conn is first
+        connections.put(first)
+
+    threads = [threading.Thread(target=connect) for _ in range(count)]
+    for thread in threads:
+        thread.start()
+
+    try:
+        ready.wait(WATCHDOG_SECONDS)
+    finally:
+        release.set()
+        for thread in threads:
+            thread.join(WATCHDOG_SECONDS)
+
+    assert all(not thread.is_alive() for thread in threads)
+    return [connections.get_nowait() for _ in range(count)]
+
+
+def test_operational_connections_are_retained_separately_per_thread(
+    tmp_path: Path,
+) -> None:
+    backend = SqliteBackend(tmp_path / "store.db")
+
+    connections = _collect_thread_connections(backend, 2)
+
+    assert connections[0] is not connections[1]
+
+
+def test_close_connections_centrally_closes_all_worker_connections(
+    tmp_path: Path,
+) -> None:
+    backend = SqliteBackend(tmp_path / "store.db")
+    connections = _collect_thread_connections(backend, 2)
+
+    backend._close_connections()
+
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            connection.execute("SELECT 1")
+    backend._close_connections()
+
+
+def test_close_connections_attempts_every_close_before_reporting_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initialization = _FakeConnection()
+    failed = _FakeConnection(
+        close_error=RuntimeError("injected close failure")
+    )
+    succeeded = _FakeConnection()
+    available = queue.Queue[_FakeConnection]()
+    for connection in (initialization, failed, succeeded):
+        available.put(connection)
+
+    def connect(_path: str, **_settings: object) -> _FakeConnection:
+        return available.get_nowait()
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    backend = SqliteBackend(tmp_path / "store.db")
+    _collect_thread_connections(backend, 2)
+
+    with pytest.raises(
+        ExceptionGroup,
+        match="failed to close SQLite operational connections",
+    ) as raised:
+        backend._close_connections()
+
+    assert [str(error) for error in raised.value.exceptions] == [
+        "injected close failure"
+    ]
+    assert failed.close_calls == 1
+    assert succeeded.close_calls == 1
 
 
 def test_rows_and_replay_outcomes_persist_after_reopen(
