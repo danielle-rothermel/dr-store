@@ -197,3 +197,33 @@ any truncation. Its input is raw bytes, so it is not a content hash."""
 exported_symbols = ["SidecarVerificationError"]
 categories = ["document artifacts"]
 is_a = ["hash"]
+
+[[terms]]
+name = "record cache"
+definition = """
+The memoization facade that binds cache keys to object references over an \
+object store and returns a typed hit containing the stored record for a key. \
+It adds no delete, expiry, eviction, or size-cap path."""
+exported_symbols = ["RecordCache", "CacheHit"]
+categories = ["record caching"]
+
+[[terms]]
+name = "cache key"
+definition = """
+An opaque caller-owned string naming one record cache entry. A caller may \
+derive it from a versioned namespace and payload through the canonical JSON \
+profile or supply another key scheme; invalidation selects a new key rather \
+than replacing an entry."""
+exported_symbols = ["derive_cache_key"]
+categories = ["record caching"]
+is_a = ["key"]
+part_of = ["record cache"]
+
+[[terms]]
+name = "record cache read"
+definition = """
+A read that reports an absent, missing, or unverifiable stored value as a miss \
+rather than a failure. Invalid requested schemas and operational backend faults \
+are still raised."""
+categories = ["record caching"]
+part_of = ["record cache"]

@@ -168,3 +168,24 @@ for ancestor path resolution, durability, or safety for sidecar creation and \
 manifest reads, which follow their documented path behavior."""
 date = "2026-08-05"
 check = "uv run pytest -q tests/document_directory/test_sidecar_verification.py"
+
+[[contracts]]
+title = "Record cache reads are best-effort and entries are never rebound"
+statement = """
+A record cache read validates its requested schema before storage access and \
+returns a typed hit only when the key is bound and the resolved reference passes \
+a verified get under that schema. An unbound key, missing content, schema \
+mismatch, and unverifiable stored object or binding all report a miss; \
+operational backend failures propagate. A cache put binds its key once and \
+returns the existing winner on conflict, so invalidation happens by choosing a \
+new caller-owned key rather than by deleting or expiring an entry."""
+rationale = """
+Expected absence and unverifiable stored data do not prevent recomputation, \
+while invalid requested schemas, caller record-validation faults, and \
+unavailable storage stay visible. A typed hit preserves strict JSON null as a \
+record distinct from a miss. First-writer-wins keeps a deterministic key stable \
+when the caller's producer is not. Opaque keys preserve the general Object Store \
+contract, while the canonical derivation helper gives callers a versioned, \
+content-derived scheme without making that scheme mandatory."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/record_cache/test_cache.py"

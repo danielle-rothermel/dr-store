@@ -11,6 +11,16 @@ repository_root="$(
     pwd -P
 )"
 
+artifact_output=""
+if [[ "$#" -eq 0 ]]; then
+    :
+elif [[ "$#" -eq 2 && "$1" == "--artifacts" ]]; then
+    artifact_output="$2"
+else
+    printf 'usage: %s [--artifacts DIRECTORY]\n' "$0" >&2
+    exit 2
+fi
+
 temporary_root=""
 temporary_parent=""
 
@@ -78,12 +88,28 @@ if [[ "$(dirname -- "${temporary_root}")" != "${temporary_parent}" \
     exit 1
 fi
 
-artifact_directory="${temporary_root}/dist"
+if [[ -z "${artifact_output}" ]]; then
+    artifact_directory="${temporary_root}/dist"
+else
+    artifact_parent_input="$(dirname -- "${artifact_output}")"
+    artifact_name="$(basename -- "${artifact_output}")"
+    artifact_parent="$(
+        cd -- "${artifact_parent_input}"
+        pwd -P
+    )"
+    artifact_directory="${artifact_parent}/${artifact_name}"
+    if [[ "${artifact_name}" == "." || "${artifact_name}" == ".." \
+        || -e "${artifact_directory}" || -L "${artifact_directory}" ]]; then
+        printf 'Artifact directory must not already exist: %s\n' \
+            "${artifact_directory}" >&2
+        exit 1
+    fi
+fi
 requirements_file="${temporary_root}/requirements.txt"
 wheel_environment="${temporary_root}/wheel-environment"
 
 mkdir -- "${artifact_directory}"
-uv build --out-dir "${artifact_directory}"
+uv build --no-create-gitignore --out-dir "${artifact_directory}"
 uv export --quiet --locked --no-dev --no-emit-project \
     --output-file "${requirements_file}"
 

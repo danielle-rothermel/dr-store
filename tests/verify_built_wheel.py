@@ -15,6 +15,8 @@ FUNCTIONAL_MODULES = (
     "dr_store.document_directory.directory",
     "dr_store.document_directory.sidecar",
     "dr_store.object_store",
+    "dr_store.record_cache",
+    "dr_store.record_cache.cache",
     "dr_store.storage_backends",
     "dr_store.storage_backends.contract",
     "dr_store.storage_backends.memory",

@@ -30,6 +30,11 @@ from dr_store.object_store import (
     ObjectStore,
     PutStatus,
 )
+from dr_store.record_cache import (
+    CacheHit,
+    RecordCache,
+    derive_cache_key,
+)
 from dr_store.storage_backends import (
     Backend,
     BindOutcome,
@@ -45,6 +50,7 @@ __all__ = [
     "BindOutcome",
     "BindStatus",
     "BindingConflictError",
+    "CacheHit",
     "ContentHashMismatchError",
     "DocumentDirectory",
     "DocumentDirectoryError",
@@ -57,6 +63,7 @@ __all__ = [
     "ObjectStore",
     "PutOutcome",
     "PutStatus",
+    "RecordCache",
     "ReferenceValidationError",
     "SchemaMismatchError",
     "SidecarSummary",
@@ -65,5 +72,6 @@ __all__ = [
     "SqliteBackend",
     "StoreError",
     "compute_content_hash",
+    "derive_cache_key",
     "is_content_hash",
 ]
