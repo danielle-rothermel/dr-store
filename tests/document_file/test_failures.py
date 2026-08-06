@@ -8,10 +8,11 @@ import pytest
 from dr_store.document_file import (
     CanonicalJsonFile,
     DocumentPublishError,
+    DocumentReadError,
     PublicationStage,
     ReplacementState,
 )
-from dr_store.document_file import file as file_module
+from dr_store.document_file import canonical_json as file_module
 
 if TYPE_CHECKING:
     import os
@@ -48,13 +49,18 @@ def _assert_failure(
     return caught.value
 
 
+@pytest.mark.parametrize(
+    "missing_support",
+    ["_OPEN_SUPPORTS_DIR_FD", "_UNLINK_SUPPORTS_DIR_FD"],
+)
 def test_create_temp_failure_preserves_existing_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    missing_support: str,
 ) -> None:
     document_file = _file(tmp_path)
     document_file.publish(FIRST)
-    monkeypatch.setattr(file_module, "_OPEN_SUPPORTS_DIR_FD", False)
+    monkeypatch.setattr(file_module, missing_support, False)
 
     _assert_failure(
         document_file,
@@ -214,6 +220,80 @@ def test_directory_close_failure_reports_completed_replacement(
         replacement_state=ReplacementState.REPLACED,
     )
     assert document_file.path.read_bytes() == b'{"version":2}'
+
+
+def test_read_fails_closed_without_descriptor_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_file = _file(tmp_path)
+    document_file.publish(FIRST)
+    monkeypatch.setattr(file_module, "_OPEN_SUPPORTS_DIR_FD", False)
+
+    with pytest.raises(DocumentReadError) as caught:
+        document_file.read()
+
+    assert caught.value.path == document_file.path
+    assert isinstance(caught.value.__cause__, OSError)
+
+
+@pytest.mark.parametrize("failed_close", ["child", "directory"])
+def test_read_close_failure_is_typed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_close: str,
+) -> None:
+    document_file = _file(tmp_path)
+    document_file.publish(FIRST)
+    original_open = file_module.os.open
+    child_descriptors: set[int] = set()
+    directory_descriptors: set[int] = set()
+
+    def recording_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        target = (
+            child_descriptors if dir_fd is not None else directory_descriptors
+        )
+        target.add(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(file_module.os, "open", recording_open)
+    selected = (
+        child_descriptors if failed_close == "child" else directory_descriptors
+    )
+    _fail_selected_close(monkeypatch, selected.__contains__)
+
+    with pytest.raises(DocumentReadError) as caught:
+        document_file.read()
+
+    assert caught.value.path == document_file.path
+    assert isinstance(caught.value.__cause__, OSError)
+
+
+def test_read_cleanup_failure_does_not_mask_primary_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_file = _file(tmp_path)
+    document_file.publish(FIRST)
+    primary = OSError(errno.EIO, "read failed")
+
+    def fail_read(*_args: object) -> bytes:
+        raise primary
+
+    monkeypatch.setattr(file_module.os, "read", fail_read)
+    _fail_selected_close(monkeypatch, lambda _descriptor: True)
+
+    with pytest.raises(DocumentReadError) as caught:
+        document_file.read()
+
+    assert caught.value.__cause__ is primary
 
 
 def test_cleanup_failure_does_not_mask_primary_failure(

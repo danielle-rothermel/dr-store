@@ -215,20 +215,21 @@ class SqliteRecordCache(RecordCache):
     def __exit__(self, ...) -> bool: ...
 ```
 
-Construction captures a non-transient absolute filesystem path and establishes the SQLite
-schema before returning; empty and `:memory:` paths are rejected. Closing rejects
-new cache operations, waits for every admitted `get` or `put` to finish, and
-then closes all operational connections tracked by that cache instance in the
-current process. A successful close is idempotent for repeated and concurrent
-callers. `SqliteRecordCacheClosedError` reports operations requested after
-closing begins, before their inputs are validated; `SqliteRecordCacheCloseError`
-reports a terminal cleanup failure to close callers, including a context exit.
-An interruption while draining admitted work restores the open lifecycle; a
-process-level cleanup interruption terminalizes it before propagating to the
-elected caller. Committed records remain available after close and reopen. Closing one
-cache does not close a separate instance or coordinate another process, even
-when both use the same database path. These persistence semantics do not
-promise power-loss durability.
+Construction captures a non-transient absolute filesystem path and establishes
+the SQLite schema before returning; empty and `:memory:` paths are rejected.
+Initialize a new database path with one constructor before starting concurrent
+constructors. Closing rejects new cache operations, waits for every admitted
+`get` or `put` to finish, and then closes all operational connections tracked by
+that cache instance in the current process. A successful close is idempotent for
+repeated and concurrent callers. `SqliteRecordCacheClosedError` reports
+operations requested after closing begins, before their inputs are validated;
+`SqliteRecordCacheCloseError` reports a terminal cleanup failure to close
+callers, including a context exit. An interruption while draining admitted work
+restores the open lifecycle; a process-level cleanup interruption terminalizes
+it before propagating to the elected caller. Committed records remain available
+after close and reopen. Closing one cache does not close a separate instance or
+coordinate another process, even when both use the same database path. These
+persistence semantics do not promise power-loss durability.
 
 ## Canonical JSON document files
 
@@ -255,18 +256,31 @@ class CanonicalJsonFile:
     def read(self) -> Jsonable: ...
 ```
 
+```python
+@verify(UNIQUE)
+class PublicationStage(StrEnum):
+    ENCODE = "encode"
+    CREATE_TEMP = "create_temp"
+    WRITE_TEMP = "write_temp"
+    FLUSH_TEMP = "flush_temp"
+    REPLACE_TARGET = "replace_target"
+    FLUSH_DIRECTORY = "flush_directory"
+
+@verify(UNIQUE)
+class ReplacementState(StrEnum):
+    NOT_REPLACED = "not_replaced"
+    REPLACED = "replaced"
+    UNKNOWN = "unknown"
+```
+
 `DocumentPublishError` reports a `PublicationStage` and `ReplacementState`.
 `NOT_REPLACED` means replacement was not invoked and any prior target remains
 authoritative. `REPLACED` means replacement returned before later finalization
-failed. `UNKNOWN` means the replacement operation itself failed and cannot prove
-whether the target changed, so callers must inspect or coordinate before treating
-either value as authoritative. `DocumentReadError`
-reports the requested path. Both derive from `DocumentFileError` and preserve
-the originating failure as their cause. The reporting phases are `ENCODE`,
-`CREATE_TEMP`, `WRITE_TEMP`, `FLUSH_TEMP`, `REPLACE_TARGET`, and
-`FLUSH_DIRECTORY`; directory acquire and temporary-file open belong to
-`CREATE_TEMP`, temporary-file flush and close belong to `FLUSH_TEMP`, and
-directory flush and close belong to `FLUSH_DIRECTORY`.
+failed. `UNKNOWN` means the replacement operation itself failed and cannot
+prove whether the target changed, so callers must inspect or coordinate before
+treating either value as authoritative. `DocumentReadError` reports the
+requested path. Both errors derive from `DocumentFileError` and preserve the
+originating failure as their cause.
 
 ## Document Directory
 
@@ -334,11 +348,14 @@ class SidecarWriter:
 ## Filesystem and failure semantics
 
 Canonical document publication creates a reserved unique temporary file with
-private permissions for each call, writes its complete canonical bytes, flushes and closes it, replaces
-the target in the same directory, and flushes and closes the directory.
-Concurrent supported publishers use independent temporary files, and the last
-successful replacement is authoritative. Publication does not provide locks,
-compare-and-set, multi-file transactions, or ordering with Sidecar writes.
+private permissions for each call, writes its complete canonical bytes, flushes
+and closes it, replaces the target in the same directory, and flushes and closes
+the directory. The case-insensitive `.dr-store-document-` prefix is reserved for
+these temporary files and cannot be used by document targets or Document
+Directory sidecars. Concurrent supported publishers use independent temporary
+files, and the last successful replacement is authoritative. Publication does
+not provide locks, compare-and-set, multi-file transactions, or ordering with
+Sidecar writes.
 
 All-or-nothing visibility depends on the underlying filesystem honoring atomic
 same-directory replacement; network, synchronized, or other filesystems whose
@@ -364,14 +381,15 @@ canonical. Final-component symlinks and non-regular files are rejected, a
 replacement after open cannot redirect that read to a different inode, and
 platforms without the required descriptor operations fail closed.
 
-Name validation prevents lexical traversal syntax only. Sidecar creation and
-writes follow existing final-component symlinks and therefore require trusted,
-caller-controlled directory contents. Sidecar writer coordination remains the
-caller's concern. Sidecar finalization flushes the Sidecar descriptor before
-returning its summary, but it does not flush the Sidecar's directory entry or
-impose ordering on document publication. Sidecar verification also refuses
-final-component symlinks for both the Document Directory and named child,
-requires a regular direct child, and reads from the descriptor it inspected.
+Outside the reserved publication namespace, name validation prevents lexical
+traversal syntax. Sidecar creation and writes follow existing final-component
+symlinks and therefore require trusted, caller-controlled directory contents.
+Sidecar writer coordination remains the caller's concern. Sidecar finalization
+flushes the Sidecar descriptor before returning its summary, but it does not
+flush the Sidecar's directory entry or impose ordering on document publication.
+Sidecar verification also refuses final-component symlinks for both the
+Document Directory and named child, requires a regular direct child, and reads
+from the descriptor it inspected.
 
 A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
 open and its accounting state advanced. The writer is unusable by contract and

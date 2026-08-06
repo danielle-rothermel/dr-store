@@ -13,7 +13,7 @@ FUNCTIONAL_MODULES = (
     "dr_store.core.filesystem",
     "dr_store.document_file",
     "dr_store.document_file.errors",
-    "dr_store.document_file.file",
+    "dr_store.document_file.canonical_json",
     "dr_store.document_directory",
     "dr_store.document_directory.directory",
     "dr_store.document_directory.sidecar",

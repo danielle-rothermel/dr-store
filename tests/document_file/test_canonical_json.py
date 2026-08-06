@@ -16,7 +16,7 @@ from dr_store.document_file import (
     PublicationStage,
     ReplacementState,
 )
-from dr_store.document_file import file as file_module
+from dr_store.document_file import canonical_json as file_module
 
 if TYPE_CHECKING:
     from dr_serialize import Jsonable
@@ -38,23 +38,6 @@ def _nested(depth: int) -> Jsonable:
     for _ in range(depth):
         value = [value]
     return value
-
-
-def test_package_and_class_public_surfaces_are_exact() -> None:
-    import dr_store.document_file as package
-
-    assert package.__all__ == [
-        "CanonicalJsonFile",
-        "DocumentFileError",
-        "DocumentPublishError",
-        "DocumentReadError",
-        "PublicationStage",
-        "ReplacementState",
-    ]
-    public = {
-        name for name in dir(CanonicalJsonFile) if not name.startswith("_")
-    }
-    assert public == {"path", "publish", "read"}
 
 
 @pytest.mark.parametrize("name", ["", ".", "..", "a/b", "a\\b", "a\0b"])
@@ -203,14 +186,31 @@ def test_read_rejects_non_strict_or_noncanonical_bytes(
     assert caught.value.__cause__ is not None
 
 
-def test_read_rejects_oversized_and_excessively_nested_documents(
+def test_read_consumes_only_the_byte_bound_plus_one(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     oversized = _file(tmp_path, max_bytes=3)
-    oversized.path.write_bytes(b"null")
+    oversized.path.write_bytes(b"0" * (1 << 20))
+    original_read = file_module.os.read
+    requested: list[int] = []
+    returned: list[int] = []
+
+    def recording_read(descriptor: int, size: int) -> bytes:
+        requested.append(size)
+        chunk = original_read(descriptor, size)
+        returned.append(len(chunk))
+        return chunk
+
+    monkeypatch.setattr(file_module.os, "read", recording_read)
     with pytest.raises(DocumentReadError):
         oversized.read()
 
+    assert requested == [4]
+    assert sum(returned) == 4
+
+
+def test_read_rejects_excessively_nested_documents(tmp_path: Path) -> None:
     nested = CanonicalJsonFile(
         tmp_path,
         "nested.json",

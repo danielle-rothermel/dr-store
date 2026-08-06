@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import errno
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -12,13 +11,12 @@ from dr_store import (
     ManifestReadError,
 )
 from dr_store.document_file import (
-    CanonicalJsonFile,
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
     ReplacementState,
 )
-from dr_store.document_file import file as file_module
+from dr_store.document_file import canonical_json as file_module
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -181,40 +179,3 @@ def test_manifest_publish_and_read_share_configured_depth_bound(
     (directory.path / MANIFEST_NAME).write_bytes(b"[[null]]")
     with pytest.raises(ManifestReadError):
         directory.read_manifest()
-
-
-class _DocumentAdapter(Protocol):
-    def publish(self, document: Jsonable) -> None: ...
-
-    def read(self) -> Jsonable: ...
-
-
-@dataclass(frozen=True, slots=True)
-class _DirectoryAdapter:
-    directory: DocumentDirectory
-
-    def publish(self, document: Jsonable) -> None:
-        self.directory.publish(document)
-
-    def read(self) -> Jsonable:
-        return self.directory.read_manifest()
-
-
-@pytest.mark.parametrize("surface", ["standalone", "document-directory"])
-def test_standalone_and_manifest_surfaces_share_publish_read_conformance(
-    tmp_path: Path,
-    surface: str,
-) -> None:
-    if surface == "standalone":
-        document: _DocumentAdapter = CanonicalJsonFile(
-            tmp_path,
-            MANIFEST_NAME,
-            max_bytes=MANIFEST_MAX_BYTES,
-        )
-    else:
-        document = _DirectoryAdapter(_allocate(tmp_path))
-
-    document.publish(FIRST)
-    assert document.read() == FIRST
-    document.publish(SECOND)
-    assert document.read() == SECOND

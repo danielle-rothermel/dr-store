@@ -41,7 +41,7 @@ class _OperationLocal(threading.local):
 
 
 class SqliteRecordCache(RecordCache):
-    """Persistent Record Cache with one managed connection lifecycle."""
+    """Persistent cache requiring serialized first-time initialization."""
 
     def __init__(self, path: str | Path) -> None:
         backend = SqliteBackend._managed(path)

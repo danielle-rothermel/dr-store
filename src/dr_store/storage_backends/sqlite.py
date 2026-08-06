@@ -119,12 +119,18 @@ class SqliteBackend:
             self._connections.clear()
 
         failures: list[Exception] = []
+        process_failure: BaseException | None = None
         for conn in connections:
             try:
                 conn.close()
-            # Cleanup must continue after an arbitrary connection close fault.
-            except Exception as error:  # noqa: BLE001
-                failures.append(error)
+            # Cleanup must continue after any connection close fault.
+            except BaseException as error:  # noqa: BLE001
+                if isinstance(error, Exception):
+                    failures.append(error)
+                elif process_failure is None:
+                    process_failure = error
+        if process_failure is not None:
+            raise process_failure
         if failures:
             raise ExceptionGroup(
                 "failed to close SQLite operational connections",

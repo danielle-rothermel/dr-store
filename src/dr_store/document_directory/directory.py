@@ -29,7 +29,7 @@ from dr_store.document_file import (
     DocumentPublishError,
     DocumentReadError,
 )
-from dr_store.document_file.file import (
+from dr_store.document_file.canonical_json import (
     _is_reserved_document_temp_name,
     _validate_canonical_json_file_configuration,
 )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import errno
 import os
-import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -106,7 +105,7 @@ def test_full_fsync_failure_propagates_without_fsync_fallback(
     monkeypatch.setattr(filesystem, "fcntl", fake)
     synced = _record_fsync(monkeypatch)
 
-    with pytest.raises(OSError, match=re.escape(str(failure))) as raised:
+    with pytest.raises(type(failure)) as raised:
         filesystem.flush_descriptor(descriptor)
 
     assert raised.value is failure

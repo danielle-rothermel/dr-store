@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   close error. Successful repeated and concurrent closes are idempotent. Typed
   errors distinguish post-close use from terminal cleanup failure, committed
   records persist across reopen, and instances and processes retain independent
-  lifecycles.
+  lifecycles. One constructor must initialize a new database path before
+  concurrent constructors use it.
 - Added `CanonicalJsonFile` as the standalone bounded canonical-document
   capability. It publishes through reserved unique same-directory temporary
   files with private permissions, reports typed phase and explicit known,
@@ -43,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   strict JSON bytes from a regular direct child, reject final-component
   symlinks, and remain pinned to the descriptor they inspected across a
   concurrent replacement.
+- Reserved the case-insensitive `.dr-store-document-` prefix for canonical
+  document publication temporary files. Standalone document targets, Manifest
+  names, and Document Directory Sidecars cannot use that prefix.
+- Pinned CI, Pages, release, and pre-commit dependencies to reviewed immutable
+  commits, including every action used by the trusted PyPI publication job.
 
 ### Fixed
 
@@ -51,7 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   instead of being hidden by a successful `fsync` fallback.
 - Close interruption while draining restores an open managed-cache lifecycle;
   process-level cleanup failure publishes a terminal lifecycle before it
-  propagates. Removed the unused path-based `flush_directory()` primitive.
+  propagates. Connection cleanup now attempts every owned connection even when
+  one close raises a process-level interruption. Removed the unused path-based
+  `flush_directory()` primitive.
 
 ## [0.1.3] - 2026-08-05
 

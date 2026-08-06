@@ -38,7 +38,6 @@ _READ_OPEN_FLAGS = ("O_NONBLOCK", "O_RDONLY")
 
 
 def _is_reserved_document_temp_name(name: str) -> bool:
-    """Return whether a child name belongs to the publication namespace."""
     return name.casefold().startswith(_RESERVED_TEMP_PREFIX.casefold())
 
 

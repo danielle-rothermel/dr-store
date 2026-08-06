@@ -146,8 +146,7 @@ name = "backend"
 definition = """
 The storage boundary that supplies atomic insert-if-absent operations and \
 point reads for object and binding tables. Persistence scope belongs to each \
-backend implementation; persistent implementations capture one absolute path \
-when constructed."""
+backend implementation."""
 exported_symbols = [
   "Backend",
   "MemoryBackend",
@@ -160,11 +159,8 @@ categories = ["object storage"]
 [[terms]]
 name = "canonical JSON document file"
 definition = """
-A standalone caller-named document in an existing caller-owned directory. Its \
-complete value is accepted under caller-declared byte and nesting-depth bounds, \
-stored as canonical JSON through a private temporary file, and recovered only \
-by a strict bounded read of the same descriptor-pinned document under the \
-absolute directory path captured at construction."""
+A standalone caller-named document whose complete value is stored and recovered \
+as canonical JSON within caller-declared resource bounds."""
 exported_symbols = ["CanonicalJsonFile", "DocumentFileError"]
 categories = ["document artifacts"]
 
@@ -180,7 +176,6 @@ exported_symbols = [
   "ReplacementState",
 ]
 categories = ["document artifacts"]
-part_of = ["canonical JSON document file"]
 
 [[terms]]
 name = "document read failure"
@@ -189,16 +184,12 @@ A failed attempt to recover one complete canonical document within its declared 
 bounds from the document selected at the start of the read."""
 exported_symbols = ["DocumentReadError"]
 categories = ["document artifacts"]
-part_of = ["canonical JSON document file"]
 
 [[terms]]
 name = "document directory"
 definition = """
-One allocated directory grouping one bounded canonical JSON manifest with zero \
-or more sidecars. The caller chooses the manifest's byte and nesting-depth \
-bounds; one absolute directory path is captured at construction for both \
-manifest and sidecar access, while the caller remains responsible for sidecar \
-coordination and retention."""
+One document artifact grouping one canonical JSON manifest with zero or more \
+sidecars. The caller owns their meaning, coordination, and retention."""
 exported_symbols = [
   "DocumentDirectory",
   "AllocationError",
@@ -209,11 +200,8 @@ categories = ["document artifacts"]
 [[terms]]
 name = "manifest"
 definition = """
-A canonical JSON document file serving as a document directory's manifest. Its \
-caller-owned payload is the source of truth for the meaning and completeness of \
-any sidecars it describes; supported concurrent publishers use independent \
-publications, the last successful replacement is authoritative, and reads are \
-strict, bounded, and descriptor-pinned."""
+A canonical JSON document file whose caller-owned payload defines the meaning \
+and completeness of the sidecars in its document directory."""
 exported_symbols = ["ManifestPublishError", "ManifestReadError"]
 categories = ["document artifacts"]
 is_a = ["canonical JSON document file"]
@@ -250,10 +238,8 @@ categories = ["record caching"]
 [[terms]]
 name = "managed SQLite record cache"
 definition = """
-A persistent record cache that establishes its storage before use, admits \
-complete operations only while open, and coordinates shutdown of the \
-current-process resources owned by one cache instance. Its persistent \
-filesystem path is made absolute at construction."""
+A persistent record cache that owns the current-process resource lifecycle for \
+one cache instance."""
 exported_symbols = [
   "SqliteRecordCache",
   "SqliteRecordCacheCloseError",

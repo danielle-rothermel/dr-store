@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dr_store.document_file.canonical_json import CanonicalJsonFile
 from dr_store.document_file.errors import (
     DocumentFileError,
     DocumentPublishError,
@@ -7,7 +8,6 @@ from dr_store.document_file.errors import (
     PublicationStage,
     ReplacementState,
 )
-from dr_store.document_file.file import CanonicalJsonFile
 
 __all__ = [
     "CanonicalJsonFile",

@@ -8,7 +8,9 @@ import sys
 from typing import TYPE_CHECKING
 
 from dr_store.document_file import CanonicalJsonFile
-from dr_store.document_file.file import _is_reserved_document_temp_name
+from dr_store.document_file.canonical_json import (
+    _is_reserved_document_temp_name,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -22,7 +24,7 @@ _CHILD = f"""
 import json
 import sys
 from dr_store.document_file import CanonicalJsonFile
-from dr_store.document_file import file as file_module
+from dr_store.document_file import canonical_json as file_module
 
 document = CanonicalJsonFile(
     sys.argv[1],

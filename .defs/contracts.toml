@@ -155,17 +155,18 @@ check = "uv run pytest -q tests/document_file/test_failures.py tests/document_fi
 [[contracts]]
 title = "Concurrent document publishers use independent temporary files"
 statement = """
-Every supported publication reserves a unique temporary child name from a \
-namespace that document targets may not use. Concurrent publishers do not \
-share temporary files; each successful replacement publishes one complete \
-document, and the last successful replacement is authoritative. Publication \
-provides no lock, compare-and-set operation, or multi-file transaction."""
+Every supported publication reserves a unique temporary child name from the \
+case-insensitive `.dr-store-document-` namespace, which document targets and \
+document-directory sidecars may not use. Concurrent publishers do not share \
+temporary files; each successful replacement publishes one complete document, \
+and the last successful replacement is authoritative. Publication provides no \
+lock, compare-and-set operation, or multi-file transaction."""
 rationale = """
 Independent temporary files prevent concurrent publishers from corrupting one \
 another's staged bytes. Replacement order defines the winner without claiming \
 serialization, conditional update, or coordination across related artifacts."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/document_file/test_file.py::test_two_publishers_use_distinct_temps_and_last_replacement_wins"
+check = "uv run pytest -q tests/document_file/test_canonical_json.py::test_two_publishers_use_distinct_temps_and_last_replacement_wins"
 
 [[contracts]]
 title = "Canonical document reads are bounded and descriptor-pinned"
@@ -184,7 +185,7 @@ mid-read. Exact bounded read-back rejects symlinks, non-regular files, malformed
 or oversized content, and merely equivalent non-canonical documents without \
 normalizing them on read."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/document_file/test_file.py"
+check = "uv run pytest -q tests/document_file/test_canonical_json.py"
 
 [[contracts]]
 title = "Document directories delegate manifests to canonical files"
@@ -197,7 +198,9 @@ typed directory errors while preserving the originating error as the cause. \
 One lexical absolute directory path is captured and shared by manifest and \
 sidecar operations; symlink targets are not frozen. \
 Manifest publication and reads retain the standalone file's bounds, phase, \
-replacement, concurrency, and descriptor-pinning behavior."""
+replacement, concurrency, and descriptor-pinning behavior. Manifest names and \
+sidecar names may not use the canonical file's case-insensitive \
+`.dr-store-document-` temporary namespace."""
 rationale = """
 One delegated implementation keeps manifest behavior aligned with standalone \
 documents while preserving the Document Directory's contextual error surface \
@@ -277,8 +280,9 @@ returns to open and wakes other callers. Successful close is idempotent for \
 repeated and concurrent callers. The persistent database path is made absolute \
 at construction without freezing symlink targets, and transient paths are \
 rejected. Completed commits persist across close and reopen, while separate \
-instances and processes retain independent \
-lifecycles even when they use the same database path."""
+instances and processes retain independent lifecycles even when they use the \
+same database path. A new database path is initialized by one constructor \
+before concurrent constructors use it."""
 rationale = """
 Whole-operation admission prevents shutdown from invalidating a cache \
 operation between its binding and object-store steps. Rejecting new work \
@@ -286,6 +290,8 @@ before draining admitted work gives closure one stable resource boundary, and \
 terminal typed failures keep incomplete cleanup visible. Persistence describes \
 committed SQLite rows across reopen; it does not promise power-loss durability \
 or let one cache instance govern resources owned by another instance or \
-process."""
+process. Coordinating the first constructor keeps SQLite journal-mode setup out \
+of concurrent first-use contention without claiming an initialization protocol \
+that the backend does not provide."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/record_cache/test_sqlite_cache.py tests/storage_backends/test_sqlite_backend.py"
