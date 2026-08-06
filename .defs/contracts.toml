@@ -70,8 +70,12 @@ title = "Backends own atomicity and declare persistence scope"
 statement = """
 Every backend supplies atomic insert-if-absent operations for object rows and \
 bindings plus point reads. The in-memory backend is process-local; the SQLite \
-backend retains committed rows across reopen and supports cross-process \
-contention without claiming power-loss durability."""
+backend requires a non-transient filesystem path, captures its lexical absolute \
+path at construction, retains committed rows across reopen, and supports \
+cross-process contention without claiming power-loss durability. Empty and \
+`:memory:` paths are rejected. Capturing an absolute path prevents later \
+working-directory changes from redirecting it but does not freeze symlink \
+targets."""
 rationale = """
 The object store owns hashing, verification, idempotency, and typed conflicts, \
 while the backend owns the atomic storage primitive those rules require. \
@@ -113,10 +117,13 @@ statement = """
 A standalone canonical document file validates one complete strict JSON value \
 within its caller-supplied byte and nesting-depth bounds before filesystem \
 publication. Publication writes the complete canonical bytes to a reserved \
-same-directory temporary file, flushes and closes that file, replaces the \
-target, and then flushes and closes the directory. All-or-nothing visibility \
-depends on the filesystem's same-directory replacement semantics, and no \
-power-loss durability is promised."""
+same-directory temporary file created with private permissions, flushes and \
+closes that file, replaces the target, and then flushes and closes the \
+directory. Its lexical absolute directory path is captured at construction; \
+this prevents working-directory redirection but does not freeze symlink \
+targets. All-or-nothing visibility depends on the filesystem's same-directory \
+replacement semantics, \
+and no power-loss durability is promised."""
 rationale = """
 Pre-publication bounds prevent an accepted write from exceeding the matching \
 read contract. Same-directory replacement avoids exposing a partial target, \
@@ -132,13 +139,16 @@ A failed publication reports `ENCODE`, `CREATE_TEMP`, `WRITE_TEMP`, \
 `FLUSH_TEMP`, `REPLACE_TARGET`, or `FLUSH_DIRECTORY`. `CREATE_TEMP` includes \
 directory acquire and temporary-file open; `FLUSH_TEMP` includes flush and \
 close; `FLUSH_DIRECTORY` includes directory flush and close. \
-`replacement_completed = false` means this call did not replace the target and \
-a prior target, if any, stays authoritative. `replacement_completed = true` \
-means replacement occurred and later finalization failed."""
+`replacement_state = NOT_REPLACED` means replacement was not invoked and a \
+prior target, if any, stays authoritative. `REPLACED` means replacement \
+returned successfully and later finalization failed. `UNKNOWN` means the \
+replacement operation reported a failure, so the target may contain either \
+the prior or proposed document and the caller must inspect or coordinate before \
+treating either value as authoritative."""
 rationale = """
 Callers can distinguish failures that preserve the prior target from failures \
-reported after the new target became visible without depending on lower-level \
-filesystem exceptions or undocumented cleanup details."""
+reported after confirmed replacement while retaining uncertainty when an \
+operating-system replacement error does not prove whether the target changed."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/document_file/test_failures.py tests/document_file/test_interrupted_publication.py"
 
@@ -161,7 +171,8 @@ check = "uv run pytest -q tests/document_file/test_file.py::test_two_publishers_
 title = "Canonical document reads are bounded and descriptor-pinned"
 statement = """
 A standalone document read opens the named directory and its regular direct \
-child with required no-follow, directory-relative flags, reads no more than one \
+child under the absolute directory path captured at construction with required \
+no-follow, directory-relative flags, reads no more than one \
 byte beyond the caller-supplied byte bound from the child descriptor it \
 inspected, and accepts only one complete UTF-8 strict JSON value within the \
 configured nesting-depth bound whose stored bytes exactly equal its canonical \
@@ -183,6 +194,8 @@ optional nesting-depth bound, and configures one standalone canonical document \
 file for both manifest publication and instance reads. It translates \
 standalone configuration, publication, and read failures into its established \
 typed directory errors while preserving the originating error as the cause. \
+One lexical absolute directory path is captured and shared by manifest and \
+sidecar operations; symlink targets are not frozen. \
 Manifest publication and reads retain the standalone file's bounds, phase, \
 replacement, concurrency, and descriptor-pinning behavior."""
 rationale = """
@@ -256,10 +269,15 @@ and then closes every operational connection tracked by that instance in the \
 current process. Normal and exceptional context-manager exits both perform \
 close. When cleanup succeeds, a body exception is not suppressed; cleanup \
 failure instead raises a typed close error and leaves the lifecycle terminal. \
-Every close caller then receives a typed close error exposing the failure, and \
-cache operations remain closed. Successful close is idempotent for repeated \
-and concurrent callers. Completed commits persist across \
-close and reopen, while separate instances and processes retain independent \
+The elected caller receives its original process-level interruption after the \
+terminal failure is published; every later close caller receives a typed close \
+error exposing that failure, and cache operations remain closed. If the elected \
+closer is interrupted while waiting for admitted operations, the lifecycle \
+returns to open and wakes other callers. Successful close is idempotent for \
+repeated and concurrent callers. The persistent database path is made absolute \
+at construction without freezing symlink targets, and transient paths are \
+rejected. Completed commits persist across close and reopen, while separate \
+instances and processes retain independent \
 lifecycles even when they use the same database path."""
 rationale = """
 Whole-operation admission prevents shutdown from invalidating a cache \

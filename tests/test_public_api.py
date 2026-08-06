@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pkgutil
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_type_hints
 
 import dr_store
 
@@ -101,6 +101,7 @@ def test_document_file_errors_are_root_exports_with_public_context(
         DocumentPublishError,
         DocumentReadError,
         PublicationStage,
+        ReplacementState,
     )
     from dr_store import document_file as package
 
@@ -108,6 +109,7 @@ def test_document_file_errors_are_root_exports_with_public_context(
     assert DocumentPublishError is package.DocumentPublishError
     assert DocumentReadError is package.DocumentReadError
     assert PublicationStage is package.PublicationStage
+    assert ReplacementState is package.ReplacementState
     assert issubclass(DocumentPublishError, DocumentFileError)
     assert issubclass(DocumentReadError, DocumentFileError)
 
@@ -115,11 +117,11 @@ def test_document_file_errors_are_root_exports_with_public_context(
     publish_error = DocumentPublishError(
         path,
         PublicationStage.REPLACE_TARGET,
-        replacement_completed=False,
+        replacement_state=ReplacementState.UNKNOWN,
     )
     assert publish_error.path == path
     assert publish_error.stage is PublicationStage.REPLACE_TARGET
-    assert publish_error.replacement_completed is False
+    assert publish_error.replacement_state is ReplacementState.UNKNOWN
 
     read_error = DocumentReadError(path)
     assert read_error.path == path
@@ -136,3 +138,41 @@ def test_publication_stage_members_and_values_are_exact() -> None:
         ("REPLACE_TARGET", "replace_target"),
         ("FLUSH_DIRECTORY", "flush_directory"),
     ]
+
+
+def test_replacement_state_members_and_values_are_exact() -> None:
+    from dr_store import ReplacementState
+
+    assert [(member.name, member.value) for member in ReplacementState] == [
+        ("NOT_REPLACED", "not_replaced"),
+        ("REPLACED", "replaced"),
+        ("UNKNOWN", "unknown"),
+    ]
+
+
+def test_new_public_callable_annotations_resolve_at_runtime() -> None:
+    from dr_store import (
+        CanonicalJsonFile,
+        DocumentPublishError,
+        DocumentReadError,
+        SqliteRecordCache,
+    )
+
+    assert CanonicalJsonFile.path.fget is not None
+    public_callables = (
+        CanonicalJsonFile.__init__,
+        CanonicalJsonFile.path.fget,
+        CanonicalJsonFile.publish,
+        CanonicalJsonFile.read,
+        DocumentPublishError.__init__,
+        DocumentReadError.__init__,
+        SqliteRecordCache.__init__,
+        SqliteRecordCache.get,
+        SqliteRecordCache.put,
+        SqliteRecordCache.close,
+        SqliteRecordCache.__enter__,
+        SqliteRecordCache.__exit__,
+    )
+
+    for public_callable in public_callables:
+        assert get_type_hints(public_callable)

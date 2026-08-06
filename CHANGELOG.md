@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   lifecycles.
 - Added `CanonicalJsonFile` as the standalone bounded canonical-document
   capability. It publishes through reserved unique same-directory temporary
-  files, reports typed phase and replacement state on failure, and provides
+  files with private permissions, reports typed phase and explicit known,
+  completed, or unknown replacement state on failure, and provides
   strict descriptor-pinned reads. Concurrent publishers use independent
   temporary files, and the last successful replacement is authoritative.
 
@@ -33,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `read_manifest()` calls to the standalone canonical-document capability.
   Manifest errors retain the directory taxonomy while preserving the
   standalone typed failure as their cause.
+- Canonical files, Document Directories, SQLite backends, and managed SQLite
+  caches capture absolute filesystem paths at construction. SQLite
+  storage rejects empty and `:memory:` paths.
+- New public callable annotations are runtime-resolvable, including canonical
+  document errors and the managed SQLite cache surface.
 - Canonical document and Manifest reads are bounded, require exact canonical
   strict JSON bytes from a regular direct child, reject final-component
   symlinks, and remain pinned to the descriptor they inspected across a
@@ -43,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Restricted macOS `F_FULLFSYNC` fallback to unsupported-operation errors so
   I/O, bad-descriptor, interrupted, and unclassified flush failures propagate
   instead of being hidden by a successful `fsync` fallback.
+- Close interruption while draining restores an open managed-cache lifecycle;
+  process-level cleanup failure publishes a terminal lifecycle before it
+  propagates. Removed the unused path-based `flush_directory()` primitive.
 
 ## [0.1.3] - 2026-08-05
 

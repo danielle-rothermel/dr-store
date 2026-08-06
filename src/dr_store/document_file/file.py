@@ -7,10 +7,10 @@ import stat
 import uuid
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from dr_serialize import (
     CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+    Jsonable,
     SerializationError,
     canonical_json_bytes,
     decode_strict_json_bytes,
@@ -23,10 +23,8 @@ from dr_store.document_file.errors import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReplacementState,
 )
-
-if TYPE_CHECKING:
-    from dr_serialize import Jsonable
 
 _READ_CHUNK_BYTES = 1 << 16
 _RESERVED_TEMP_PREFIX = ".dr-store-document-"
@@ -198,7 +196,7 @@ class CanonicalJsonFile:
             max_bytes=max_bytes,
             max_depth=max_depth,
         )
-        directory_path = Path(directory)
+        directory_path = Path(directory).absolute()
         if not directory_path.is_dir():
             raise DocumentFileError(
                 f"directory must identify an existing directory, got "
@@ -227,13 +225,13 @@ class CanonicalJsonFile:
             raise DocumentPublishError(
                 self._path,
                 PublicationStage.ENCODE,
-                replacement_completed=False,
+                replacement_state=ReplacementState.NOT_REPLACED,
             ) from exc
         self._publish_bytes(encoded)
 
     def _publish_bytes(self, encoded: bytes) -> None:
         stage = PublicationStage.CREATE_TEMP
-        replacement_completed = False
+        replacement_state = ReplacementState.NOT_REPLACED
         directory_descriptor: int | None = None
         temporary_descriptor: int | None = None
         temporary_name: str | None = None
@@ -249,7 +247,7 @@ class CanonicalJsonFile:
             temporary_descriptor = os.open(
                 temporary_name,
                 _temp_flags(),
-                0o666,
+                0o600,
                 dir_fd=directory_descriptor,
             )
             owns_temporary = True
@@ -264,12 +262,13 @@ class CanonicalJsonFile:
             os.close(descriptor_to_close)
 
             stage = PublicationStage.REPLACE_TARGET
+            replacement_state = ReplacementState.UNKNOWN
             _replace(
                 temporary_name,
                 self._name,
                 directory_descriptor=directory_descriptor,
             )
-            replacement_completed = True
+            replacement_state = ReplacementState.REPLACED
             owns_temporary = False
 
             stage = PublicationStage.FLUSH_DIRECTORY
@@ -290,7 +289,7 @@ class CanonicalJsonFile:
             raise DocumentPublishError(
                 self._path,
                 stage,
-                replacement_completed=replacement_completed,
+                replacement_state=replacement_state,
             ) from failure
 
     def read(self) -> Jsonable:

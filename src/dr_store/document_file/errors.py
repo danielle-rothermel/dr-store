@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from enum import UNIQUE, StrEnum, verify
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path  # noqa: TC003 - public hints resolve at runtime.
 
 
 @verify(UNIQUE)
@@ -23,6 +20,19 @@ class PublicationStage(StrEnum):
     FLUSH_DIRECTORY = "flush_directory"
 
 
+@verify(UNIQUE)
+class ReplacementState(StrEnum):
+    """The known replacement outcome of a document publication.
+
+    Members describe reporting outcomes. Publication behavior must never be
+    constructed by iterating this enum.
+    """
+
+    NOT_REPLACED = "not_replaced"
+    REPLACED = "replaced"
+    UNKNOWN = "unknown"
+
+
 class DocumentFileError(Exception):
     """Base for standalone canonical document-file failures."""
 
@@ -35,15 +45,20 @@ class DocumentPublishError(DocumentFileError):
         path: Path,
         stage: PublicationStage,
         *,
-        replacement_completed: bool,
+        replacement_state: ReplacementState,
     ) -> None:
         self.path = path
         self.stage = stage
-        self.replacement_completed = replacement_completed
-        state = "after" if replacement_completed else "before"
+        self.replacement_state = replacement_state
+        if replacement_state is ReplacementState.NOT_REPLACED:
+            state = "without replacing the target"
+        elif replacement_state is ReplacementState.REPLACED:
+            state = "after replacing the target"
+        else:
+            state = "with an unknown replacement outcome"
         super().__init__(
             f"could not publish canonical document {str(path)!r} at "
-            f"{stage.value!r} {state} replacement"
+            f"{stage.value!r} {state}"
         )
 
 

@@ -146,7 +146,8 @@ name = "backend"
 definition = """
 The storage boundary that supplies atomic insert-if-absent operations and \
 point reads for object and binding tables. Persistence scope belongs to each \
-backend implementation."""
+backend implementation; persistent implementations capture one absolute path \
+when constructed."""
 exported_symbols = [
   "Backend",
   "MemoryBackend",
@@ -161,8 +162,9 @@ name = "canonical JSON document file"
 definition = """
 A standalone caller-named document in an existing caller-owned directory. Its \
 complete value is accepted under caller-declared byte and nesting-depth bounds, \
-stored as canonical JSON, and recovered only by a strict bounded read of the \
-same descriptor-pinned document."""
+stored as canonical JSON through a private temporary file, and recovered only \
+by a strict bounded read of the same descriptor-pinned document under the \
+absolute directory path captured at construction."""
 exported_symbols = ["CanonicalJsonFile", "DocumentFileError"]
 categories = ["document artifacts"]
 
@@ -170,10 +172,13 @@ categories = ["document artifacts"]
 name = "document publication failure"
 definition = """
 A failed canonical-document publication that identifies the publication phase \
-and whether that publication replaced its target before the failure. A target \
-not replaced by that publication remains governed by the last successful \
-replacement."""
-exported_symbols = ["DocumentPublishError", "PublicationStage"]
+and whether replacement is known not to have occurred, known to have occurred, \
+or cannot be determined from the failed operation."""
+exported_symbols = [
+  "DocumentPublishError",
+  "PublicationStage",
+  "ReplacementState",
+]
 categories = ["document artifacts"]
 part_of = ["canonical JSON document file"]
 
@@ -191,7 +196,9 @@ name = "document directory"
 definition = """
 One allocated directory grouping one bounded canonical JSON manifest with zero \
 or more sidecars. The caller chooses the manifest's byte and nesting-depth \
-bounds and remains responsible for sidecar coordination and retention."""
+bounds; one absolute directory path is captured at construction for both \
+manifest and sidecar access, while the caller remains responsible for sidecar \
+coordination and retention."""
 exported_symbols = [
   "DocumentDirectory",
   "AllocationError",
@@ -245,7 +252,8 @@ name = "managed SQLite record cache"
 definition = """
 A persistent record cache that establishes its storage before use, admits \
 complete operations only while open, and coordinates shutdown of the \
-current-process resources owned by one cache instance."""
+current-process resources owned by one cache instance. Its persistent \
+filesystem path is made absolute at construction."""
 exported_symbols = [
   "SqliteRecordCache",
   "SqliteRecordCacheCloseError",

@@ -52,10 +52,10 @@ class DocumentDirectory:
         manifest_max_bytes: int,
         manifest_max_depth: int = CANONICAL_JSON_MAX_CONTAINER_DEPTH,
     ) -> None:
-        self._path = path
+        self._path = path.absolute()
         try:
             self._manifest = CanonicalJsonFile(
-                path,
+                self._path,
                 manifest_name,
                 max_bytes=manifest_max_bytes,
                 max_depth=manifest_max_depth,
@@ -63,7 +63,7 @@ class DocumentDirectory:
         except DocumentFileError as exc:
             raise AllocationError(
                 f"could not configure manifest for document directory "
-                f"{str(path)!r}"
+                f"{str(self._path)!r}"
             ) from exc
 
     @property

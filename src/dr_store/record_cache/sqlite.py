@@ -3,25 +3,29 @@ from __future__ import annotations
 import enum
 import threading
 from contextlib import contextmanager
+from pathlib import Path  # noqa: TC003 - public hints resolve at runtime.
+from types import (
+    TracebackType,  # noqa: TC003 - public hints resolve at runtime.
+)
 from typing import TYPE_CHECKING, Self
 
+from dr_serialize import (
+    Jsonable,  # noqa: TC002 - public hints resolve at runtime.
+)
+
+from dr_store.content_addressing import (  # noqa: TC001
+    ObjectReference,
+)
 from dr_store.core.errors import (
     SqliteRecordCacheClosedError,
     SqliteRecordCacheCloseError,
 )
 from dr_store.object_store import ObjectStore
-from dr_store.record_cache.cache import RecordCache
+from dr_store.record_cache.cache import CacheHit, RecordCache
 from dr_store.storage_backends.sqlite import SqliteBackend
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
-    from types import TracebackType
-
-    from dr_serialize import Jsonable
-
-    from dr_store.content_addressing import ObjectReference
-    from dr_store.record_cache.cache import CacheHit
 
 
 class _Lifecycle(enum.Enum):
@@ -47,7 +51,7 @@ class SqliteRecordCache(RecordCache):
         self._state = _Lifecycle.OPEN
         self._active_operations = 0
         self._operation_local = _OperationLocal()
-        self._close_failure: Exception | None = None
+        self._close_failure: BaseException | None = None
 
     @contextmanager
     def _admit_operation(self) -> Iterator[None]:
@@ -86,43 +90,55 @@ class SqliteRecordCache(RecordCache):
             raise SqliteRecordCacheCloseError(
                 "cannot close SQLite record cache from an active operation"
             )
+        if not self._elect_closer():
+            return
 
-        with self._lifecycle:
-            if self._state is _Lifecycle.CLOSED:
-                return
-            if self._state is _Lifecycle.FAILED:
-                assert self._close_failure is not None
-                raise SqliteRecordCacheCloseError(
-                    "SQLite record cache close previously failed"
-                ) from self._close_failure
-            if self._state is _Lifecycle.CLOSING:
-                while self._state is _Lifecycle.CLOSING:
-                    self._lifecycle.wait()
-                if self._state is _Lifecycle.CLOSED:
-                    return
-                assert self._close_failure is not None
-                raise SqliteRecordCacheCloseError(
-                    "SQLite record cache close failed"
-                ) from self._close_failure
-
-            self._state = _Lifecycle.CLOSING
-            self._lifecycle.notify_all()
-            while self._active_operations:
-                self._lifecycle.wait()
-
+        failure: BaseException | None = None
         try:
             self._sqlite_backend._close_connections()
-        except Exception as error:
-            with self._lifecycle:
-                self._close_failure = error
-                self._state = _Lifecycle.FAILED
-                self._lifecycle.notify_all()
+        # Closing must publish a terminal state even for process-level exits.
+        except BaseException as error:  # noqa: BLE001
+            failure = error
+
+        self._publish_close_outcome(failure)
+        if failure is not None:
+            if not isinstance(failure, Exception):
+                raise failure
             raise SqliteRecordCacheCloseError(
                 "failed to close SQLite record cache"
-            ) from error
+            ) from failure
 
+    def _elect_closer(self) -> bool:
         with self._lifecycle:
-            self._state = _Lifecycle.CLOSED
+            while True:
+                if self._state is _Lifecycle.CLOSED:
+                    return False
+                if self._state is _Lifecycle.FAILED:
+                    assert self._close_failure is not None
+                    raise SqliteRecordCacheCloseError(
+                        "SQLite record cache close previously failed"
+                    ) from self._close_failure
+                if self._state is _Lifecycle.OPEN:
+                    self._state = _Lifecycle.CLOSING
+                    self._lifecycle.notify_all()
+                    try:
+                        while self._active_operations:
+                            self._lifecycle.wait()
+                    except BaseException:
+                        self._state = _Lifecycle.OPEN
+                        self._lifecycle.notify_all()
+                        raise
+                    return True
+                if self._state is _Lifecycle.CLOSING:
+                    self._lifecycle.wait()
+
+    def _publish_close_outcome(self, failure: BaseException | None) -> None:
+        with self._lifecycle:
+            if failure is None:
+                self._state = _Lifecycle.CLOSED
+            else:
+                self._close_failure = failure
+                self._state = _Lifecycle.FAILED
             self._lifecycle.notify_all()
 
     def __enter__(self) -> Self:

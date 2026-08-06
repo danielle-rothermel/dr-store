@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager, suppress
+from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
 from dr_store.storage_backends.contract import BindOutcome, PutOutcome
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
 _BUSY_TIMEOUT_MS = 30_000
+_TRANSIENT_DATABASE_PATHS = frozenset({"", ":memory:"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS objects (
@@ -29,6 +31,17 @@ CREATE TABLE IF NOT EXISTS bindings (
 """
 
 
+def _persistent_database_path(path: str | Path) -> str:
+    raw_path = os.fspath(path)
+    if not isinstance(raw_path, str):
+        raise TypeError("SQLite database path must be text")
+    if raw_path in _TRANSIENT_DATABASE_PATHS:
+        raise ValueError(
+            "SQLite backend requires a persistent filesystem path"
+        )
+    return str(Path(raw_path).absolute())
+
+
 class SqliteBackend:
     """Persistent SQLite object and binding storage.
 
@@ -37,7 +50,7 @@ class SqliteBackend:
     """
 
     def __init__(self, path: str | Path) -> None:
-        self._path = str(path)
+        self._path = _persistent_database_path(path)
         self._track_connections = False
         self._local = threading.local()
         self._connections: set[sqlite3.Connection] = set()

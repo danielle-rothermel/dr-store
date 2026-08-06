@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import stat
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -12,12 +14,11 @@ from dr_store.document_file import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReplacementState,
 )
 from dr_store.document_file import file as file_module
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from dr_serialize import Jsonable
 
 MAX_BYTES = 1 << 12
@@ -48,6 +49,7 @@ def test_package_and_class_public_surfaces_are_exact() -> None:
         "DocumentPublishError",
         "DocumentReadError",
         "PublicationStage",
+        "ReplacementState",
     ]
     public = {
         name for name in dir(CanonicalJsonFile) if not name.startswith("_")
@@ -119,6 +121,37 @@ def test_publish_replaces_existing_document(tmp_path: Path) -> None:
     assert document_file.read() == {"version": 2}
 
 
+def test_publish_keeps_private_file_permissions(tmp_path: Path) -> None:
+    document_file = _file(tmp_path)
+    document_file.publish({"version": 1})
+    document_file.path.chmod(0o600)
+
+    document_file.publish({"version": 2})
+
+    mode = stat.S_IMODE(document_file.path.stat().st_mode)
+    assert mode & 0o077 == 0
+    assert document_file.read() == {"version": 2}
+
+
+def test_relative_directory_path_is_captured_at_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    (first / "documents").mkdir(parents=True)
+    (second / "documents").mkdir(parents=True)
+    monkeypatch.chdir(first)
+    document_file = _file(Path("documents"))
+
+    monkeypatch.chdir(second)
+    document_file.publish({"version": 1})
+
+    assert document_file.path == first / "documents" / "document.json"
+    assert document_file.read() == {"version": 1}
+    assert not (second / "documents" / "document.json").exists()
+
+
 def test_publish_enforces_byte_bound_before_filesystem_write(
     tmp_path: Path,
 ) -> None:
@@ -126,7 +159,7 @@ def test_publish_enforces_byte_bound_before_filesystem_write(
     with pytest.raises(DocumentPublishError) as caught:
         document_file.publish(None)
     assert caught.value.stage is PublicationStage.ENCODE
-    assert caught.value.replacement_completed is False
+    assert caught.value.replacement_state is ReplacementState.NOT_REPLACED
     assert not document_file.path.exists()
 
 
@@ -142,7 +175,7 @@ def test_publish_enforces_lower_depth_bound_before_filesystem_write(
     with pytest.raises(DocumentPublishError) as caught:
         document_file.publish(_nested(3))
     assert caught.value.stage is PublicationStage.ENCODE
-    assert caught.value.replacement_completed is False
+    assert caught.value.replacement_state is ReplacementState.NOT_REPLACED
     assert not document_file.path.exists()
 
 
@@ -252,7 +285,7 @@ def test_zero_progress_write_is_typed_and_preserves_prior_target(
         document_file.publish({"version": 2})
 
     assert caught.value.stage is PublicationStage.WRITE_TEMP
-    assert caught.value.replacement_completed is False
+    assert caught.value.replacement_state is ReplacementState.NOT_REPLACED
     assert document_file.read() == {"version": 1}
     assert [path.name for path in tmp_path.iterdir()] == ["document.json"]
 

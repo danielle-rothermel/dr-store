@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 from dr_store.core.errors import AllocationError, DocumentDirectoryError
 
 if TYPE_CHECKING:
-    from pathlib import Path
     from types import ModuleType
 
 try:
@@ -59,11 +58,3 @@ def flush_descriptor(descriptor: int) -> None:
             os.fsync(descriptor)
         return
     os.fsync(descriptor)
-
-
-def flush_directory(directory: Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        flush_descriptor(descriptor)
-    finally:
-        os.close(descriptor)

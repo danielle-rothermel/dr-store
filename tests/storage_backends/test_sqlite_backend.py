@@ -58,6 +58,34 @@ class _FakeConnection:
             raise self.close_error
 
 
+@pytest.mark.parametrize("path", ["", ":memory:"])
+def test_transient_database_paths_are_rejected(path: str) -> None:
+    with pytest.raises(ValueError, match="persistent filesystem path"):
+        SqliteBackend(path)
+
+
+def test_relative_database_path_is_captured_at_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    monkeypatch.chdir(first)
+    backend = SqliteBackend("store.db")
+
+    monkeypatch.chdir(second)
+    assert backend.bind(
+        key=KEY,
+        schema=SCHEMA,
+        content_hash=CONTENT_HASH,
+    ).bound
+
+    assert (first / "store.db").exists()
+    assert not (second / "store.db").exists()
+
+
 def test_initialization_explicitly_closes_its_connection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

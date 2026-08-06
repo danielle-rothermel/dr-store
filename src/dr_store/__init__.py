@@ -33,6 +33,7 @@ from dr_store.document_file import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReplacementState,
 )
 from dr_store.object_store import (
     BindStatus,
@@ -80,6 +81,7 @@ __all__ = [
     "PutStatus",
     "RecordCache",
     "ReferenceValidationError",
+    "ReplacementState",
     "SchemaMismatchError",
     "SidecarSummary",
     "SidecarVerificationError",

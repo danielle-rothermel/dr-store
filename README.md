@@ -215,14 +215,17 @@ class SqliteRecordCache(RecordCache):
     def __exit__(self, ...) -> bool: ...
 ```
 
-Construction establishes the SQLite schema before returning. Closing rejects
+Construction captures a non-transient absolute filesystem path and establishes the SQLite
+schema before returning; empty and `:memory:` paths are rejected. Closing rejects
 new cache operations, waits for every admitted `get` or `put` to finish, and
 then closes all operational connections tracked by that cache instance in the
 current process. A successful close is idempotent for repeated and concurrent
 callers. `SqliteRecordCacheClosedError` reports operations requested after
 closing begins, before their inputs are validated; `SqliteRecordCacheCloseError`
-reports a terminal cleanup failure to every close caller, including a context
-exit. Committed records remain available after close and reopen. Closing one
+reports a terminal cleanup failure to close callers, including a context exit.
+An interruption while draining admitted work restores the open lifecycle; a
+process-level cleanup interruption terminalizes it before propagating to the
+elected caller. Committed records remain available after close and reopen. Closing one
 cache does not close a separate instance or coordinate another process, even
 when both use the same database path. These persistence semantics do not
 promise power-loss durability.
@@ -252,10 +255,12 @@ class CanonicalJsonFile:
     def read(self) -> Jsonable: ...
 ```
 
-`DocumentPublishError` reports a `PublicationStage` and
-`replacement_completed`. A false replacement value means that publication did
-not replace the target and any prior target remains authoritative. A true value
-means replacement occurred before later finalization failed. `DocumentReadError`
+`DocumentPublishError` reports a `PublicationStage` and `ReplacementState`.
+`NOT_REPLACED` means replacement was not invoked and any prior target remains
+authoritative. `REPLACED` means replacement returned before later finalization
+failed. `UNKNOWN` means the replacement operation itself failed and cannot prove
+whether the target changed, so callers must inspect or coordinate before treating
+either value as authoritative. `DocumentReadError`
 reports the requested path. Both derive from `DocumentFileError` and preserve
 the originating failure as their cause. The reporting phases are `ENCODE`,
 `CREATE_TEMP`, `WRITE_TEMP`, `FLUSH_TEMP`, `REPLACE_TARGET`, and
@@ -328,8 +333,8 @@ class SidecarWriter:
 
 ## Filesystem and failure semantics
 
-Canonical document publication creates a reserved unique temporary file for
-each call, writes its complete canonical bytes, flushes and closes it, replaces
+Canonical document publication creates a reserved unique temporary file with
+private permissions for each call, writes its complete canonical bytes, flushes and closes it, replaces
 the target in the same directory, and flushes and closes the directory.
 Concurrent supported publishers use independent temporary files, and the last
 successful replacement is authoritative. Publication does not provide locks,
@@ -343,6 +348,12 @@ visible and does not roll the document back. Publication and allocation make no
 power-loss durability promise. Document Directory allocation uses a timestamp
 and UUID4, but a generated-name collision raises `AllocationError` rather than
 being retried, and allocation does not flush the caller-owned root directory.
+
+Canonical files, Document Directories, and persistent SQLite storage capture a
+lexical absolute path at construction, so later working-directory changes do
+not redirect their operations. This does not freeze symlink targets. Directory
+durability is performed only where a pinned descriptor is already owned by the
+operation.
 
 Canonical document reads open the named directory and regular direct child with
 required no-follow, directory-relative flags, then stream from the child

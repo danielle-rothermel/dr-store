@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -10,8 +11,6 @@ from dr_store import AllocationError, DocumentDirectory
 from dr_store.document_directory import directory as directory_module
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from dr_serialize import Jsonable
 
 MANIFEST_NAME = "record.json"
@@ -53,6 +52,36 @@ def test_allocate_creates_a_fresh_prefixed_directory(tmp_path: Path) -> None:
     assert directory.path.parent == tmp_path
     assert directory.path.name.startswith(f"{PREFIX}-")
     assert not (directory.path / MANIFEST_NAME).exists()
+
+
+def test_relative_directory_path_is_captured_for_all_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    (first / "document").mkdir(parents=True)
+    (second / "document").mkdir(parents=True)
+    monkeypatch.chdir(first)
+    directory = DocumentDirectory(
+        Path("document"),
+        MANIFEST_NAME,
+        manifest_max_bytes=MANIFEST_MAX_BYTES,
+    )
+
+    monkeypatch.chdir(second)
+    directory.publish(PUBLISHED)
+    writer = directory.open_sidecar("stdout.bin")
+    writer.write(b"output")
+    writer.finalize()
+
+    assert directory.path == first / "document"
+    assert directory.read_manifest() == PUBLISHED
+    assert {path.name for path in directory.path.iterdir()} == {
+        MANIFEST_NAME,
+        "stdout.bin",
+    }
+    assert list((second / "document").iterdir()) == []
 
 
 def test_allocate_failure_is_typed_and_preserves_cause(

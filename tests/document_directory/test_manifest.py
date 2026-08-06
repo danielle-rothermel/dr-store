@@ -16,6 +16,7 @@ from dr_store.document_file import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReplacementState,
 )
 from dr_store.document_file import file as file_module
 
@@ -74,7 +75,7 @@ def test_publish_error_is_thin_contextual_translation(
     document_error = caught.value.__cause__
     assert isinstance(document_error, DocumentPublishError)
     assert document_error.stage is PublicationStage.ENCODE
-    assert document_error.replacement_completed is False
+    assert document_error.replacement_state is ReplacementState.NOT_REPLACED
     assert document_error.__cause__ is not None
     assert directory.read_manifest() == FIRST
 
@@ -97,7 +98,7 @@ def test_pre_replace_failure_preserves_manifest_and_stage(
     document_error = caught.value.__cause__
     assert isinstance(document_error, DocumentPublishError)
     assert document_error.stage is PublicationStage.WRITE_TEMP
-    assert document_error.replacement_completed is False
+    assert document_error.replacement_state is ReplacementState.NOT_REPLACED
     assert document_error.__cause__ is failure
     assert directory.read_manifest() == FIRST
 
@@ -129,7 +130,7 @@ def test_post_replace_failure_reports_visible_manifest_and_state(
     document_error = caught.value.__cause__
     assert isinstance(document_error, DocumentPublishError)
     assert document_error.stage is PublicationStage.FLUSH_DIRECTORY
-    assert document_error.replacement_completed is True
+    assert document_error.replacement_state is ReplacementState.REPLACED
     assert directory.read_manifest() == SECOND
 
 

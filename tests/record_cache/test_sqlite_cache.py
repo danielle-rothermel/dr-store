@@ -39,6 +39,12 @@ class _ObservedCondition(threading.Condition):
         return super().wait(timeout)
 
 
+class _InterruptingCondition(threading.Condition):
+    def wait(self, timeout: float | None = None) -> bool:
+        del timeout
+        raise RuntimeError("injected drain interruption")
+
+
 def _capture(
     operation: Callable[[], object],
     results: queue.Queue[object],
@@ -82,6 +88,12 @@ def test_construction_initializes_schema_before_returning(
         cache.close()
 
     assert {"objects", "bindings"} <= tables
+
+
+@pytest.mark.parametrize("path", ["", ":memory:"])
+def test_construction_rejects_transient_database_paths(path: str) -> None:
+    with pytest.raises(ValueError, match="persistent filesystem path"):
+        SqliteRecordCache(path)
 
 
 def test_records_persist_across_close_and_reopen(tmp_path: Path) -> None:
@@ -327,6 +339,66 @@ def test_same_thread_reentrant_close_fails_without_closing_cache(
     assert len(close_errors) == 1
     assert cache._state.name == "OPEN"
     cache.close()
+
+
+def test_drain_interruption_restores_open_lifecycle(
+    tmp_path: Path,
+) -> None:
+    cache = SqliteRecordCache(tmp_path / "cache.db")
+    operation_started = threading.Event()
+    release_operation = threading.Event()
+    results: queue.Queue[object] = queue.Queue()
+
+    def active_operation() -> None:
+        with cache._admit_operation():
+            operation_started.set()
+            assert release_operation.wait(WATCHDOG_SECONDS)
+
+    worker = threading.Thread(
+        target=_capture,
+        args=(active_operation, results),
+        name="active-operation",
+    )
+    worker.start()
+    assert operation_started.wait(WATCHDOG_SECONDS)
+    cache._lifecycle = _InterruptingCondition()
+
+    with pytest.raises(RuntimeError, match="injected drain interruption"):
+        cache.close()
+    assert cache._state.name == "OPEN"
+
+    release_operation.set()
+    _join(worker)
+    assert results.get_nowait() is None
+    cache.close()
+
+
+def test_process_level_cleanup_failure_terminalizes_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SqliteRecordCache(tmp_path / "cache.db")
+    cache.get(KEY, schema=SCHEMA)
+    interruption = KeyboardInterrupt("injected cleanup interruption")
+
+    def interrupt_cleanup() -> None:
+        raise interruption
+
+    monkeypatch.setattr(
+        cache._sqlite_backend,
+        "_close_connections",
+        interrupt_cleanup,
+    )
+
+    with pytest.raises(KeyboardInterrupt) as first:
+        cache.close()
+    assert first.value is interruption
+    assert cache._state.name == "FAILED"
+    with pytest.raises(SqliteRecordCacheCloseError) as repeated:
+        cache.close()
+    assert repeated.value.__cause__ is interruption
+    with pytest.raises(SqliteRecordCacheClosedError):
+        cache.get(KEY, schema=SCHEMA)
 
 
 def test_cleanup_failure_is_terminal_for_all_close_callers(

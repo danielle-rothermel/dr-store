@@ -5,6 +5,7 @@ from dr_store.document_file.errors import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReplacementState,
 )
 from dr_store.document_file.file import CanonicalJsonFile
 
@@ -14,4 +15,5 @@ __all__ = [
     "DocumentPublishError",
     "DocumentReadError",
     "PublicationStage",
+    "ReplacementState",
 ]
