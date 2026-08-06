@@ -1,64 +1,47 @@
 from __future__ import annotations
 
-import json
-import threading
-from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Self, cast
+import errno
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol
 
 import pytest
-from dr_serialize.canonical import (
-    CANONICAL_JSON_MAX_CONTAINER_DEPTH,
-    CANONICAL_JSON_MAX_INTEGER_DIGITS,
-    JsonEncodeError,
-)
 
 from dr_store import (
     DocumentDirectory,
     ManifestPublishError,
     ManifestReadError,
 )
-from dr_store.document_directory import directory as directory_module
+from dr_store.document_file import (
+    CanonicalJsonFile,
+    DocumentPublishError,
+    DocumentReadError,
+    PublicationStage,
+)
+from dr_store.document_file import file as file_module
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from dr_serialize import Jsonable
 
 MANIFEST_NAME = "record.json"
+MANIFEST_MAX_BYTES = 1 << 20
 FIRST: Jsonable = {"state": "started", "sidecars": []}
 SECOND: Jsonable = {"state": "finished", "sidecars": ["stdout.bin"]}
-WATCHDOG_SECONDS = 60
 
 
-def _nested_value(depth: int) -> Jsonable:
-    value: Jsonable = None
-    for _ in range(depth):
-        value = [value]
-    return value
-
-
-PROFILE_VIOLATIONS = [
-    pytest.param(
-        _nested_value(CANONICAL_JSON_MAX_CONTAINER_DEPTH + 1),
-        id="container-depth",
-    ),
-    pytest.param(
-        10**CANONICAL_JSON_MAX_INTEGER_DIGITS,
-        id="integer-digits",
-    ),
-]
-
-
-def _allocate(root: Path) -> DocumentDirectory:
+def _allocate(
+    root: Path,
+    *,
+    max_bytes: int = MANIFEST_MAX_BYTES,
+    max_depth: int = 200,
+) -> DocumentDirectory:
     return DocumentDirectory.allocate(
         root,
         prefix="run",
         manifest_name=MANIFEST_NAME,
-    )
-
-
-def _read(directory: DocumentDirectory) -> Jsonable:
-    return DocumentDirectory.read_manifest(
-        directory.path,
-        manifest_name=MANIFEST_NAME,
+        manifest_max_bytes=max_bytes,
+        manifest_max_depth=max_depth,
     )
 
 
@@ -68,196 +51,18 @@ def test_publish_writes_canonical_bytes_without_temp_residue(
     directory = _allocate(tmp_path)
     directory.publish({"b": 2, "a": 1})
     assert (directory.path / MANIFEST_NAME).read_bytes() == b'{"a":1,"b":2}'
+    assert directory.read_manifest() == {"a": 1, "b": 2}
     assert [path.name for path in directory.path.iterdir()] == [MANIFEST_NAME]
 
 
-def test_a_reader_sees_old_then_new_across_atomic_replace(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    directory = _allocate(tmp_path)
-    directory.publish(FIRST)
-    temp_path = directory.path / f"{MANIFEST_NAME}.tmp"
-    before_replace = threading.Event()
-    allow_replace = threading.Event()
-    after_replace = threading.Event()
-    allow_completion = threading.Event()
-    failures: list[BaseException] = []
-    original_replace = Path.replace
-
-    def gated_replace(path: Path, target: Path) -> Path:
-        if path == temp_path:
-            before_replace.set()
-            if not allow_replace.wait(WATCHDOG_SECONDS):
-                raise TimeoutError("replace release gate was not opened")
-            replaced = original_replace(path, target)
-            after_replace.set()
-            if not allow_completion.wait(WATCHDOG_SECONDS):
-                raise TimeoutError("publication release gate was not opened")
-            return replaced
-        return original_replace(path, target)
-
-    monkeypatch.setattr(Path, "replace", gated_replace)
-
-    def publish() -> None:
-        try:
-            directory.publish(SECOND)
-        except BaseException as exc:  # noqa: BLE001 - returned to test thread
-            failures.append(exc)
-
-    publishing = threading.Thread(target=publish)
-    publishing.start()
-    try:
-        assert before_replace.wait(WATCHDOG_SECONDS)
-        assert temp_path.read_bytes() == (
-            b'{"sidecars":["stdout.bin"],"state":"finished"}'
-        )
-        assert _read(directory) == FIRST
-        allow_replace.set()
-        assert after_replace.wait(WATCHDOG_SECONDS)
-        assert _read(directory) == SECOND
-    finally:
-        allow_replace.set()
-        allow_completion.set()
-        publishing.join(timeout=WATCHDOG_SECONDS)
-
-    assert not publishing.is_alive()
-    assert failures == []
-    assert _read(directory) == SECOND
-    assert not temp_path.exists()
-
-
-class _FailingWriteHandle:
-    def __init__(self, wrapped: BinaryIO) -> None:
-        self._wrapped = wrapped
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        _exc_type: object,
-        _exc: object,
-        _traceback: object,
-    ) -> None:
-        self._wrapped.close()
-
-    def write(self, _chunk: bytes) -> int:
-        raise OSError("write failed")
-
-
-def test_write_failure_preserves_old_manifest_and_cleans_temp(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    directory = _allocate(tmp_path)
-    directory.publish(FIRST)
-    temp_path = directory.path / f"{MANIFEST_NAME}.tmp"
-    original_open = Path.open
-
-    def fail_write_open(
-        path: Path,
-        mode: str,
-    ) -> BinaryIO | _FailingWriteHandle:
-        wrapped = cast("BinaryIO", original_open(path, mode))
-        if path == temp_path:
-            return _FailingWriteHandle(wrapped)
-        return wrapped
-
-    with monkeypatch.context() as patch:
-        patch.setattr(Path, "open", fail_write_open)
-        with pytest.raises(ManifestPublishError) as caught:
-            directory.publish(SECOND)
-
-    assert isinstance(caught.value.__cause__, OSError)
-    assert _read(directory) == FIRST
-    assert not temp_path.exists()
-
-
-def test_descriptor_flush_failure_preserves_old_manifest_and_cleans_temp(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    directory = _allocate(tmp_path)
-    directory.publish(FIRST)
-
-    def fail_flush(_descriptor: int) -> None:
-        raise OSError("descriptor flush failed")
-
-    monkeypatch.setattr(directory_module, "flush_descriptor", fail_flush)
-
-    with pytest.raises(ManifestPublishError) as caught:
-        directory.publish(SECOND)
-
-    assert isinstance(caught.value.__cause__, OSError)
-    assert _read(directory) == FIRST
-    assert not (directory.path / f"{MANIFEST_NAME}.tmp").exists()
-
-
-def test_replace_failure_preserves_old_manifest_and_cleans_temp(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    directory = _allocate(tmp_path)
-    directory.publish(FIRST)
-    temp_path = directory.path / f"{MANIFEST_NAME}.tmp"
-    original_replace = Path.replace
-
-    def fail_replace(path: Path, target: Path) -> Path:
-        if path == temp_path:
-            raise OSError("replace failed")
-        return original_replace(path, target)
-
-    monkeypatch.setattr(Path, "replace", fail_replace)
-
-    with pytest.raises(ManifestPublishError) as caught:
-        directory.publish(SECOND)
-
-    assert isinstance(caught.value.__cause__, OSError)
-    assert _read(directory) == FIRST
-    assert not temp_path.exists()
-
-
-def test_directory_flush_failure_reports_error_after_new_manifest_is_visible(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    directory = _allocate(tmp_path)
-    directory.publish(FIRST)
-
-    def fail_flush(_path: Path) -> None:
-        raise OSError("directory flush failed")
-
-    monkeypatch.setattr(directory_module, "flush_directory", fail_flush)
-
-    with pytest.raises(ManifestPublishError) as caught:
-        directory.publish(SECOND)
-
-    assert isinstance(caught.value.__cause__, OSError)
-    assert _read(directory) == SECOND
-    assert not (directory.path / f"{MANIFEST_NAME}.tmp").exists()
-
-
-def test_unremovable_temp_path_preserves_the_typed_publish_error(
-    tmp_path: Path,
-) -> None:
-    directory = _allocate(tmp_path)
-    (directory.path / f"{MANIFEST_NAME}.tmp").mkdir()
-
-    with pytest.raises(ManifestPublishError) as caught:
-        directory.publish(FIRST)
-
-    assert isinstance(caught.value.__cause__, OSError)
-
-
-def test_publish_is_last_write_wins(tmp_path: Path) -> None:
+def test_publish_is_last_successful_replacement_wins(tmp_path: Path) -> None:
     directory = _allocate(tmp_path)
     directory.publish(FIRST)
     directory.publish(SECOND)
-    assert _read(directory) == SECOND
+    assert directory.read_manifest() == SECOND
 
 
-def test_non_strict_publish_is_typed_and_preserves_previous_manifest(
+def test_publish_error_is_thin_contextual_translation(
     tmp_path: Path,
 ) -> None:
     directory = _allocate(tmp_path)
@@ -266,80 +71,149 @@ def test_non_strict_publish_is_typed_and_preserves_previous_manifest(
     with pytest.raises(ManifestPublishError) as caught:
         directory.publish({"bad": float("inf")})
 
-    assert caught.value.__cause__ is not None
-    assert _read(directory) == FIRST
+    document_error = caught.value.__cause__
+    assert isinstance(document_error, DocumentPublishError)
+    assert document_error.stage is PublicationStage.ENCODE
+    assert document_error.replacement_completed is False
+    assert document_error.__cause__ is not None
+    assert directory.read_manifest() == FIRST
 
 
-@pytest.mark.parametrize("manifest", PROFILE_VIOLATIONS)
-def test_canonical_profile_publish_failure_is_typed_and_preserves_manifest(
+def test_pre_replace_failure_preserves_manifest_and_stage(
     tmp_path: Path,
-    manifest: Jsonable,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     directory = _allocate(tmp_path)
     directory.publish(FIRST)
+    failure = OSError(errno.EIO, "write failed")
 
+    def fail_write(*_args: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(file_module, "_write_all", fail_write)
     with pytest.raises(ManifestPublishError) as caught:
-        directory.publish(manifest)
+        directory.publish(SECOND)
 
-    assert isinstance(caught.value.__cause__, JsonEncodeError)
-    assert _read(directory) == FIRST
-    assert not (directory.path / f"{MANIFEST_NAME}.tmp").exists()
-
-
-def test_read_manifest_missing_is_typed(tmp_path: Path) -> None:
-    directory = _allocate(tmp_path)
-    with pytest.raises(ManifestReadError) as caught:
-        _read(directory)
-    assert isinstance(caught.value.__cause__, OSError)
+    document_error = caught.value.__cause__
+    assert isinstance(document_error, DocumentPublishError)
+    assert document_error.stage is PublicationStage.WRITE_TEMP
+    assert document_error.replacement_completed is False
+    assert document_error.__cause__ is failure
+    assert directory.read_manifest() == FIRST
 
 
-def test_read_manifest_malformed_is_typed(tmp_path: Path) -> None:
-    directory = _allocate(tmp_path)
-    (directory.path / MANIFEST_NAME).write_bytes(b'{"truncated":')
-    with pytest.raises(ManifestReadError) as caught:
-        _read(directory)
-    assert isinstance(caught.value.__cause__, json.JSONDecodeError)
-
-
-def test_read_manifest_non_strict_is_typed(tmp_path: Path) -> None:
-    directory = _allocate(tmp_path)
-    (directory.path / MANIFEST_NAME).write_bytes(b'{"value":NaN}')
-    with pytest.raises(ManifestReadError) as caught:
-        _read(directory)
-    assert caught.value.__cause__ is not None
-
-
-def test_read_manifest_non_canonical_is_typed(tmp_path: Path) -> None:
-    directory = _allocate(tmp_path)
-    (directory.path / MANIFEST_NAME).write_bytes(b'{"a": 1}')
-    with pytest.raises(ManifestReadError):
-        _read(directory)
-
-
-@pytest.mark.parametrize("manifest", PROFILE_VIOLATIONS)
-def test_read_manifest_outside_the_canonical_profile_is_typed(
+def test_post_replace_failure_reports_visible_manifest_and_state(
     tmp_path: Path,
-    manifest: Jsonable,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     directory = _allocate(tmp_path)
-    canonical = json.dumps(
-        manifest,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
+    directory.publish(FIRST)
+    calls = 0
+    original_flush = file_module.flush_descriptor
+
+    def fail_directory_flush(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError(errno.EIO, "directory flush failed")
+        original_flush(descriptor)
+
+    monkeypatch.setattr(
+        file_module,
+        "flush_descriptor",
+        fail_directory_flush,
     )
-    (directory.path / MANIFEST_NAME).write_text(canonical)
+    with pytest.raises(ManifestPublishError) as caught:
+        directory.publish(SECOND)
 
-    with pytest.raises(ManifestReadError) as caught:
-        _read(directory)
+    document_error = caught.value.__cause__
+    assert isinstance(document_error, DocumentPublishError)
+    assert document_error.stage is PublicationStage.FLUSH_DIRECTORY
+    assert document_error.replacement_completed is True
+    assert directory.read_manifest() == SECOND
 
-    assert isinstance(caught.value.__cause__, JsonEncodeError)
 
-
-def test_read_manifest_undecodable_bytes_is_typed(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"truncated":',
+        b'{"value":NaN}',
+        b'{"duplicate":1,"duplicate":2}',
+        b'{"a": 1}',
+        b"\xff",
+    ],
+    ids=["syntax", "nonfinite", "duplicate", "noncanonical", "utf8"],
+)
+def test_read_error_is_thin_contextual_translation(
+    tmp_path: Path,
+    raw: bytes,
+) -> None:
     directory = _allocate(tmp_path)
-    (directory.path / MANIFEST_NAME).write_bytes(b"\xff\xfe\x00not utf-8")
+    (directory.path / MANIFEST_NAME).write_bytes(raw)
+
     with pytest.raises(ManifestReadError) as caught:
-        _read(directory)
-    assert caught.value.__cause__ is not None
+        directory.read_manifest()
+
+    document_error = caught.value.__cause__
+    assert isinstance(document_error, DocumentReadError)
+    assert document_error.path == directory.path / MANIFEST_NAME
+    assert document_error.__cause__ is not None
+
+
+def test_manifest_publish_and_read_share_configured_byte_bound(
+    tmp_path: Path,
+) -> None:
+    directory = _allocate(tmp_path, max_bytes=3)
+    with pytest.raises(ManifestPublishError):
+        directory.publish(None)
+    (directory.path / MANIFEST_NAME).write_bytes(b"null")
+    with pytest.raises(ManifestReadError):
+        directory.read_manifest()
+
+
+def test_manifest_publish_and_read_share_configured_depth_bound(
+    tmp_path: Path,
+) -> None:
+    directory = _allocate(tmp_path, max_depth=1)
+    with pytest.raises(ManifestPublishError):
+        directory.publish([[None]])
+    (directory.path / MANIFEST_NAME).write_bytes(b"[[null]]")
+    with pytest.raises(ManifestReadError):
+        directory.read_manifest()
+
+
+class _DocumentAdapter(Protocol):
+    def publish(self, document: Jsonable) -> None: ...
+
+    def read(self) -> Jsonable: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _DirectoryAdapter:
+    directory: DocumentDirectory
+
+    def publish(self, document: Jsonable) -> None:
+        self.directory.publish(document)
+
+    def read(self) -> Jsonable:
+        return self.directory.read_manifest()
+
+
+@pytest.mark.parametrize("surface", ["standalone", "document-directory"])
+def test_standalone_and_manifest_surfaces_share_publish_read_conformance(
+    tmp_path: Path,
+    surface: str,
+) -> None:
+    if surface == "standalone":
+        document: _DocumentAdapter = CanonicalJsonFile(
+            tmp_path,
+            MANIFEST_NAME,
+            max_bytes=MANIFEST_MAX_BYTES,
+        )
+    else:
+        document = _DirectoryAdapter(_allocate(tmp_path))
+
+    document.publish(FIRST)
+    assert document.read() == FIRST
+    document.publish(SECOND)
+    assert document.read() == SECOND

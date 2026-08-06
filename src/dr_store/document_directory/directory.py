@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-import contextlib
 import datetime as dt
-import json
 import uuid
 from pathlib import Path
 
 from dr_serialize import (
+    CANONICAL_JSON_MAX_CONTAINER_DEPTH,
     Jsonable,
-    JsonEncodeError,
-    StrictJsonError,
-    canonical_json,
-    validate_strict_json,
 )
 
 from dr_store.core.errors import (
@@ -21,20 +16,25 @@ from dr_store.core.errors import (
     ManifestReadError,
     SidecarVerificationError,
 )
-from dr_store.core.filesystem import (
-    flush_descriptor,
-    flush_directory,
-    validate_safe_name,
-)
+from dr_store.core.filesystem import validate_safe_name
 from dr_store.document_directory.sidecar import (
     SidecarWriter,
 )
 from dr_store.document_directory.sidecar import (
     verify_sidecar as _verify_sidecar,
 )
+from dr_store.document_file import (
+    CanonicalJsonFile,
+    DocumentFileError,
+    DocumentPublishError,
+    DocumentReadError,
+)
+from dr_store.document_file.file import (
+    _is_reserved_document_temp_name,
+    _validate_canonical_json_file_configuration,
+)
 
 _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%S%fZ"
-_TEMP_SUFFIX = ".tmp"
 
 
 class DocumentDirectory:
@@ -44,12 +44,27 @@ class DocumentDirectory:
     this class does not enforce it.
     """
 
-    def __init__(self, path: Path, manifest_name: str) -> None:
-        validate_safe_name(manifest_name, role="manifest_name")
+    def __init__(
+        self,
+        path: Path,
+        manifest_name: str,
+        *,
+        manifest_max_bytes: int,
+        manifest_max_depth: int = CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+    ) -> None:
         self._path = path
-        self._manifest_name = manifest_name
-        self._manifest_path = path / manifest_name
-        self._temp_path = path / f"{manifest_name}{_TEMP_SUFFIX}"
+        try:
+            self._manifest = CanonicalJsonFile(
+                path,
+                manifest_name,
+                max_bytes=manifest_max_bytes,
+                max_depth=manifest_max_depth,
+            )
+        except DocumentFileError as exc:
+            raise AllocationError(
+                f"could not configure manifest for document directory "
+                f"{str(path)!r}"
+            ) from exc
 
     @property
     def path(self) -> Path:
@@ -62,6 +77,8 @@ class DocumentDirectory:
         *,
         prefix: str,
         manifest_name: str,
+        manifest_max_bytes: int,
+        manifest_max_depth: int = CANONICAL_JSON_MAX_CONTAINER_DEPTH,
     ) -> DocumentDirectory:
         """Allocate ``<prefix>-<utc-timestamp>-<uuid4>`` under ``root``.
 
@@ -69,8 +86,17 @@ class DocumentDirectory:
         The caller-owned root is not flushed, so its new entry may not survive
         loss of the machine or filesystem cache.
         """
-        validate_safe_name(prefix, role="prefix")
-        validate_safe_name(manifest_name, role="manifest_name")
+        validate_safe_name(prefix, role="prefix", error=AllocationError)
+        try:
+            _validate_canonical_json_file_configuration(
+                manifest_name,
+                max_bytes=manifest_max_bytes,
+                max_depth=manifest_max_depth,
+            )
+        except DocumentFileError as exc:
+            raise AllocationError(
+                "could not configure document directory manifest"
+            ) from exc
         stamp = dt.datetime.now(dt.UTC).strftime(_TIMESTAMP_FORMAT)
         path = Path(root) / f"{prefix}-{stamp}-{uuid.uuid4()}"
         try:
@@ -79,7 +105,12 @@ class DocumentDirectory:
             raise AllocationError(
                 f"could not allocate document directory {str(path)!r}"
             ) from exc
-        return cls(path, manifest_name)
+        return cls(
+            path,
+            manifest_name,
+            manifest_max_bytes=manifest_max_bytes,
+            manifest_max_depth=manifest_max_depth,
+        )
 
     def publish(self, manifest: Jsonable) -> None:
         """Replace the Manifest in the same directory with canonical JSON.
@@ -91,29 +122,10 @@ class DocumentDirectory:
         guarantee power-loss durability.
         """
         try:
-            canonical = canonical_json(validate_strict_json(manifest))
-        except (
-            JsonEncodeError,
-            StrictJsonError,
-            TypeError,
-            ValueError,
-        ) as exc:
+            self._manifest.publish(manifest)
+        except DocumentPublishError as exc:
             raise ManifestPublishError(
-                f"manifest for {str(self._manifest_path)!r} is outside the "
-                "Canonical JSON Text profile"
-            ) from exc
-        try:
-            with self._temp_path.open("wb") as handle:
-                handle.write(canonical.encode("utf-8"))
-                handle.flush()
-                flush_descriptor(handle.fileno())
-            self._temp_path.replace(self._manifest_path)
-            flush_directory(self._path)
-        except OSError as exc:
-            with contextlib.suppress(OSError):
-                self._temp_path.unlink(missing_ok=True)
-            raise ManifestPublishError(
-                f"could not publish manifest {str(self._manifest_path)!r}"
+                f"could not publish manifest {str(self._manifest.path)!r}"
             ) from exc
 
     def open_sidecar(
@@ -137,57 +149,23 @@ class DocumentDirectory:
         error: type[DocumentDirectoryError],
     ) -> None:
         validate_safe_name(name, role="sidecar name", error=error)
-        if name.casefold() in {
-            self._manifest_name.casefold(),
-            self._temp_path.name.casefold(),
-        }:
+        if (
+            name.casefold() == self._manifest.path.name.casefold()
+            or _is_reserved_document_temp_name(name)
+        ):
             raise error(
                 f"sidecar name {name!r} is reserved by the manifest of "
                 f"{str(self._path)!r}"
             )
 
-    @classmethod
-    def read_manifest(
-        cls,
-        path: str | Path,
-        *,
-        manifest_name: str,
-    ) -> Jsonable:
+    def read_manifest(self) -> Jsonable:
         """Read and verify a canonical strict-JSON Manifest."""
-        validate_safe_name(
-            manifest_name,
-            role="manifest_name",
-            error=ManifestReadError,
-        )
-        manifest_path = Path(path) / manifest_name
         try:
-            raw = manifest_path.read_bytes()
-        except OSError as exc:
+            return self._manifest.read()
+        except DocumentReadError as exc:
             raise ManifestReadError(
-                f"could not read manifest {str(manifest_path)!r}"
+                f"could not read manifest {str(self._manifest.path)!r}"
             ) from exc
-        try:
-            payload = validate_strict_json(json.loads(raw))
-        except (
-            UnicodeDecodeError,
-            json.JSONDecodeError,
-            StrictJsonError,
-        ) as exc:
-            raise ManifestReadError(
-                f"manifest {str(manifest_path)!r} is not strict JSON"
-            ) from exc
-        try:
-            canonical = canonical_json(payload).encode("utf-8")
-        except JsonEncodeError as exc:
-            raise ManifestReadError(
-                f"manifest {str(manifest_path)!r} is outside the Canonical "
-                "JSON Text profile"
-            ) from exc
-        if canonical != raw:
-            raise ManifestReadError(
-                f"manifest {str(manifest_path)!r} is not in canonical form"
-            )
-        return payload
 
     def verify_sidecar(
         self,

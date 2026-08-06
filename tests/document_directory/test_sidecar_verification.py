@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 MANIFEST_NAME = "record.json"
+MANIFEST_MAX_BYTES = 1 << 20
 SIDECAR_NAME = "stdout.bin"
 WATCHDOG_SECONDS = 60
 
@@ -25,6 +26,7 @@ def _allocate(root: Path) -> DocumentDirectory:
         root,
         prefix="run",
         manifest_name=MANIFEST_NAME,
+        manifest_max_bytes=MANIFEST_MAX_BYTES,
     )
 
 
@@ -129,7 +131,7 @@ def test_verify_sidecar_missing_file_is_typed(tmp_path: Path) -> None:
         "nested\\name.bin",
         "nul\x00name.bin",
         MANIFEST_NAME,
-        f"{MANIFEST_NAME}.tmp",
+        ".dr-store-document-owned",
     ],
 )
 def test_verify_sidecar_rejects_unsafe_and_reserved_names_before_open(
@@ -223,7 +225,11 @@ import sys
 from pathlib import Path
 from dr_store import DocumentDirectory, SidecarVerificationError
 
-directory = DocumentDirectory(Path(sys.argv[1]), {MANIFEST_NAME!r})
+directory = DocumentDirectory(
+    Path(sys.argv[1]),
+    {MANIFEST_NAME!r},
+    manifest_max_bytes={MANIFEST_MAX_BYTES!r},
+)
 try:
     directory.verify_sidecar(
         {SIDECAR_NAME!r},

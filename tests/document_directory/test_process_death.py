@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from dr_serialize import Jsonable
 
 MANIFEST_NAME = "record.json"
+MANIFEST_MAX_BYTES = 1 << 20
 SIDECAR_NAME = "stdout.bin"
 FIRST: Jsonable = {"state": "collecting", "sidecars": []}
 WATCHDOG_SECONDS = 60
@@ -30,6 +31,7 @@ directory = DocumentDirectory.allocate(
     sys.argv[1],
     prefix="run",
     manifest_name={MANIFEST_NAME!r},
+    manifest_max_bytes={MANIFEST_MAX_BYTES!r},
 )
 directory.publish(FIRST)
 writer = directory.open_sidecar(SIDECAR_NAME, head_cap=100, tail_cap=60)
@@ -100,10 +102,11 @@ def _run_to_completion_then_kill(root: Path, scenario: str) -> Path:
 
 
 def _read(path: Path) -> Jsonable:
-    return DocumentDirectory.read_manifest(
+    return DocumentDirectory(
         path,
-        manifest_name=MANIFEST_NAME,
-    )
+        MANIFEST_NAME,
+        manifest_max_bytes=MANIFEST_MAX_BYTES,
+    ).read_manifest()
 
 
 def test_unfinalized_sidecar_does_not_damage_published_manifest_after_death(
@@ -136,7 +139,11 @@ def test_published_sidecar_is_verifiable_from_manifest_after_death(
     assert type(head_length) is int
     assert type(tail_length) is int
 
-    directory = DocumentDirectory(path, MANIFEST_NAME)
+    directory = DocumentDirectory(
+        path,
+        MANIFEST_NAME,
+        manifest_max_bytes=MANIFEST_MAX_BYTES,
+    )
     directory.verify_sidecar(
         name,
         expected_digest=digest,

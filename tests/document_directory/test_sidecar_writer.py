@@ -10,6 +10,7 @@ from dr_store import AllocationError, DocumentDirectory, SidecarSummary
 from dr_store.document_directory import sidecar as sidecar_module
 
 MANIFEST_NAME = "record.json"
+MANIFEST_MAX_BYTES = 1 << 20
 SIDECAR_NAME = "stdout.bin"
 STREAM = bytes(range(256)) * 8
 
@@ -19,6 +20,7 @@ def _allocate(root: Path) -> DocumentDirectory:
         root,
         prefix="run",
         manifest_name=MANIFEST_NAME,
+        manifest_max_bytes=MANIFEST_MAX_BYTES,
     )
 
 

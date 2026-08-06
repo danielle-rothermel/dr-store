@@ -64,6 +64,17 @@ def _validate_limit(value: int, *, role: str) -> None:
         )
 
 
+def _validate_canonical_json_file_configuration(
+    name: str,
+    *,
+    max_bytes: int,
+    max_depth: int,
+) -> None:
+    _validate_name(name)
+    _validate_limit(max_bytes, role="max_bytes")
+    _validate_limit(max_depth, role="max_depth")
+
+
 def _require_descriptor_support(*, publication: bool) -> None:
     required_flags = [
         *_COMMON_OPEN_FLAGS,
@@ -182,9 +193,11 @@ class CanonicalJsonFile:
         max_bytes: int,
         max_depth: int = CANONICAL_JSON_MAX_CONTAINER_DEPTH,
     ) -> None:
-        _validate_name(name)
-        _validate_limit(max_bytes, role="max_bytes")
-        _validate_limit(max_depth, role="max_depth")
+        _validate_canonical_json_file_configuration(
+            name,
+            max_bytes=max_bytes,
+            max_depth=max_depth,
+        )
         directory_path = Path(directory)
         if not directory_path.is_dir():
             raise DocumentFileError(
