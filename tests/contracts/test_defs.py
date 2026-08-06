@@ -63,7 +63,7 @@ def test_term_names_are_unique() -> None:
     names = [term["name"] for term in terms]
 
     assert all(name.strip() for name in names)
-    assert len(names) == 21
+    assert len(names) == 24
     assert len(names) == len({name.casefold() for name in names})
 
 

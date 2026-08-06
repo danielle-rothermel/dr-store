@@ -21,6 +21,10 @@ document artifacts:
 - **[Storage backends](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/storage_backends)**
   supply the Object Store's atomic, append-only operations. `MemoryBackend` is
   process-local; `SqliteBackend` persists data for cross-process use.
+- **[Record Cache](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/record_cache.py)**
+  memoizes records under derived cache keys. Reads are best-effort: any storage
+  fault is a miss. Entries are never rebound, so callers invalidate by
+  versioning their key namespace.
 - **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
   publishes one canonical Manifest beside streamed binary Sidecars.
 - **[Core infrastructure](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/core)**
