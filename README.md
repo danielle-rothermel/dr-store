@@ -27,8 +27,13 @@ document artifacts:
   requested schemas and operational backend faults raise. Entries are never
   rebound, so callers invalidate by selecting a new key; `derive_cache_key`
   provides a canonical scheme using a versioned namespace and payload.
+  `SqliteRecordCache(path)` is the managed persistent lifecycle.
+- **[Canonical JSON document files](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)**
+  publish and read one standalone, bounded canonical document in an existing
+  directory through descriptor-pinned filesystem operations.
 - **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
-  publishes one canonical Manifest beside streamed binary Sidecars.
+  delegates one bounded canonical Manifest to that file capability beside
+  streamed binary Sidecars.
 
 ## Installation
 
@@ -51,22 +56,44 @@ assert store.resolve("notes/latest") == reference
 assert store.get(reference) == {"title": "hello"}
 ```
 
-The same store can provide memoization without introducing another backend:
+`SqliteRecordCache(path)` is the paved persistent Record Cache. It initializes
+its database before returning and closes its current-process resources on
+normal or exceptional context exit. When cleanup succeeds, an exception from
+the context body is not suppressed; cleanup failure raises
+`SqliteRecordCacheCloseError`:
 
 ```python
-from dr_store import CacheHit, RecordCache, derive_cache_key
+from dr_store import CacheHit, SqliteRecordCache, derive_cache_key
 
-cache = RecordCache(store)
 key = derive_cache_key("example.summary.v1", {"document": "note-42"})
-cache.put(key, "example.summary.v1", {"summary": "hello"})
-
-assert cache.get(key, schema="example.summary.v1") == CacheHit(
-    record={"summary": "hello"}
-)
+with SqliteRecordCache("records.sqlite3") as cache:
+    cache.put(key, "example.summary.v1", {"summary": "hello"})
+    assert cache.get(key, schema="example.summary.v1") == CacheHit(
+        record={"summary": "hello"}
+    )
 ```
 
-Use `SqliteBackend(path)` when the stored objects and bindings must persist
-across processes. The rendered
+`CanonicalJsonFile` publishes one standalone document in an existing directory.
+The caller must declare the maximum accepted canonical byte length:
+
+```python
+from pathlib import Path
+
+from dr_store import CanonicalJsonFile
+
+artifact_directory = Path("artifacts")
+artifact_directory.mkdir(exist_ok=True)
+metadata = CanonicalJsonFile(
+    artifact_directory,
+    "metadata.json",
+    max_bytes=1 << 20,
+)
+metadata.publish({"state": "complete"})
+assert metadata.read() == {"state": "complete"}
+```
+
+Use the lower-level `SqliteBackend(path)` when assembling an `ObjectStore`
+directly whose objects and bindings must persist across processes. The rendered
 [definitions](https://danielle-rothermel.github.io/dr-store/), authoritative
 [terms](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/terms.toml),
 and binding
@@ -164,7 +191,8 @@ The [Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/
 is a memoization facade over an existing `ObjectStore`. It accepts opaque
 caller-owned keys, with `derive_cache_key` as the canonical helper for
 content-derived memoization. A typed hit keeps every strict JSON record,
-including null, distinct from a miss:
+including null, distinct from a miss. `SqliteRecordCache` supplies the managed
+persistent form:
 
 ```python
 def derive_cache_key(namespace: str, payload: Jsonable) -> str: ...
@@ -179,7 +207,81 @@ class RecordCache:
     def put(
         self, key: str, schema: str, record: Jsonable
     ) -> ObjectReference: ...
+
+class SqliteRecordCache(RecordCache):
+    def __init__(self, path: str | Path) -> None: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> SqliteRecordCache: ...
+    def __exit__(self, ...) -> bool: ...
 ```
+
+Construction captures a non-transient absolute filesystem path and establishes
+the SQLite schema before returning; empty and `:memory:` paths are rejected.
+Initialize a new database path with one constructor before starting concurrent
+constructors. Closing rejects new cache operations, waits for every admitted
+`get` or `put` to finish, and then closes all operational connections tracked by
+that cache instance in the current process. A successful close is idempotent for
+repeated and concurrent callers. `SqliteRecordCacheClosedError` reports
+operations requested after closing begins, before their inputs are validated;
+`SqliteRecordCacheCloseError` reports a terminal cleanup failure to close
+callers, including a context exit. An interruption before connection cleanup
+begins restores the open lifecycle and wakes another closer; a process-level
+cleanup interruption terminalizes it before propagating to the elected caller.
+Committed records remain available after close and reopen. Closing one cache
+does not close a separate instance or coordinate another process, even when
+both use the same database path. These persistence semantics do not promise
+power-loss durability.
+
+## Canonical JSON document files
+
+A [canonical JSON document file](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)
+owns publication and verified reads for one caller-named document in an existing
+directory. The byte bound is required; the nesting-depth bound defaults to the
+dr-serialize canonical profile maximum and applies to both publication and
+read:
+
+```python
+class CanonicalJsonFile:
+    def __init__(
+        self,
+        directory: str | Path,
+        name: str,
+        *,
+        max_bytes: int,
+        max_depth: int = CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+    ) -> None: ...
+
+    @property
+    def path(self) -> Path: ...
+    def publish(self, document: Jsonable) -> None: ...
+    def read(self) -> Jsonable: ...
+```
+
+```python
+@verify(UNIQUE)
+class PublicationStage(StrEnum):
+    ENCODE = "encode"
+    CREATE_TEMP = "create_temp"
+    WRITE_TEMP = "write_temp"
+    FLUSH_TEMP = "flush_temp"
+    REPLACE_TARGET = "replace_target"
+    FLUSH_DIRECTORY = "flush_directory"
+
+@verify(UNIQUE)
+class ReplacementState(StrEnum):
+    NOT_REPLACED = "not_replaced"
+    REPLACED = "replaced"
+    UNKNOWN = "unknown"
+```
+
+`DocumentPublishError` reports a `PublicationStage` and `ReplacementState`.
+`NOT_REPLACED` means replacement was not invoked and any prior target remains
+authoritative. `REPLACED` means replacement returned before later finalization
+failed. `UNKNOWN` means the replacement operation itself failed and cannot
+prove whether the target changed, so callers must inspect or coordinate before
+treating either value as authoritative. `DocumentReadError` reports the
+requested path. Both errors derive from `DocumentFileError` and preserve the
+originating failure as their cause.
 
 ## Document Directory
 
@@ -189,11 +291,24 @@ owns allocation and publication while `SidecarWriter` owns bounded retention:
 
 ```python
 class DocumentDirectory:
-    def __init__(self, path: Path, manifest_name: str) -> None: ...
+    def __init__(
+        self,
+        path: Path,
+        manifest_name: str,
+        *,
+        manifest_max_bytes: int,
+        manifest_max_depth: int = CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+    ) -> None: ...
 
     @classmethod
     def allocate(
-        cls, root: str | Path, *, prefix: str, manifest_name: str
+        cls,
+        root: str | Path,
+        *,
+        prefix: str,
+        manifest_name: str,
+        manifest_max_bytes: int,
+        manifest_max_depth: int = CANONICAL_JSON_MAX_CONTAINER_DEPTH,
     ) -> DocumentDirectory: ...
 
     def publish(self, manifest: Jsonable) -> None: ...
@@ -205,10 +320,7 @@ class DocumentDirectory:
         tail_cap: int | None = None,
     ) -> SidecarWriter: ...
 
-    @classmethod
-    def read_manifest(
-        cls, path: str | Path, *, manifest_name: str
-    ) -> Jsonable: ...
+    def read_manifest(self) -> Jsonable: ...
 
     def verify_sidecar(
         self,
@@ -236,27 +348,49 @@ class SidecarWriter:
 
 ## Filesystem and failure semantics
 
-A Document Directory is intended for caller-coordinated single-writer use;
-dr-store does not enforce that policy with a lock. Allocation uses a timestamp
+Canonical document publication creates a reserved unique temporary file with
+private permissions for each call, writes its complete canonical bytes, flushes
+and closes it, replaces the target in the same directory, and flushes and closes
+the directory. The case-insensitive `.dr-store-document-` prefix is reserved for
+these temporary files and cannot be used by document targets or Document
+Directory sidecars. Concurrent supported publishers use independent temporary
+files, and the last successful replacement is authoritative. Publication does
+not provide locks, compare-and-set, multi-file transactions, or ordering with
+Sidecar writes.
+
+All-or-nothing visibility depends on the underlying filesystem honoring atomic
+same-directory replacement; network, synchronized, or other filesystems whose
+rename semantics are not established are outside current evidence. A final
+directory flush or close failure raises even though replacement may already be
+visible and does not roll the document back. Publication and allocation make no
+power-loss durability promise. Document Directory allocation uses a timestamp
 and UUID4, but a generated-name collision raises `AllocationError` rather than
-being retried. Allocation does not flush the caller-owned root directory.
+being retried, and allocation does not flush the caller-owned root directory.
 
-Manifest publication writes and flushes a temporary file, replaces the Manifest
-in the same directory, and then flushes the Document Directory. All-or-nothing
-visibility depends on the underlying filesystem honoring atomic same-directory
-replacement; network, synchronized, or other filesystems whose rename semantics
-are not established are outside current evidence. A failure of the final flush
-raises even though the replacement may already be visible, and it does not roll
-the Manifest back. These operations do not promise power-loss durability.
+Canonical files, Document Directories, and persistent SQLite storage capture a
+lexical absolute path at construction, so later working-directory changes do
+not redirect their operations. This does not freeze symlink targets. Directory
+durability is performed only where a pinned descriptor is already owned by the
+operation.
 
-Name validation prevents lexical traversal syntax only. Manifest reads and
-Sidecar creation and writes follow existing final-component symlinks, so those
-paths require trusted, caller-controlled directory contents. Sidecar
-finalization flushes the Sidecar descriptor before returning its summary, but it
-does not flush the Sidecar's directory entry or impose ordering on an arbitrary
-Manifest publication. Sidecar verification is the no-follow path: it refuses
-final-component symlinks for both the Document Directory and named child,
-requires a regular direct child, and reads from the descriptor it inspected.
+Canonical document reads open the named directory and regular direct child with
+required no-follow, directory-relative flags, then stream from the child
+descriptor they inspected. They read only to the configured byte bound plus the
+single byte needed to detect overflow, enforce the configured nesting-depth
+bound, and require one complete UTF-8 strict JSON value whose bytes are exactly
+canonical. Final-component symlinks and non-regular files are rejected, a
+replacement after open cannot redirect that read to a different inode, and
+platforms without the required descriptor operations fail closed.
+
+Outside the reserved publication namespace, name validation prevents lexical
+traversal syntax. Sidecar creation and writes follow existing final-component
+symlinks and therefore require trusted, caller-controlled directory contents.
+Sidecar writer coordination remains the caller's concern. Sidecar finalization
+flushes the Sidecar descriptor before returning its summary, but it does not
+flush the Sidecar's directory entry or impose ordering on document publication.
+Sidecar verification also refuses final-component symlinks for both the
+Document Directory and named child, requires a regular direct child, and reads
+from the descriptor it inspected.
 
 A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
 open and its accounting state advanced. The writer is unusable by contract and

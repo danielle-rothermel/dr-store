@@ -157,11 +157,39 @@ exported_symbols = [
 categories = ["object storage"]
 
 [[terms]]
+name = "canonical JSON document file"
+definition = """
+A standalone caller-named document whose complete value is stored and recovered \
+as canonical JSON within caller-declared resource bounds."""
+exported_symbols = ["CanonicalJsonFile", "DocumentFileError"]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "document publication failure"
+definition = """
+A failed canonical-document publication that identifies the publication phase \
+and whether replacement is known not to have occurred, known to have occurred, \
+or cannot be determined from the failed operation."""
+exported_symbols = [
+  "DocumentPublishError",
+  "PublicationStage",
+  "ReplacementState",
+]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "document read failure"
+definition = """
+A failed attempt to recover one complete canonical document within its declared \
+bounds from the document selected at the start of the read."""
+exported_symbols = ["DocumentReadError"]
+categories = ["document artifacts"]
+
+[[terms]]
 name = "document directory"
 definition = """
-One allocated directory intended for caller-coordinated single-writer use, \
-providing one manifest location and zero or more sidecars. Writer coordination \
-and retention remain caller responsibilities."""
+One document artifact grouping one canonical JSON manifest with zero or more \
+sidecars. The caller owns their meaning, coordination, and retention."""
 exported_symbols = [
   "DocumentDirectory",
   "AllocationError",
@@ -172,11 +200,11 @@ categories = ["document artifacts"]
 [[terms]]
 name = "manifest"
 definition = """
-The single canonical JSON document published by same-directory replacement \
-for a document directory. Its caller-owned payload is the source of truth for \
-the meaning and completeness of any sidecars it describes."""
+A canonical JSON document file whose caller-owned payload defines the meaning \
+and completeness of the sidecars in its document directory."""
 exported_symbols = ["ManifestPublishError", "ManifestReadError"]
 categories = ["document artifacts"]
+is_a = ["canonical JSON document file"]
 part_of = ["document directory"]
 
 [[terms]]
@@ -206,6 +234,19 @@ object store and returns a typed hit containing the stored record for a key. \
 It adds no delete, expiry, eviction, or size-cap path."""
 exported_symbols = ["RecordCache", "CacheHit"]
 categories = ["record caching"]
+
+[[terms]]
+name = "managed SQLite record cache"
+definition = """
+A persistent record cache that owns the current-process resource lifecycle for \
+one cache instance."""
+exported_symbols = [
+  "SqliteRecordCache",
+  "SqliteRecordCacheCloseError",
+  "SqliteRecordCacheClosedError",
+]
+categories = ["record caching"]
+is_a = ["record cache"]
 
 [[terms]]
 name = "cache key"

@@ -18,12 +18,22 @@ from dr_store.core.errors import (
     ReferenceValidationError,
     SchemaMismatchError,
     SidecarVerificationError,
+    SqliteRecordCacheClosedError,
+    SqliteRecordCacheCloseError,
     StoreError,
 )
 from dr_store.document_directory import (
     DocumentDirectory,
     SidecarSummary,
     SidecarWriter,
+)
+from dr_store.document_file import (
+    CanonicalJsonFile,
+    DocumentFileError,
+    DocumentPublishError,
+    DocumentReadError,
+    PublicationStage,
+    ReplacementState,
 )
 from dr_store.object_store import (
     BindStatus,
@@ -33,6 +43,7 @@ from dr_store.object_store import (
 from dr_store.record_cache import (
     CacheHit,
     RecordCache,
+    SqliteRecordCache,
     derive_cache_key,
 )
 from dr_store.storage_backends import (
@@ -51,9 +62,13 @@ __all__ = [
     "BindStatus",
     "BindingConflictError",
     "CacheHit",
+    "CanonicalJsonFile",
     "ContentHashMismatchError",
     "DocumentDirectory",
     "DocumentDirectoryError",
+    "DocumentFileError",
+    "DocumentPublishError",
+    "DocumentReadError",
     "ManifestPublishError",
     "ManifestReadError",
     "MemoryBackend",
@@ -61,15 +76,20 @@ __all__ = [
     "ObjectNotFoundError",
     "ObjectReference",
     "ObjectStore",
+    "PublicationStage",
     "PutOutcome",
     "PutStatus",
     "RecordCache",
     "ReferenceValidationError",
+    "ReplacementState",
     "SchemaMismatchError",
     "SidecarSummary",
     "SidecarVerificationError",
     "SidecarWriter",
     "SqliteBackend",
+    "SqliteRecordCache",
+    "SqliteRecordCacheCloseError",
+    "SqliteRecordCacheClosedError",
     "StoreError",
     "compute_content_hash",
     "derive_cache_key",

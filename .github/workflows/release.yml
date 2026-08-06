@@ -17,7 +17,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -33,13 +33,13 @@ jobs:
             echo "Tagged commit '${GITHUB_SHA}' is not contained in origin/main" >&2
             exit 1
           fi
-      - uses: astral-sh/setup-uv@v8.3.1
+      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
         with:
           python-version: "3.12"
           enable-cache: false
       - run: scripts/pre-check.sh --artifacts release-dist
       # Publishes via PyPI Trusted Publishing (OIDC) — no API token.
       # Requires this repo and workflow to be registered as a PyPI publisher.
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: release-dist/

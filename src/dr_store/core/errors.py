@@ -88,6 +88,14 @@ class BindingConflictError(StoreError):
         )
 
 
+class SqliteRecordCacheClosedError(StoreError):
+    """Raised when an operation is requested after closing begins."""
+
+
+class SqliteRecordCacheCloseError(StoreError):
+    """Raised when the managed SQLite cache cannot complete close."""
+
+
 class DocumentDirectoryError(Exception):
     """Base for every Document Directory failure."""
 

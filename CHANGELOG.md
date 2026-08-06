@@ -6,6 +6,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-06
+
+### Added
+
+- Added `SqliteRecordCache(path)` as the managed persistent Record Cache. It
+  initializes storage before returning, admits complete cache operations while
+  open, rejects new work and waits for admitted work during shutdown, and
+  closes every connection tracked by that instance in the current process.
+  Normal and exceptional context exits perform close; a body exception is not
+  suppressed when cleanup succeeds, while cleanup failure raises the typed
+  close error. Successful repeated and concurrent closes are idempotent. Typed
+  errors distinguish post-close use from terminal cleanup failure, committed
+  records persist across reopen, and instances and processes retain independent
+  lifecycles. One constructor must initialize a new database path before
+  concurrent constructors use it.
+- Added `CanonicalJsonFile` as the standalone bounded canonical-document
+  capability. It publishes through reserved unique same-directory temporary
+  files with private permissions, reports typed phase and explicit known,
+  completed, or unknown replacement state on failure, and provides
+  strict descriptor-pinned reads. Concurrent publishers use independent
+  temporary files, and the last successful replacement is authoritative.
+
+### Changed
+
+- `DocumentDirectory` requires a caller-owned `manifest_max_bytes`, accepts an
+  optional `manifest_max_depth`, and delegates publication and instance
+  `read_manifest()` calls to the standalone canonical-document capability.
+  Manifest errors retain the directory taxonomy while preserving the
+  standalone typed failure as their cause.
+- Canonical files, Document Directories, SQLite backends, and managed SQLite
+  caches capture absolute filesystem paths at construction. SQLite
+  storage rejects empty and `:memory:` paths.
+- New public callable annotations are runtime-resolvable, including canonical
+  document errors and the managed SQLite cache surface.
+- Canonical document and Manifest reads are bounded, require exact canonical
+  strict JSON bytes from a regular direct child, reject final-component
+  symlinks, and remain pinned to the descriptor they inspected across a
+  concurrent replacement.
+- Reserved the case-insensitive `.dr-store-document-` prefix for canonical
+  document publication temporary files. Standalone document targets, Manifest
+  names, and Document Directory Sidecars cannot use that prefix.
+- Pinned CI, Pages, release, and pre-commit dependencies to reviewed immutable
+  commits, including every action used by the trusted PyPI publication job.
+
+### Fixed
+
+- Restricted macOS `F_FULLFSYNC` fallback to unsupported-operation errors so
+  I/O, bad-descriptor, interrupted, and unclassified flush failures propagate
+  instead of being hidden by a successful `fsync` fallback.
+- Close interruption before connection cleanup begins restores an open
+  managed-cache lifecycle and wakes another closer; process-level cleanup
+  failure publishes a terminal lifecycle before it propagates. Connection
+  cleanup now attempts every owned connection even when one close raises a
+  process-level interruption. Removed the unused path-based `flush_directory()`
+  primitive.
+
 ## [0.1.3] - 2026-08-05
 
 ### Added

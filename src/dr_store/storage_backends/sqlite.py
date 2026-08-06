@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
-from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from contextlib import contextmanager, suppress
+from pathlib import Path
+from typing import TYPE_CHECKING, Self
 
 from dr_store.storage_backends.contract import BindOutcome, PutOutcome
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
 _BUSY_TIMEOUT_MS = 30_000
+_TRANSIENT_DATABASE_PATHS = frozenset({"", ":memory:"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS objects (
@@ -29,6 +31,17 @@ CREATE TABLE IF NOT EXISTS bindings (
 """
 
 
+def _persistent_database_path(path: str | Path) -> str:
+    raw_path = os.fspath(path)
+    if not isinstance(raw_path, str):
+        raise TypeError("SQLite database path must be text")
+    if raw_path in _TRANSIENT_DATABASE_PATHS:
+        raise ValueError(
+            "SQLite backend requires a persistent filesystem path"
+        )
+    return str(Path(raw_path).absolute())
+
+
 class SqliteBackend:
     """Persistent SQLite object and binding storage.
 
@@ -37,30 +50,92 @@ class SqliteBackend:
     """
 
     def __init__(self, path: str | Path) -> None:
-        self._path = str(path)
+        self._path = _persistent_database_path(path)
+        self._track_connections = False
         self._local = threading.local()
-        with self._connect() as conn:
+        self._connections: set[sqlite3.Connection] = set()
+        self._connections_lock = threading.Lock()
+        conn = self._connect(check_same_thread=True)
+        try:
             conn.executescript(_SCHEMA)
             conn.commit()
+        finally:
+            conn.close()
 
-    def _connect(self) -> sqlite3.Connection:
+    @classmethod
+    def _managed(cls, path: str | Path) -> Self:
+        backend = cls(path)
+        backend._track_connections = True
+        return backend
+
+    def _connect(self, *, check_same_thread: bool) -> sqlite3.Connection:
         conn = sqlite3.connect(
             self._path,
             timeout=_BUSY_TIMEOUT_MS / 1000,
             isolation_level=None,
+            check_same_thread=check_same_thread,
         )
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=FULL")
-        conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=FULL")
+            conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        except BaseException:
+            with suppress(Exception):
+                conn.close()
+            raise
         return conn
 
     @property
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = self._connect()
-            self._local.conn = conn
+            # Connections remain thread-local during use. This flag exists
+            # only so a quiesced higher-level owner can close them centrally.
+            conn = self._connect(check_same_thread=False)
+            try:
+                if self._track_connections:
+                    with self._connections_lock:
+                        self._connections.add(conn)
+                        try:
+                            self._local.conn = conn
+                        except BaseException:
+                            self._connections.remove(conn)
+                            raise
+                else:
+                    self._local.conn = conn
+            except BaseException:
+                with suppress(Exception):
+                    conn.close()
+                raise
         return conn
+
+    def _close_connections(self) -> None:
+        """Close tracked operational connections.
+
+        A higher-level owner must quiesce all backend operations first.
+        """
+        with self._connections_lock:
+            connections = tuple(self._connections)
+            self._connections.clear()
+
+        failures: list[Exception] = []
+        process_failure: BaseException | None = None
+        for conn in connections:
+            try:
+                conn.close()
+            # Cleanup must continue after any connection close fault.
+            except BaseException as error:  # noqa: BLE001
+                if isinstance(error, Exception):
+                    failures.append(error)
+                elif process_failure is None:
+                    process_failure = error
+        if process_failure is not None:
+            raise process_failure
+        if failures:
+            raise ExceptionGroup(
+                "failed to close SQLite operational connections",
+                failures,
+            )
 
     @contextmanager
     def _immediate(self) -> Iterator[sqlite3.Connection]:

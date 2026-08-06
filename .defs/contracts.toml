@@ -70,8 +70,12 @@ title = "Backends own atomicity and declare persistence scope"
 statement = """
 Every backend supplies atomic insert-if-absent operations for object rows and \
 bindings plus point reads. The in-memory backend is process-local; the SQLite \
-backend retains committed rows across reopen and supports cross-process \
-contention without claiming power-loss durability."""
+backend requires a non-transient filesystem path, captures its lexical absolute \
+path at construction, retains committed rows across reopen, and supports \
+cross-process contention without claiming power-loss durability. Empty and \
+`:memory:` paths are rejected. Capturing an absolute path prevents later \
+working-directory changes from redirecting it but does not freeze symlink \
+targets."""
 rationale = """
 The object store owns hashing, verification, idempotency, and typed conflicts, \
 while the backend owns the atomic storage primitive those rules require. \
@@ -85,8 +89,8 @@ title = "Callers own domain meaning"
 statement = """
 Schemas and binding keys are opaque strings, and manifest payload fields are \
 opaque strict JSON. Callers own their meaning, identity selection, lifecycle, \
-retention, cap policy, and writer coordination; storage does not infer those \
-domain rules."""
+retention, and configured byte, depth, and sidecar cap policy; storage does not \
+infer those domain rules."""
 rationale = """
 Keeping domain policy outside the foundational storage boundary lets the same \
 primitives serve unrelated consumers without silently redefining their data."""
@@ -108,34 +112,101 @@ date = "2026-08-05"
 check = "uv run pytest -q tests/document_directory/test_directory.py"
 
 [[contracts]]
-title = "Manifest replacement is filesystem-conditional"
+title = "Canonical document publication uses same-directory replacement"
 statement = """
-Manifest publication validates canonical-profile input, writes and flushes a \
-complete temporary file, replaces the manifest in the same directory, and \
-then flushes that directory. All-or-nothing visibility depends on the \
-filesystem's same-directory replacement semantics; callers coordinate writers, \
+A standalone canonical document file validates one complete strict JSON value \
+within its caller-supplied byte and nesting-depth bounds before filesystem \
+publication. Publication writes the complete canonical bytes to a reserved \
+same-directory temporary file created with private permissions, flushes and \
+closes that file, replaces the target, and then flushes and closes the \
+directory. Its lexical absolute directory path is captured at construction; \
+this prevents working-directory redirection but does not freeze symlink \
+targets. All-or-nothing visibility depends on the filesystem's same-directory \
+replacement semantics, \
 and no power-loss durability is promised."""
 rationale = """
-A write, descriptor-flush, or replacement failure leaves the prior manifest \
-in place, while a directory-flush failure can be reported after the new \
-manifest is already visible. The last writer wins when callers publish \
-without external coordination."""
-date = "2026-08-05"
-check = "uv run pytest -q tests/document_directory/test_manifest.py"
+Pre-publication bounds prevent an accepted write from exceeding the matching \
+read contract. Same-directory replacement avoids exposing a partial target, \
+while the filesystem and power-loss limitations keep visibility and durability \
+claims no stronger than the available evidence."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/document_file"
 
 [[contracts]]
-title = "Manifest reads require exact canonical bytes"
+title = "Document publication failures report phase and replacement"
 statement = """
-A manifest read returns a payload only when the file is one complete UTF-8 \
-strict JSON value within the canonical profile and its stored bytes exactly \
-equal that value's canonical JSON bytes; every read or validation fault raises \
-a typed manifest-read error."""
+A failed publication reports `ENCODE`, `CREATE_TEMP`, `WRITE_TEMP`, \
+`FLUSH_TEMP`, `REPLACE_TARGET`, or `FLUSH_DIRECTORY`. `CREATE_TEMP` includes \
+directory acquire and temporary-file open; `FLUSH_TEMP` includes flush and \
+close; `FLUSH_DIRECTORY` includes directory flush and close. \
+`replacement_state = NOT_REPLACED` means replacement was not invoked and a \
+prior target, if any, stays authoritative. `REPLACED` means replacement \
+returned successfully and later finalization failed. `UNKNOWN` means the \
+replacement operation reported a failure, so the target may contain either \
+the prior or proposed document and the caller must inspect or coordinate before \
+treating either value as authoritative."""
 rationale = """
-Exact read-back rejects malformed, non-strict, out-of-profile, and merely \
-equivalent non-canonical documents instead of normalizing corruption or \
-external modification on read."""
-date = "2026-08-05"
-check = "uv run pytest -q tests/document_directory/test_manifest.py"
+Callers can distinguish failures that preserve the prior target from failures \
+reported after confirmed replacement while retaining uncertainty when an \
+operating-system replacement error does not prove whether the target changed."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/document_file/test_failures.py tests/document_file/test_interrupted_publication.py"
+
+[[contracts]]
+title = "Concurrent document publishers use independent temporary files"
+statement = """
+Every supported publication reserves a unique temporary child name from the \
+case-insensitive `.dr-store-document-` namespace, which document targets and \
+document-directory sidecars may not use. Concurrent publishers do not share \
+temporary files; each successful replacement publishes one complete document, \
+and the last successful replacement is authoritative. Publication provides no \
+lock, compare-and-set operation, or multi-file transaction."""
+rationale = """
+Independent temporary files prevent concurrent publishers from corrupting one \
+another's staged bytes. Replacement order defines the winner without claiming \
+serialization, conditional update, or coordination across related artifacts."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/document_file/test_canonical_json.py::test_two_publishers_use_distinct_temps_and_last_replacement_wins"
+
+[[contracts]]
+title = "Canonical document reads are bounded and descriptor-pinned"
+statement = """
+A standalone document read opens the named directory and its regular direct \
+child under the absolute directory path captured at construction with required \
+no-follow, directory-relative flags, reads no more than one \
+byte beyond the caller-supplied byte bound from the child descriptor it \
+inspected, and accepts only one complete UTF-8 strict JSON value within the \
+configured nesting-depth bound whose stored bytes exactly equal its canonical \
+JSON bytes. Every open, read, close, decoding, bounds, or canonicality failure \
+raises a typed document-read error, and unsupported platforms fail closed."""
+rationale = """
+Pinned descriptors keep a concurrent replacement from changing the object \
+mid-read. Exact bounded read-back rejects symlinks, non-regular files, malformed \
+or oversized content, and merely equivalent non-canonical documents without \
+normalizing them on read."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/document_file/test_canonical_json.py"
+
+[[contracts]]
+title = "Document directories delegate manifests to canonical files"
+statement = """
+A document directory requires caller-supplied manifest byte bounds, accepts an \
+optional nesting-depth bound, and configures one standalone canonical document \
+file for both manifest publication and instance reads. It translates \
+standalone configuration, publication, and read failures into its established \
+typed directory errors while preserving the originating error as the cause. \
+One lexical absolute directory path is captured and shared by manifest and \
+sidecar operations; symlink targets are not frozen. \
+Manifest publication and reads retain the standalone file's bounds, phase, \
+replacement, concurrency, and descriptor-pinning behavior. Manifest names and \
+sidecar names may not use the canonical file's case-insensitive \
+`.dr-store-document-` temporary namespace."""
+rationale = """
+One delegated implementation keeps manifest behavior aligned with standalone \
+documents while preserving the Document Directory's contextual error surface \
+and its separate Sidecar responsibilities."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/document_directory/test_directory.py tests/document_directory/test_manifest.py"
 
 [[contracts]]
 title = "Sidecar finalization reports stored-byte accounting"
@@ -164,8 +235,8 @@ required platform support is unavailable."""
 rationale = """
 Pinned descriptors prevent a checked child name from being swapped to a \
 different final object before reading. This boundary does not claim containment \
-for ancestor path resolution, durability, or safety for sidecar creation and \
-manifest reads, which follow their documented path behavior."""
+for ancestor path resolution, durability, or safety for sidecar creation, which \
+follows its documented path behavior."""
 date = "2026-08-05"
 check = "uv run pytest -q tests/document_directory/test_sidecar_verification.py"
 
@@ -189,3 +260,38 @@ contract, while the canonical derivation helper gives callers a versioned, \
 content-derived scheme without making that scheme mandatory."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/record_cache/test_cache.py"
+
+[[contracts]]
+title = "Managed SQLite record caches own their complete lifecycle"
+statement = """
+A managed SQLite record cache initializes its database schema before \
+construction returns and admits each cache read or write as one whole \
+operation while open. Closing rejects new operations with a typed closed \
+error before input validation, waits for every admitted operation to finish, \
+and then closes every operational connection tracked by that instance in the \
+current process. Normal and exceptional context-manager exits both perform \
+close. When cleanup succeeds, a body exception is not suppressed; cleanup \
+failure instead raises a typed close error and leaves the lifecycle terminal. \
+The elected caller receives its original process-level interruption after the \
+terminal failure is published; every later close caller receives a typed close \
+error exposing that failure, and cache operations remain closed. If the elected \
+closer is interrupted before connection cleanup begins, the lifecycle returns \
+to open and wakes other callers. Successful close is idempotent for repeated \
+and concurrent callers. The persistent database path is made absolute \
+at construction without freezing symlink targets, and transient paths are \
+rejected. Completed commits persist across close and reopen, while separate \
+instances and processes retain independent lifecycles even when they use the \
+same database path. A new database path is initialized by one constructor \
+before concurrent constructors use it."""
+rationale = """
+Whole-operation admission prevents shutdown from invalidating a cache \
+operation between its binding and object-store steps. Rejecting new work \
+before draining admitted work gives closure one stable resource boundary, and \
+terminal typed failures keep incomplete cleanup visible. Persistence describes \
+committed SQLite rows across reopen; it does not promise power-loss durability \
+or let one cache instance govern resources owned by another instance or \
+process. Coordinating the first constructor keeps SQLite journal-mode setup out \
+of concurrent first-use contention without claiming an initialization protocol \
+that the backend does not provide."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/record_cache/test_sqlite_cache.py tests/storage_backends/test_sqlite_backend.py"
