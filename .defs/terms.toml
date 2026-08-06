@@ -157,11 +157,41 @@ exported_symbols = [
 categories = ["object storage"]
 
 [[terms]]
+name = "canonical JSON document file"
+definition = """
+A standalone caller-named document in an existing caller-owned directory. Its \
+complete value is accepted under caller-declared byte and nesting-depth bounds, \
+stored as canonical JSON, and recovered only by a strict bounded read of the \
+same descriptor-pinned document."""
+exported_symbols = ["CanonicalJsonFile", "DocumentFileError"]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "document publication failure"
+definition = """
+A failed canonical-document publication that identifies the publication phase \
+and whether that publication replaced its target before the failure. A target \
+not replaced by that publication remains governed by the last successful \
+replacement."""
+exported_symbols = ["DocumentPublishError", "PublicationStage"]
+categories = ["document artifacts"]
+part_of = ["canonical JSON document file"]
+
+[[terms]]
+name = "document read failure"
+definition = """
+A failed attempt to recover one complete canonical document within its declared \
+bounds from the document selected at the start of the read."""
+exported_symbols = ["DocumentReadError"]
+categories = ["document artifacts"]
+part_of = ["canonical JSON document file"]
+
+[[terms]]
 name = "document directory"
 definition = """
-One allocated directory intended for caller-coordinated single-writer use, \
-providing one manifest location and zero or more sidecars. Writer coordination \
-and retention remain caller responsibilities."""
+One allocated directory grouping one bounded canonical JSON manifest with zero \
+or more sidecars. The caller chooses the manifest's byte and nesting-depth \
+bounds and remains responsible for sidecar coordination and retention."""
 exported_symbols = [
   "DocumentDirectory",
   "AllocationError",
@@ -172,11 +202,14 @@ categories = ["document artifacts"]
 [[terms]]
 name = "manifest"
 definition = """
-The single canonical JSON document published by same-directory replacement \
-for a document directory. Its caller-owned payload is the source of truth for \
-the meaning and completeness of any sidecars it describes."""
+A canonical JSON document file serving as a document directory's manifest. Its \
+caller-owned payload is the source of truth for the meaning and completeness of \
+any sidecars it describes; supported concurrent publishers use independent \
+publications, the last successful replacement is authoritative, and reads are \
+strict, bounded, and descriptor-pinned."""
 exported_symbols = ["ManifestPublishError", "ManifestReadError"]
 categories = ["document artifacts"]
+is_a = ["canonical JSON document file"]
 part_of = ["document directory"]
 
 [[terms]]

@@ -40,8 +40,8 @@ _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%S%fZ"
 class DocumentDirectory:
     """One last-write-wins Manifest published by same-directory replacement.
 
-    Sidecars are streamed beside it. The caller coordinates writer exclusivity;
-    this class does not enforce it.
+    Sidecars are streamed beside it. Manifest publishers use independent
+    temporary files; callers coordinate Sidecar writers and publication order.
     """
 
     def __init__(

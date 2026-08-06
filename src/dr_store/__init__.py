@@ -27,6 +27,13 @@ from dr_store.document_directory import (
     SidecarSummary,
     SidecarWriter,
 )
+from dr_store.document_file import (
+    CanonicalJsonFile,
+    DocumentFileError,
+    DocumentPublishError,
+    DocumentReadError,
+    PublicationStage,
+)
 from dr_store.object_store import (
     BindStatus,
     ObjectStore,
@@ -54,9 +61,13 @@ __all__ = [
     "BindStatus",
     "BindingConflictError",
     "CacheHit",
+    "CanonicalJsonFile",
     "ContentHashMismatchError",
     "DocumentDirectory",
     "DocumentDirectoryError",
+    "DocumentFileError",
+    "DocumentPublishError",
+    "DocumentReadError",
     "ManifestPublishError",
     "ManifestReadError",
     "MemoryBackend",
@@ -64,6 +75,7 @@ __all__ = [
     "ObjectNotFoundError",
     "ObjectReference",
     "ObjectStore",
+    "PublicationStage",
     "PutOutcome",
     "PutStatus",
     "RecordCache",

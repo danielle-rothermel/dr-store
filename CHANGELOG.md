@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-06
+
 ### Added
 
 - Added `SqliteRecordCache(path)` as the managed persistent Record Cache. It
@@ -18,6 +20,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   errors distinguish post-close use from terminal cleanup failure, committed
   records persist across reopen, and instances and processes retain independent
   lifecycles.
+- Added `CanonicalJsonFile` as the standalone bounded canonical-document
+  capability. It publishes through reserved unique same-directory temporary
+  files, reports typed phase and replacement state on failure, and provides
+  strict descriptor-pinned reads. Concurrent publishers use independent
+  temporary files, and the last successful replacement is authoritative.
+
+### Changed
+
+- `DocumentDirectory` requires a caller-owned `manifest_max_bytes`, accepts an
+  optional `manifest_max_depth`, and delegates publication and instance
+  `read_manifest()` calls to the standalone canonical-document capability.
+  Manifest errors retain the directory taxonomy while preserving the
+  standalone typed failure as their cause.
+- Canonical document and Manifest reads are bounded, require exact canonical
+  strict JSON bytes from a regular direct child, reject final-component
+  symlinks, and remain pinned to the descriptor they inspected across a
+  concurrent replacement.
+
+### Fixed
+
+- Restricted macOS `F_FULLFSYNC` fallback to unsupported-operation errors so
+  I/O, bad-descriptor, interrupted, and unclassified flush failures propagate
+  instead of being hidden by a successful `fsync` fallback.
 
 ## [0.1.3] - 2026-08-05
 

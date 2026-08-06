@@ -28,8 +28,12 @@ document artifacts:
   rebound, so callers invalidate by selecting a new key; `derive_cache_key`
   provides a canonical scheme using a versioned namespace and payload.
   `SqliteRecordCache(path)` is the managed persistent lifecycle.
+- **[Canonical JSON document files](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)**
+  publish and read one standalone, bounded canonical document in an existing
+  directory through descriptor-pinned filesystem operations.
 - **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
-  publishes one canonical Manifest beside streamed binary Sidecars.
+  delegates one bounded canonical Manifest to that file capability beside
+  streamed binary Sidecars.
 
 ## Installation
 
@@ -67,6 +71,25 @@ with SqliteRecordCache("records.sqlite3") as cache:
     assert cache.get(key, schema="example.summary.v1") == CacheHit(
         record={"summary": "hello"}
     )
+```
+
+`CanonicalJsonFile` publishes one standalone document in an existing directory.
+The caller must declare the maximum accepted canonical byte length:
+
+```python
+from pathlib import Path
+
+from dr_store import CanonicalJsonFile
+
+artifact_directory = Path("artifacts")
+artifact_directory.mkdir(exist_ok=True)
+metadata = CanonicalJsonFile(
+    artifact_directory,
+    "metadata.json",
+    max_bytes=1 << 20,
+)
+metadata.publish({"state": "complete"})
+assert metadata.read() == {"state": "complete"}
 ```
 
 Use the lower-level `SqliteBackend(path)` when assembling an `ObjectStore`
@@ -204,6 +227,42 @@ cache does not close a separate instance or coordinate another process, even
 when both use the same database path. These persistence semantics do not
 promise power-loss durability.
 
+## Canonical JSON document files
+
+A [canonical JSON document file](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)
+owns publication and verified reads for one caller-named document in an existing
+directory. The byte bound is required; the nesting-depth bound defaults to the
+dr-serialize canonical profile maximum and applies to both publication and
+read:
+
+```python
+class CanonicalJsonFile:
+    def __init__(
+        self,
+        directory: str | Path,
+        name: str,
+        *,
+        max_bytes: int,
+        max_depth: int = CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+    ) -> None: ...
+
+    @property
+    def path(self) -> Path: ...
+    def publish(self, document: Jsonable) -> None: ...
+    def read(self) -> Jsonable: ...
+```
+
+`DocumentPublishError` reports a `PublicationStage` and
+`replacement_completed`. A false replacement value means that publication did
+not replace the target and any prior target remains authoritative. A true value
+means replacement occurred before later finalization failed. `DocumentReadError`
+reports the requested path. Both derive from `DocumentFileError` and preserve
+the originating failure as their cause. The reporting phases are `ENCODE`,
+`CREATE_TEMP`, `WRITE_TEMP`, `FLUSH_TEMP`, `REPLACE_TARGET`, and
+`FLUSH_DIRECTORY`; directory acquire and temporary-file open belong to
+`CREATE_TEMP`, temporary-file flush and close belong to `FLUSH_TEMP`, and
+directory flush and close belong to `FLUSH_DIRECTORY`.
+
 ## Document Directory
 
 A [Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)
@@ -212,11 +271,24 @@ owns allocation and publication while `SidecarWriter` owns bounded retention:
 
 ```python
 class DocumentDirectory:
-    def __init__(self, path: Path, manifest_name: str) -> None: ...
+    def __init__(
+        self,
+        path: Path,
+        manifest_name: str,
+        *,
+        manifest_max_bytes: int,
+        manifest_max_depth: int = CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+    ) -> None: ...
 
     @classmethod
     def allocate(
-        cls, root: str | Path, *, prefix: str, manifest_name: str
+        cls,
+        root: str | Path,
+        *,
+        prefix: str,
+        manifest_name: str,
+        manifest_max_bytes: int,
+        manifest_max_depth: int = CANONICAL_JSON_MAX_CONTAINER_DEPTH,
     ) -> DocumentDirectory: ...
 
     def publish(self, manifest: Jsonable) -> None: ...
@@ -228,10 +300,7 @@ class DocumentDirectory:
         tail_cap: int | None = None,
     ) -> SidecarWriter: ...
 
-    @classmethod
-    def read_manifest(
-        cls, path: str | Path, *, manifest_name: str
-    ) -> Jsonable: ...
+    def read_manifest(self) -> Jsonable: ...
 
     def verify_sidecar(
         self,
@@ -259,25 +328,37 @@ class SidecarWriter:
 
 ## Filesystem and failure semantics
 
-A Document Directory is intended for caller-coordinated single-writer use;
-dr-store does not enforce that policy with a lock. Allocation uses a timestamp
+Canonical document publication creates a reserved unique temporary file for
+each call, writes its complete canonical bytes, flushes and closes it, replaces
+the target in the same directory, and flushes and closes the directory.
+Concurrent supported publishers use independent temporary files, and the last
+successful replacement is authoritative. Publication does not provide locks,
+compare-and-set, multi-file transactions, or ordering with Sidecar writes.
+
+All-or-nothing visibility depends on the underlying filesystem honoring atomic
+same-directory replacement; network, synchronized, or other filesystems whose
+rename semantics are not established are outside current evidence. A final
+directory flush or close failure raises even though replacement may already be
+visible and does not roll the document back. Publication and allocation make no
+power-loss durability promise. Document Directory allocation uses a timestamp
 and UUID4, but a generated-name collision raises `AllocationError` rather than
-being retried. Allocation does not flush the caller-owned root directory.
+being retried, and allocation does not flush the caller-owned root directory.
 
-Manifest publication writes and flushes a temporary file, replaces the Manifest
-in the same directory, and then flushes the Document Directory. All-or-nothing
-visibility depends on the underlying filesystem honoring atomic same-directory
-replacement; network, synchronized, or other filesystems whose rename semantics
-are not established are outside current evidence. A failure of the final flush
-raises even though the replacement may already be visible, and it does not roll
-the Manifest back. These operations do not promise power-loss durability.
+Canonical document reads open the named directory and regular direct child with
+required no-follow, directory-relative flags, then stream from the child
+descriptor they inspected. They read only to the configured byte bound plus the
+single byte needed to detect overflow, enforce the configured nesting-depth
+bound, and require one complete UTF-8 strict JSON value whose bytes are exactly
+canonical. Final-component symlinks and non-regular files are rejected, a
+replacement after open cannot redirect that read to a different inode, and
+platforms without the required descriptor operations fail closed.
 
-Name validation prevents lexical traversal syntax only. Manifest reads and
-Sidecar creation and writes follow existing final-component symlinks, so those
-paths require trusted, caller-controlled directory contents. Sidecar
-finalization flushes the Sidecar descriptor before returning its summary, but it
-does not flush the Sidecar's directory entry or impose ordering on an arbitrary
-Manifest publication. Sidecar verification is the no-follow path: it refuses
+Name validation prevents lexical traversal syntax only. Sidecar creation and
+writes follow existing final-component symlinks and therefore require trusted,
+caller-controlled directory contents. Sidecar writer coordination remains the
+caller's concern. Sidecar finalization flushes the Sidecar descriptor before
+returning its summary, but it does not flush the Sidecar's directory entry or
+impose ordering on document publication. Sidecar verification also refuses
 final-component symlinks for both the Document Directory and named child,
 requires a regular direct child, and reads from the descriptor it inspected.
 
