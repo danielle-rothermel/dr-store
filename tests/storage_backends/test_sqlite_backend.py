@@ -9,9 +9,15 @@ from typing import TYPE_CHECKING, Literal
 
 import pytest
 
-from dr_store import BindOutcome, PutOutcome, SqliteBackend
+from dr_store import (
+    BindOutcome,
+    BoundObjectWrite,
+    PutOutcome,
+    SqliteBackend,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from multiprocessing.connection import Connection
     from multiprocessing.process import BaseProcess
     from multiprocessing.synchronize import Event
@@ -56,6 +62,36 @@ class _FakeConnection:
         self.close_calls += 1
         if self.close_error is not None:
             raise self.close_error
+
+
+class _MidBatchOperationalFailure:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+        self._binding_inserts = 0
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._connection.in_transaction
+
+    def execute(
+        self,
+        statement: str,
+        parameters: tuple[str, ...] = (),
+    ) -> sqlite3.Cursor:
+        if statement.startswith("INSERT OR IGNORE INTO bindings"):
+            self._binding_inserts += 1
+            if self._binding_inserts == 2:
+                raise sqlite3.OperationalError(
+                    "injected mid-batch operational failure"
+                )
+        return self._connection.execute(statement, parameters)
+
+    def executemany(
+        self,
+        statement: str,
+        parameters: Iterable[tuple[str, ...]],
+    ) -> sqlite3.Cursor:
+        return self._connection.executemany(statement, parameters)
 
 
 @pytest.mark.parametrize("path", ["", ":memory:"])
@@ -322,6 +358,47 @@ def test_failed_transaction_rolls_back_and_connection_is_reusable(
         existing_content_hash=CONTENT_HASH,
     )
     assert backend.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
+
+
+def test_mid_batch_operational_failure_rolls_back_objects_and_bindings(
+    tmp_path: Path,
+) -> None:
+    backend = SqliteBackend(tmp_path / "store.db")
+    connection = backend._conn
+    backend._local.conn = _MidBatchOperationalFailure(connection)
+    entries = (
+        BoundObjectWrite(
+            key="batch:first",
+            schema=SCHEMA,
+            content_hash=CONTENT_HASH,
+            canonical=CANONICAL,
+        ),
+        BoundObjectWrite(
+            key="batch:second",
+            schema=SCHEMA,
+            content_hash="b" * 64,
+            canonical='{"value":"second"}',
+        ),
+    )
+
+    try:
+        with pytest.raises(
+            sqlite3.OperationalError,
+            match="injected mid-batch operational failure",
+        ):
+            backend.put_bound_objects(entries=entries)
+    finally:
+        backend._local.conn = connection
+
+    for entry in entries:
+        assert backend.get_binding(key=entry.key) is None
+        assert (
+            backend.get_object(
+                schema=entry.schema,
+                content_hash=entry.content_hash,
+            )
+            is None
+        )
 
 
 def _write_then_fail(backend: SqliteBackend) -> None:

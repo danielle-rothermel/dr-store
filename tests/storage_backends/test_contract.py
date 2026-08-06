@@ -6,7 +6,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from dr_store import BindOutcome, PutOutcome
+from dr_store import (
+    BindOutcome,
+    BoundObjectRow,
+    BoundObjectWrite,
+    ObjectConflictError,
+    PutOutcome,
+)
 
 if TYPE_CHECKING:
     from dr_store.storage_backends.contract import Backend
@@ -110,7 +116,6 @@ def test_bind_absent_replay_and_competing_reference(
         existing_content_hash=CONTENT_HASH,
     )
     assert backend.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
-
     assert backend.bind(
         key=KEY,
         schema=SCHEMA,
@@ -130,6 +135,127 @@ def test_bind_absent_replay_and_competing_reference(
         existing_content_hash=CONTENT_HASH,
     )
     assert backend.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
+
+
+def test_batch_put_replay_and_competing_binding_report_one_winner(
+    backend: Backend,
+) -> None:
+    first = BoundObjectWrite(
+        key=KEY,
+        schema=SCHEMA,
+        content_hash=CONTENT_HASH,
+        canonical=CANONICAL,
+    )
+    competing = BoundObjectWrite(
+        key=KEY,
+        schema=OTHER_SCHEMA,
+        content_hash=OTHER_HASH,
+        canonical=COMPETING_CANONICAL,
+    )
+
+    assert backend.put_bound_objects(entries=(first,)) == {
+        KEY: BindOutcome(
+            bound=True,
+            existing_schema=SCHEMA,
+            existing_content_hash=CONTENT_HASH,
+        )
+    }
+    assert backend.put_bound_objects(entries=(first,)) == {
+        KEY: BindOutcome(
+            bound=False,
+            existing_schema=SCHEMA,
+            existing_content_hash=CONTENT_HASH,
+        )
+    }
+    assert backend.put_bound_objects(entries=(competing,)) == {
+        KEY: BindOutcome(
+            bound=False,
+            existing_schema=SCHEMA,
+            existing_content_hash=CONTENT_HASH,
+        )
+    }
+    assert backend.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
+
+
+def test_batch_get_correlates_bindings_with_exact_objects(
+    backend: Backend,
+) -> None:
+    missing_object_key = "missing-object"
+    backend.put_bound_objects(
+        entries=(
+            BoundObjectWrite(
+                key=KEY,
+                schema=SCHEMA,
+                content_hash=CONTENT_HASH,
+                canonical=CANONICAL,
+            ),
+        )
+    )
+    backend.bind(
+        key=missing_object_key,
+        schema=OTHER_SCHEMA,
+        content_hash=OTHER_HASH,
+    )
+
+    assert backend.get_bound_objects(
+        keys=(KEY, "unbound", missing_object_key),
+    ) == {
+        KEY: BoundObjectRow(
+            binding_schema=SCHEMA,
+            binding_content_hash=CONTENT_HASH,
+            object_schema=SCHEMA,
+            canonical=CANONICAL,
+        ),
+        missing_object_key: BoundObjectRow(
+            binding_schema=OTHER_SCHEMA,
+            binding_content_hash=OTHER_HASH,
+            object_schema=None,
+            canonical=None,
+        ),
+    }
+
+
+def test_batch_object_conflict_rolls_back_every_proposed_mutation(
+    backend: Backend,
+) -> None:
+    colliding_hash = "c" * 64
+    backend.put_object(
+        schema=SCHEMA,
+        content_hash=colliding_hash,
+        canonical=COMPETING_CANONICAL,
+    )
+
+    with pytest.raises(ObjectConflictError):
+        backend.put_bound_objects(
+            entries=(
+                BoundObjectWrite(
+                    key=KEY,
+                    schema=SCHEMA,
+                    content_hash=CONTENT_HASH,
+                    canonical=CANONICAL,
+                ),
+                BoundObjectWrite(
+                    key="colliding-key",
+                    schema=SCHEMA,
+                    content_hash=colliding_hash,
+                    canonical=CANONICAL,
+                ),
+            )
+        )
+
+    assert backend.get_binding(key=KEY) is None
+    assert backend.get_binding(key="colliding-key") is None
+    assert (
+        backend.get_object(
+            schema=SCHEMA,
+            content_hash=CONTENT_HASH,
+        )
+        is None
+    )
+    assert backend.get_object(
+        schema=SCHEMA,
+        content_hash=colliding_hash,
+    ) == (SCHEMA, COMPETING_CANONICAL)
 
 
 @pytest.mark.parametrize(

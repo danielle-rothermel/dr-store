@@ -7,12 +7,19 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
-from dr_store.storage_backends.contract import BindOutcome, PutOutcome
+from dr_store.core.errors import ObjectConflictError
+from dr_store.storage_backends.contract import (
+    BindOutcome,
+    BoundObjectRow,
+    BoundObjectWrite,
+    PutOutcome,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
 _BUSY_TIMEOUT_MS = 30_000
+_KEY_QUERY_CHUNK_SIZE = 999
 _TRANSIENT_DATABASE_PATHS = frozenset({"", ":memory:"})
 
 _SCHEMA = """
@@ -143,11 +150,11 @@ class SqliteBackend:
         conn.execute("BEGIN IMMEDIATE")
         try:
             yield conn
-        except BaseException:
-            conn.execute("ROLLBACK")
-            raise
-        else:
             conn.execute("COMMIT")
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
 
     def put_object(
         self,
@@ -224,3 +231,90 @@ class SqliteBackend:
         if row is None:
             return None
         return (row[0], row[1])
+
+    def get_bound_objects(
+        self,
+        *,
+        keys: tuple[str, ...],
+    ) -> dict[str, BoundObjectRow]:
+        if not keys:
+            return {}
+
+        rows: dict[str, BoundObjectRow] = {}
+        for start in range(0, len(keys), _KEY_QUERY_CHUNK_SIZE):
+            chunk = keys[start : start + _KEY_QUERY_CHUNK_SIZE]
+            placeholders = ", ".join("?" for _ in chunk)
+            # Only generated parameter placeholders enter the SQL text.
+            query = (
+                "SELECT bindings.key, bindings.schema, "  # noqa: S608
+                "bindings.content_hash, objects.schema, objects.canonical "
+                "FROM bindings LEFT JOIN objects "
+                "ON objects.schema = bindings.schema "
+                "AND objects.content_hash = bindings.content_hash "
+                f"WHERE bindings.key IN ({placeholders})"
+            )
+            stored_rows = self._conn.execute(query, chunk).fetchall()
+            for (
+                key,
+                binding_schema,
+                binding_content_hash,
+                object_schema,
+                canonical,
+            ) in stored_rows:
+                rows[key] = BoundObjectRow(
+                    binding_schema=binding_schema,
+                    binding_content_hash=binding_content_hash,
+                    object_schema=object_schema,
+                    canonical=canonical,
+                )
+        return rows
+
+    def put_bound_objects(
+        self,
+        *,
+        entries: tuple[BoundObjectWrite, ...],
+    ) -> dict[str, BindOutcome]:
+        if not entries:
+            return {}
+
+        with self._immediate() as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO objects "
+                "(schema, content_hash, canonical) VALUES (?, ?, ?)",
+                (
+                    (entry.schema, entry.content_hash, entry.canonical)
+                    for entry in entries
+                ),
+            )
+            for entry in entries:
+                row = conn.execute(
+                    "SELECT canonical FROM objects "
+                    "WHERE schema = ? AND content_hash = ?",
+                    (entry.schema, entry.content_hash),
+                ).fetchone()
+                if row[0] != entry.canonical:
+                    raise ObjectConflictError(
+                        schema=entry.schema,
+                        content_hash=entry.content_hash,
+                    )
+
+            outcomes: dict[str, BindOutcome] = {}
+            for entry in entries:
+                if entry.key in outcomes:
+                    continue
+                cursor = conn.execute(
+                    "INSERT OR IGNORE INTO bindings "
+                    "(key, schema, content_hash) VALUES (?, ?, ?)",
+                    (entry.key, entry.schema, entry.content_hash),
+                )
+                bound = cursor.rowcount == 1
+                row = conn.execute(
+                    "SELECT schema, content_hash FROM bindings WHERE key = ?",
+                    (entry.key,),
+                ).fetchone()
+                outcomes[entry.key] = BindOutcome(
+                    bound=bound,
+                    existing_schema=row[0],
+                    existing_content_hash=row[1],
+                )
+        return outcomes

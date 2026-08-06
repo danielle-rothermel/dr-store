@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import enum
 import threading
+from collections.abc import (  # noqa: TC003 - public hints resolve at runtime.
+    Iterable,
+    Mapping,
+)
 from contextlib import contextmanager
 from pathlib import Path  # noqa: TC003 - public hints resolve at runtime.
 from types import (
@@ -21,7 +25,7 @@ from dr_store.core.errors import (
     SqliteRecordCacheCloseError,
 )
 from dr_store.object_store import ObjectStore
-from dr_store.record_cache.cache import CacheHit, RecordCache
+from dr_store.record_cache.cache import CacheEntry, CacheHit, RecordCache
 from dr_store.storage_backends.sqlite import SqliteBackend
 
 if TYPE_CHECKING:
@@ -90,6 +94,22 @@ class SqliteRecordCache(RecordCache):
     ) -> ObjectReference:
         with self._admit_operation():
             return super().put(key, schema, record)
+
+    def get_many(
+        self,
+        keys: Iterable[str],
+        *,
+        schema: str,
+    ) -> dict[str, CacheHit | None]:
+        with self._admit_operation():
+            return super().get_many(keys, schema=schema)
+
+    def put_many(
+        self,
+        entries: Mapping[str, CacheEntry],
+    ) -> dict[str, ObjectReference]:
+        with self._admit_operation():
+            return super().put_many(entries)
 
     def close(self) -> None:
         if self._operation_local.depth:

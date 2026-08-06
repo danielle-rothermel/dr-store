@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from dr_store import (
+    BoundObjectRow,
+    CacheEntry,
     CacheHit,
     ObjectReference,
     ObjectStore,
@@ -18,7 +20,7 @@ from dr_store import (
 from dr_store.record_cache import sqlite as sqlite_module
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from pathlib import Path
 
     from dr_serialize import Jsonable
@@ -154,6 +156,24 @@ def test_records_persist_across_close_and_reopen(tmp_path: Path) -> None:
         assert reopened.put(KEY, SCHEMA, RECORD) == reference
 
 
+def test_batch_records_persist_across_close_and_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "cache.db"
+    entries = {
+        KEY: CacheEntry(schema=SCHEMA, record=RECORD),
+        "batch:null": CacheEntry(schema=SCHEMA, record=None),
+    }
+    first = SqliteRecordCache(path)
+    references = first.put_many(entries)
+    first.close()
+
+    with SqliteRecordCache(path) as reopened:
+        assert reopened.get_many(entries, schema=SCHEMA) == {
+            KEY: CacheHit(record=RECORD),
+            "batch:null": CacheHit(record=None),
+        }
+        assert reopened.put_many(entries) == references
+
+
 def test_context_manager_closes_after_normal_block(tmp_path: Path) -> None:
     cache = SqliteRecordCache(tmp_path / "cache.db")
 
@@ -226,6 +246,13 @@ def test_closed_operations_fail_before_input_validation(
             None,  # ty: ignore[invalid-argument-type]
             object(),  # ty: ignore[invalid-argument-type]
         )
+    with pytest.raises(SqliteRecordCacheClosedError):
+        cache.get_many(
+            None,  # ty: ignore[invalid-argument-type]
+            schema=None,  # ty: ignore[invalid-argument-type]
+        )
+    with pytest.raises(SqliteRecordCacheClosedError):
+        cache.put_many(None)  # ty: ignore[invalid-argument-type]
 
 
 def test_repeated_and_concurrent_close_are_idempotent(
@@ -274,30 +301,30 @@ def test_repeated_and_concurrent_close_are_idempotent(
     cache.close()
 
 
-def test_close_waits_for_complete_get_and_rejects_new_operation(
+def test_close_waits_for_complete_get_many_and_rejects_new_operation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache = SqliteRecordCache(tmp_path / "cache.db")
-    cache.put(KEY, SCHEMA, RECORD)
+    cache.put_many({KEY: CacheEntry(schema=SCHEMA, record=RECORD)})
     get_started = threading.Event()
     release_get = threading.Event()
-    original_get = ObjectStore.get
+    original_get_many = ObjectStore._get_bound_objects
 
-    def gated_get(
+    def gated_get_many(
         store: ObjectStore,
-        reference: ObjectReference,
-    ) -> Jsonable:
+        keys: tuple[str, ...],
+    ) -> Mapping[str, BoundObjectRow]:
         get_started.set()
         assert release_get.wait(WATCHDOG_SECONDS)
-        return original_get(store, reference)
+        return original_get_many(store, keys)
 
-    monkeypatch.setattr(ObjectStore, "get", gated_get)
+    monkeypatch.setattr(ObjectStore, "_get_bound_objects", gated_get_many)
     results: queue.Queue[object] = queue.Queue()
     reader = threading.Thread(
         target=_capture,
-        args=(lambda: cache.get(KEY, schema=SCHEMA), results),
-        name="active-get",
+        args=(lambda: cache.get_many([KEY], schema=SCHEMA), results),
+        name="active-get-many",
     )
     closer = threading.Thread(
         target=_capture,
@@ -310,7 +337,7 @@ def test_close_waits_for_complete_get_and_rejects_new_operation(
     closer.start()
     _await_closing(cache)
     with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(
+        cache.get_many(
             None,  # ty: ignore[invalid-argument-type]
             schema=None,  # ty: ignore[invalid-argument-type]
         )
@@ -320,35 +347,39 @@ def test_close_waits_for_complete_get_and_rejects_new_operation(
     _join(closer)
 
     observed = [results.get_nowait(), results.get_nowait()]
-    assert CacheHit(record=RECORD) in observed
+    assert {KEY: CacheHit(record=RECORD)} in observed
     assert None in observed
 
 
-def test_close_waits_for_complete_put_and_reopen_observes_binding(
+def test_close_waits_for_complete_put_many_and_reopen_observes_bindings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "cache.db"
     cache = SqliteRecordCache(path)
-    bind_started = threading.Event()
-    release_bind = threading.Event()
-    original_bind = ObjectStore.bind
+    put_started = threading.Event()
+    release_put = threading.Event()
+    original_put_many = ObjectStore._put_bound_records
 
-    def gated_bind(
+    def gated_put_many(
         store: ObjectStore,
-        key: str,
-        reference: ObjectReference,
-    ) -> object:
-        bind_started.set()
-        assert release_bind.wait(WATCHDOG_SECONDS)
-        return original_bind(store, key, reference)
+        entries: Mapping[str, tuple[str, Jsonable]],
+    ) -> dict[str, ObjectReference]:
+        put_started.set()
+        assert release_put.wait(WATCHDOG_SECONDS)
+        return original_put_many(store, entries)
 
-    monkeypatch.setattr(ObjectStore, "bind", gated_bind)
+    monkeypatch.setattr(ObjectStore, "_put_bound_records", gated_put_many)
     results: queue.Queue[object] = queue.Queue()
     writer = threading.Thread(
         target=_capture,
-        args=(lambda: cache.put(KEY, SCHEMA, RECORD), results),
-        name="active-put",
+        args=(
+            lambda: cache.put_many(
+                {KEY: CacheEntry(schema=SCHEMA, record=RECORD)}
+            ),
+            results,
+        ),
+        name="active-put-many",
     )
     closer = threading.Thread(
         target=_capture,
@@ -357,25 +388,25 @@ def test_close_waits_for_complete_put_and_reopen_observes_binding(
     )
 
     writer.start()
-    assert bind_started.wait(WATCHDOG_SECONDS)
+    assert put_started.wait(WATCHDOG_SECONDS)
     closer.start()
     _await_closing(cache)
     with pytest.raises(SqliteRecordCacheClosedError):
-        cache.put(
-            None,  # ty: ignore[invalid-argument-type]
-            None,  # ty: ignore[invalid-argument-type]
-            object(),  # ty: ignore[invalid-argument-type]
-        )
+        cache.put_many(None)  # ty: ignore[invalid-argument-type]
 
-    release_bind.set()
+    release_put.set()
     _join(writer)
     _join(closer)
 
     observed = [results.get_nowait(), results.get_nowait()]
-    assert any(isinstance(result, ObjectReference) for result in observed)
+    assert any(
+        isinstance(result, dict) and KEY in result for result in observed
+    )
     assert None in observed
     with SqliteRecordCache(path) as reopened:
-        assert reopened.get(KEY, schema=SCHEMA) == CacheHit(record=RECORD)
+        assert reopened.get_many([KEY], schema=SCHEMA) == {
+            KEY: CacheHit(record=RECORD)
+        }
 
 
 def test_same_thread_reentrant_close_fails_without_closing_cache(
@@ -384,21 +415,27 @@ def test_same_thread_reentrant_close_fails_without_closing_cache(
 ) -> None:
     cache = SqliteRecordCache(tmp_path / "cache.db")
     cache.put(KEY, SCHEMA, RECORD)
-    original_resolve = ObjectStore.resolve
+    original_get_many = ObjectStore._get_bound_objects
     close_errors: list[SqliteRecordCacheCloseError] = []
 
-    def resolve_and_try_close(
+    def get_many_and_try_close(
         store: ObjectStore,
-        key: str,
-    ) -> ObjectReference | None:
+        keys: tuple[str, ...],
+    ) -> Mapping[str, BoundObjectRow]:
         with pytest.raises(SqliteRecordCacheCloseError) as raised:
             cache.close()
         close_errors.append(raised.value)
-        return original_resolve(store, key)
+        return original_get_many(store, keys)
 
-    monkeypatch.setattr(ObjectStore, "resolve", resolve_and_try_close)
+    monkeypatch.setattr(
+        ObjectStore,
+        "_get_bound_objects",
+        get_many_and_try_close,
+    )
 
-    assert cache.get(KEY, schema=SCHEMA) == CacheHit(record=RECORD)
+    assert cache.get_many([KEY], schema=SCHEMA) == {
+        KEY: CacheHit(record=RECORD)
+    }
     assert len(close_errors) == 1
     cache.close()
 
