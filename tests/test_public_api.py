@@ -53,3 +53,15 @@ def test_object_store_public_surface_is_exact() -> None:
 
     public = {name for name in dir(ObjectStore) if not name.startswith("_")}
     assert public == {"put", "get", "bind", "resolve"}
+
+
+def test_sqlite_record_cache_public_surface_is_exact() -> None:
+    from dr_store import RecordCache, SqliteRecordCache
+
+    assert issubclass(SqliteRecordCache, RecordCache)
+    public = {
+        name for name in dir(SqliteRecordCache) if not name.startswith("_")
+    }
+    assert public == {"close", "get", "put"}
+    assert "__enter__" in SqliteRecordCache.__dict__
+    assert "__exit__" in SqliteRecordCache.__dict__

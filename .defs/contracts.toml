@@ -189,3 +189,30 @@ contract, while the canonical derivation helper gives callers a versioned, \
 content-derived scheme without making that scheme mandatory."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/record_cache/test_cache.py"
+
+[[contracts]]
+title = "Managed SQLite record caches own their complete lifecycle"
+statement = """
+A managed SQLite record cache initializes its database schema before \
+construction returns and admits each cache read or write as one whole \
+operation while open. Closing rejects new operations with a typed closed \
+error before input validation, waits for every admitted operation to finish, \
+and then closes every operational connection tracked by that instance in the \
+current process. Normal and exceptional context-manager exits both perform \
+close. When cleanup succeeds, a body exception is not suppressed; cleanup \
+failure instead raises a typed close error and leaves the lifecycle terminal. \
+Every close caller then receives a typed close error exposing the failure, and \
+cache operations remain closed. Successful close is idempotent for repeated \
+and concurrent callers. Completed commits persist across \
+close and reopen, while separate instances and processes retain independent \
+lifecycles even when they use the same database path."""
+rationale = """
+Whole-operation admission prevents shutdown from invalidating a cache \
+operation between its binding and object-store steps. Rejecting new work \
+before draining admitted work gives closure one stable resource boundary, and \
+terminal typed failures keep incomplete cleanup visible. Persistence describes \
+committed SQLite rows across reopen; it does not promise power-loss durability \
+or let one cache instance govern resources owned by another instance or \
+process."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/record_cache/test_sqlite_cache.py tests/storage_backends/test_sqlite_backend.py"

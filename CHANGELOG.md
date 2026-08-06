@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Added `SqliteRecordCache(path)` as the managed persistent Record Cache. It
+  initializes storage before returning, admits complete cache operations while
+  open, rejects new work and waits for admitted work during shutdown, and
+  closes every connection tracked by that instance in the current process.
+  Normal and exceptional context exits perform close; a body exception is not
+  suppressed when cleanup succeeds, while cleanup failure raises the typed
+  close error. Successful repeated and concurrent closes are idempotent. Typed
+  errors distinguish post-close use from terminal cleanup failure, committed
+  records persist across reopen, and instances and processes retain independent
+  lifecycles.
+
 ## [0.1.3] - 2026-08-05
 
 ### Added

@@ -27,6 +27,7 @@ document artifacts:
   requested schemas and operational backend faults raise. Entries are never
   rebound, so callers invalidate by selecting a new key; `derive_cache_key`
   provides a canonical scheme using a versioned namespace and payload.
+  `SqliteRecordCache(path)` is the managed persistent lifecycle.
 - **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
   publishes one canonical Manifest beside streamed binary Sidecars.
 
@@ -51,22 +52,25 @@ assert store.resolve("notes/latest") == reference
 assert store.get(reference) == {"title": "hello"}
 ```
 
-The same store can provide memoization without introducing another backend:
+`SqliteRecordCache(path)` is the paved persistent Record Cache. It initializes
+its database before returning and closes its current-process resources on
+normal or exceptional context exit. When cleanup succeeds, an exception from
+the context body is not suppressed; cleanup failure raises
+`SqliteRecordCacheCloseError`:
 
 ```python
-from dr_store import CacheHit, RecordCache, derive_cache_key
+from dr_store import CacheHit, SqliteRecordCache, derive_cache_key
 
-cache = RecordCache(store)
 key = derive_cache_key("example.summary.v1", {"document": "note-42"})
-cache.put(key, "example.summary.v1", {"summary": "hello"})
-
-assert cache.get(key, schema="example.summary.v1") == CacheHit(
-    record={"summary": "hello"}
-)
+with SqliteRecordCache("records.sqlite3") as cache:
+    cache.put(key, "example.summary.v1", {"summary": "hello"})
+    assert cache.get(key, schema="example.summary.v1") == CacheHit(
+        record={"summary": "hello"}
+    )
 ```
 
-Use `SqliteBackend(path)` when the stored objects and bindings must persist
-across processes. The rendered
+Use the lower-level `SqliteBackend(path)` when assembling an `ObjectStore`
+directly whose objects and bindings must persist across processes. The rendered
 [definitions](https://danielle-rothermel.github.io/dr-store/), authoritative
 [terms](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/terms.toml),
 and binding
@@ -164,7 +168,8 @@ The [Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/
 is a memoization facade over an existing `ObjectStore`. It accepts opaque
 caller-owned keys, with `derive_cache_key` as the canonical helper for
 content-derived memoization. A typed hit keeps every strict JSON record,
-including null, distinct from a miss:
+including null, distinct from a miss. `SqliteRecordCache` supplies the managed
+persistent form:
 
 ```python
 def derive_cache_key(namespace: str, payload: Jsonable) -> str: ...
@@ -179,7 +184,25 @@ class RecordCache:
     def put(
         self, key: str, schema: str, record: Jsonable
     ) -> ObjectReference: ...
+
+class SqliteRecordCache(RecordCache):
+    def __init__(self, path: str | Path) -> None: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> SqliteRecordCache: ...
+    def __exit__(self, ...) -> bool: ...
 ```
+
+Construction establishes the SQLite schema before returning. Closing rejects
+new cache operations, waits for every admitted `get` or `put` to finish, and
+then closes all operational connections tracked by that cache instance in the
+current process. A successful close is idempotent for repeated and concurrent
+callers. `SqliteRecordCacheClosedError` reports operations requested after
+closing begins, before their inputs are validated; `SqliteRecordCacheCloseError`
+reports a terminal cleanup failure to every close caller, including a context
+exit. Committed records remain available after close and reopen. Closing one
+cache does not close a separate instance or coordinate another process, even
+when both use the same database path. These persistence semantics do not
+promise power-loss durability.
 
 ## Document Directory
 

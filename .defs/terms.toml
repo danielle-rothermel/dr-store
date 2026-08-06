@@ -208,6 +208,20 @@ exported_symbols = ["RecordCache", "CacheHit"]
 categories = ["record caching"]
 
 [[terms]]
+name = "managed SQLite record cache"
+definition = """
+A persistent record cache that establishes its storage before use, admits \
+complete operations only while open, and coordinates shutdown of the \
+current-process resources owned by one cache instance."""
+exported_symbols = [
+  "SqliteRecordCache",
+  "SqliteRecordCacheCloseError",
+  "SqliteRecordCacheClosedError",
+]
+categories = ["record caching"]
+is_a = ["record cache"]
+
+[[terms]]
 name = "cache key"
 definition = """
 An opaque caller-owned string naming one record cache entry. A caller may \

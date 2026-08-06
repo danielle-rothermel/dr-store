@@ -18,6 +18,8 @@ from dr_store.core.errors import (
     ReferenceValidationError,
     SchemaMismatchError,
     SidecarVerificationError,
+    SqliteRecordCacheClosedError,
+    SqliteRecordCacheCloseError,
     StoreError,
 )
 from dr_store.document_directory import (
@@ -33,6 +35,7 @@ from dr_store.object_store import (
 from dr_store.record_cache import (
     CacheHit,
     RecordCache,
+    SqliteRecordCache,
     derive_cache_key,
 )
 from dr_store.storage_backends import (
@@ -70,6 +73,9 @@ __all__ = [
     "SidecarVerificationError",
     "SidecarWriter",
     "SqliteBackend",
+    "SqliteRecordCache",
+    "SqliteRecordCacheCloseError",
+    "SqliteRecordCacheClosedError",
     "StoreError",
     "compute_content_hash",
     "derive_cache_key",
