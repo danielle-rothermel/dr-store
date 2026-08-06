@@ -22,10 +22,11 @@ document artifacts:
   supply the Object Store's atomic, append-only operations. `MemoryBackend` is
   process-local; `SqliteBackend` persists data for cross-process use.
 - **[Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)**
-  memoizes records under derived cache keys. Reads return typed hits; absent,
-  missing, or unverifiable stored values are misses, while invalid requested
-  schemas and operational backend faults raise. Entries are never rebound, so
-  callers invalidate by versioning their key namespace.
+  memoizes records under opaque caller-owned keys. Reads return typed hits;
+  absent, missing, or unverifiable stored values are misses, while invalid
+  requested schemas and operational backend faults raise. Entries are never
+  rebound, so callers invalidate by selecting a new key; `derive_cache_key`
+  provides a canonical scheme using a versioned namespace and payload.
 - **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
   publishes one canonical Manifest beside streamed binary Sidecars.
 
@@ -160,8 +161,10 @@ class SqliteBackend:
 ## Record Cache
 
 The [Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)
-is a memoization facade over an existing `ObjectStore`. A typed hit keeps every
-strict JSON record, including null, distinct from a miss:
+is a memoization facade over an existing `ObjectStore`. It accepts opaque
+caller-owned keys, with `derive_cache_key` as the canonical helper for
+content-derived memoization. A typed hit keeps every strict JSON record,
+including null, distinct from a miss:
 
 ```python
 def derive_cache_key(namespace: str, payload: Jsonable) -> str: ...

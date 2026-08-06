@@ -10,14 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `RecordCache` memoizes records over an existing `ObjectStore`, returning a
-  typed `CacheHit` so strict JSON null remains distinct from a miss, and
-  `derive_cache_key` derives a cache key from a caller-owned namespace and a
-  payload through the canonical JSON profile, rejecting non-string namespaces
-  rather than coercing them. Reads report absent, missing, and unverifiable
-  stored values as misses while invalid requested schemas and operational
-  backend faults raise. A conflicting put returns the existing winner, and
-  there is no delete, expiry, or eviction path.
+- `RecordCache` memoizes records over an existing `ObjectStore` under opaque
+  caller-owned keys, returning a typed `CacheHit` so strict JSON null remains
+  distinct from a miss. `derive_cache_key` provides a canonical key scheme from
+  a caller-owned namespace and payload, rejecting non-string namespaces rather
+  than coercing them. Reads report absent, missing, and unverifiable stored
+  values as misses while invalid requested schemas and operational backend
+  faults raise. A conflicting put returns the existing winner, and there is no
+  delete, expiry, or eviction path.
 
 ### Changed
 

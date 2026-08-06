@@ -210,9 +210,10 @@ categories = ["record caching"]
 [[terms]]
 name = "cache key"
 definition = """
-A key derived from a caller-owned namespace string and one payload record \
-through the canonical JSON profile. Callers version the namespace to reach a \
-new key instead of replacing an entry."""
+An opaque caller-owned string naming one record cache entry. A caller may \
+derive it from a versioned namespace and payload through the canonical JSON \
+profile or supply another key scheme; invalidation selects a new key rather \
+than replacing an entry."""
 exported_symbols = ["derive_cache_key"]
 categories = ["record caching"]
 is_a = ["key"]
