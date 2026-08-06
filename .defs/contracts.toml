@@ -275,9 +275,9 @@ failure instead raises a typed close error and leaves the lifecycle terminal. \
 The elected caller receives its original process-level interruption after the \
 terminal failure is published; every later close caller receives a typed close \
 error exposing that failure, and cache operations remain closed. If the elected \
-closer is interrupted while waiting for admitted operations, the lifecycle \
-returns to open and wakes other callers. Successful close is idempotent for \
-repeated and concurrent callers. The persistent database path is made absolute \
+closer is interrupted before connection cleanup begins, the lifecycle returns \
+to open and wakes other callers. Successful close is idempotent for repeated \
+and concurrent callers. The persistent database path is made absolute \
 at construction without freezing symlink targets, and transient paths are \
 rejected. Completed commits persist across close and reopen, while separate \
 instances and processes retain independent lifecycles even when they use the \

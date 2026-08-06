@@ -55,11 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Restricted macOS `F_FULLFSYNC` fallback to unsupported-operation errors so
   I/O, bad-descriptor, interrupted, and unclassified flush failures propagate
   instead of being hidden by a successful `fsync` fallback.
-- Close interruption while draining restores an open managed-cache lifecycle;
-  process-level cleanup failure publishes a terminal lifecycle before it
-  propagates. Connection cleanup now attempts every owned connection even when
-  one close raises a process-level interruption. Removed the unused path-based
-  `flush_directory()` primitive.
+- Close interruption before connection cleanup begins restores an open
+  managed-cache lifecycle and wakes another closer; process-level cleanup
+  failure publishes a terminal lifecycle before it propagates. Connection
+  cleanup now attempts every owned connection even when one close raises a
+  process-level interruption. Removed the unused path-based `flush_directory()`
+  primitive.
 
 ## [0.1.3] - 2026-08-05
 

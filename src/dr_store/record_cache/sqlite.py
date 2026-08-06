@@ -35,6 +35,11 @@ class _Lifecycle(enum.Enum):
     FAILED = enum.auto()
 
 
+class _ClosePhase(enum.Enum):
+    PRE_CLEANUP = enum.auto()
+    CLEANUP_STARTED = enum.auto()
+
+
 class _OperationLocal(threading.local):
     def __init__(self) -> None:
         self.depth = 0
@@ -51,6 +56,7 @@ class SqliteRecordCache(RecordCache):
         self._state = _Lifecycle.OPEN
         self._active_operations = 0
         self._operation_local = _OperationLocal()
+        self._close_attempt: object | None = None
         self._close_failure: BaseException | None = None
 
     @contextmanager
@@ -90,25 +96,44 @@ class SqliteRecordCache(RecordCache):
             raise SqliteRecordCacheCloseError(
                 "cannot close SQLite record cache from an active operation"
             )
-        if not self._elect_closer():
-            return
-
+        attempt = object()
+        phase = _ClosePhase.PRE_CLEANUP
+        close_required = False
+        owns_attempt = False
         failure: BaseException | None = None
         try:
-            self._sqlite_backend._close_connections()
+            close_required = self._elect_closer(attempt)
+            if close_required:
+                owns_attempt = True
+                phase = _ClosePhase.CLEANUP_STARTED
+                self._sqlite_backend._close_connections()
         # Closing must publish a terminal state even for process-level exits.
         except BaseException as error:  # noqa: BLE001
             failure = error
+            owns_attempt = self._owns_close_attempt(attempt)
+        finally:
+            try:
+                self._finish_close_attempt(attempt, phase, failure)
+            except BaseException as publication_error:  # noqa: BLE001
+                if failure is None or (
+                    isinstance(failure, Exception)
+                    and not isinstance(publication_error, Exception)
+                ):
+                    failure = publication_error
+                self._recover_close_publication(attempt, phase, failure)
 
-        self._publish_close_outcome(failure)
+        if not close_required and failure is None:
+            return
         if failure is not None:
+            if not owns_attempt:
+                raise failure
             if not isinstance(failure, Exception):
                 raise failure
             raise SqliteRecordCacheCloseError(
                 "failed to close SQLite record cache"
             ) from failure
 
-    def _elect_closer(self) -> bool:
+    def _elect_closer(self, attempt: object) -> bool:
         with self._lifecycle:
             while True:
                 if self._state is _Lifecycle.CLOSED:
@@ -119,26 +144,60 @@ class SqliteRecordCache(RecordCache):
                         "SQLite record cache close previously failed"
                     ) from self._close_failure
                 if self._state is _Lifecycle.OPEN:
-                    self._state = _Lifecycle.CLOSING
-                    self._lifecycle.notify_all()
                     try:
+                        self._close_attempt = attempt
+                        self._state = _Lifecycle.CLOSING
+                        self._lifecycle.notify_all()
                         while self._active_operations:
                             self._lifecycle.wait()
                     except BaseException:
-                        self._state = _Lifecycle.OPEN
-                        self._lifecycle.notify_all()
+                        if self._close_attempt is attempt:
+                            self._close_attempt = None
+                            self._state = _Lifecycle.OPEN
+                            self._lifecycle.notify_all()
                         raise
-                    return True
+                    else:
+                        return True
                 if self._state is _Lifecycle.CLOSING:
                     self._lifecycle.wait()
 
-    def _publish_close_outcome(self, failure: BaseException | None) -> None:
+    def _owns_close_attempt(self, attempt: object) -> bool:
         with self._lifecycle:
+            return self._close_attempt is attempt
+
+    def _finish_close_attempt(
+        self,
+        attempt: object,
+        phase: _ClosePhase,
+        failure: BaseException | None,
+    ) -> None:
+        with self._lifecycle:
+            if self._close_attempt is not attempt:
+                return
             if failure is None:
                 self._state = _Lifecycle.CLOSED
+            elif phase is _ClosePhase.PRE_CLEANUP:
+                self._state = _Lifecycle.OPEN
             else:
                 self._close_failure = failure
                 self._state = _Lifecycle.FAILED
+            self._close_attempt = None
+            self._lifecycle.notify_all()
+
+    def _recover_close_publication(
+        self,
+        attempt: object,
+        phase: _ClosePhase,
+        failure: BaseException,
+    ) -> None:
+        with self._lifecycle:
+            if self._close_attempt is attempt:
+                if phase is _ClosePhase.PRE_CLEANUP:
+                    self._state = _Lifecycle.OPEN
+                else:
+                    self._close_failure = failure
+                    self._state = _Lifecycle.FAILED
+                self._close_attempt = None
             self._lifecycle.notify_all()
 
     def __enter__(self) -> Self:

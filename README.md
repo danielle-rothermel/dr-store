@@ -224,12 +224,13 @@ that cache instance in the current process. A successful close is idempotent for
 repeated and concurrent callers. `SqliteRecordCacheClosedError` reports
 operations requested after closing begins, before their inputs are validated;
 `SqliteRecordCacheCloseError` reports a terminal cleanup failure to close
-callers, including a context exit. An interruption while draining admitted work
-restores the open lifecycle; a process-level cleanup interruption terminalizes
-it before propagating to the elected caller. Committed records remain available
-after close and reopen. Closing one cache does not close a separate instance or
-coordinate another process, even when both use the same database path. These
-persistence semantics do not promise power-loss durability.
+callers, including a context exit. An interruption before connection cleanup
+begins restores the open lifecycle and wakes another closer; a process-level
+cleanup interruption terminalizes it before propagating to the elected caller.
+Committed records remain available after close and reopen. Closing one cache
+does not close a separate instance or coordinate another process, even when
+both use the same database path. These persistence semantics do not promise
+power-loss durability.
 
 ## Canonical JSON document files
 

@@ -75,6 +75,16 @@ def _capture(
         results.put(error)
 
 
+def _capture_base_exception(
+    operation: Callable[[], object],
+    results: queue.Queue[object],
+) -> None:
+    try:
+        results.put(operation())
+    except BaseException as error:  # noqa: BLE001 - inspect process exits.
+        results.put(error)
+
+
 def _join(thread: threading.Thread) -> None:
     thread.join(WATCHDOG_SECONDS)
     assert not thread.is_alive(), f"{thread.name} exceeded its watchdog"
@@ -87,6 +97,35 @@ def _await_closing(cache: SqliteRecordCache) -> None:
             WATCHDOG_SECONDS,
         )
     assert reached, "cache did not begin closing"
+
+
+def _run_interrupted_and_concurrent_close(
+    cache: SqliteRecordCache,
+    interruption_ready: threading.Event,
+    concurrent_waiting: threading.Event,
+    release_interruption: threading.Event,
+) -> list[object]:
+    results: queue.Queue[object] = queue.Queue()
+    interrupted = threading.Thread(
+        target=_capture_base_exception,
+        args=(cache.close, results),
+        name="interrupted-closer",
+    )
+    concurrent = threading.Thread(
+        target=_capture,
+        args=(cache.close, results),
+        name="concurrent-closer",
+    )
+
+    interrupted.start()
+    assert interruption_ready.wait(WATCHDOG_SECONDS)
+    concurrent.start()
+    assert concurrent_waiting.wait(WATCHDOG_SECONDS)
+    release_interruption.set()
+    _join(interrupted)
+    _join(concurrent)
+
+    return [results.get_nowait(), results.get_nowait()]
 
 
 def _use_cache_then_raise(
@@ -419,6 +458,132 @@ def test_drain_interruption_wakes_a_concurrent_close_caller(
     with pytest.raises(SqliteRecordCacheClosedError):
         cache.get(KEY, schema=SCHEMA)
     cache.close()
+
+
+def test_post_election_interruption_wakes_a_concurrent_close_caller(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SqliteRecordCache(tmp_path / "cache.db")
+    interrupted_elected = threading.Event()
+    concurrent_waiting = threading.Event()
+    release_interruption = threading.Event()
+    interruption = KeyboardInterrupt("injected post-election interruption")
+    cache._lifecycle = _ObservedCondition(concurrent_waiting)
+    elect_closer = cache._elect_closer
+
+    def interrupt_after_election(attempt: object) -> bool:
+        elected = elect_closer(attempt)
+        if threading.current_thread().name == "interrupted-closer":
+            assert elected
+            interrupted_elected.set()
+            assert release_interruption.wait(WATCHDOG_SECONDS)
+            raise interruption
+        return elected
+
+    monkeypatch.setattr(cache, "_elect_closer", interrupt_after_election)
+
+    observed = _run_interrupted_and_concurrent_close(
+        cache,
+        interrupted_elected,
+        concurrent_waiting,
+        release_interruption,
+    )
+    assert any(result is interruption for result in observed)
+    assert None in observed
+    with pytest.raises(SqliteRecordCacheClosedError):
+        cache.get(KEY, schema=SCHEMA)
+    cache.close()
+
+
+def test_publication_interruption_terminalizes_for_waiting_close_caller(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SqliteRecordCache(tmp_path / "cache.db")
+    cache.get(KEY, schema=SCHEMA)
+    publication_started = threading.Event()
+    concurrent_waiting = threading.Event()
+    release_publication = threading.Event()
+    interruption = KeyboardInterrupt("injected publication interruption")
+    cache._lifecycle = _ObservedCondition(concurrent_waiting)
+    finish_close_attempt = cache._finish_close_attempt
+
+    def interrupt_publication(
+        attempt: object,
+        phase: sqlite_module._ClosePhase,
+        failure: BaseException | None,
+    ) -> None:
+        if threading.current_thread().name == "interrupted-closer":
+            publication_started.set()
+            assert release_publication.wait(WATCHDOG_SECONDS)
+            raise interruption
+        finish_close_attempt(attempt, phase, failure)
+
+    monkeypatch.setattr(
+        cache,
+        "_finish_close_attempt",
+        interrupt_publication,
+    )
+
+    observed = _run_interrupted_and_concurrent_close(
+        cache,
+        publication_started,
+        concurrent_waiting,
+        release_publication,
+    )
+    assert any(result is interruption for result in observed)
+    repeated = next(
+        result
+        for result in observed
+        if isinstance(result, SqliteRecordCacheCloseError)
+    )
+    assert repeated.__cause__ is interruption
+    with pytest.raises(SqliteRecordCacheClosedError):
+        cache.get(KEY, schema=SCHEMA)
+    with pytest.raises(SqliteRecordCacheCloseError) as later:
+        cache.close()
+    assert later.value.__cause__ is interruption
+
+
+def test_publication_interruption_supersedes_repeated_close_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SqliteRecordCache(tmp_path / "cache.db")
+    cleanup_failure = RuntimeError("injected cleanup failure")
+
+    def fail_cleanup() -> None:
+        raise cleanup_failure
+
+    monkeypatch.setattr(
+        cache._sqlite_backend,
+        "_close_connections",
+        fail_cleanup,
+    )
+    with pytest.raises(SqliteRecordCacheCloseError):
+        cache.close()
+
+    interruption = KeyboardInterrupt("injected publication interruption")
+
+    def interrupt_publication(
+        _attempt: object,
+        _phase: sqlite_module._ClosePhase,
+        _failure: BaseException | None,
+    ) -> None:
+        raise interruption
+
+    monkeypatch.setattr(
+        cache,
+        "_finish_close_attempt",
+        interrupt_publication,
+    )
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        cache.close()
+    assert caught.value is interruption
+    with pytest.raises(SqliteRecordCacheClosedError):
+        cache.get(KEY, schema=SCHEMA)
 
 
 def test_process_level_cleanup_failure_terminalizes_lifecycle(
