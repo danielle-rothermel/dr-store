@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from contextlib import contextmanager, suppress
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 from dr_store.storage_backends.contract import BindOutcome, PutOutcome
 
@@ -38,6 +38,7 @@ class SqliteBackend:
 
     def __init__(self, path: str | Path) -> None:
         self._path = str(path)
+        self._track_connections = False
         self._local = threading.local()
         self._connections: set[sqlite3.Connection] = set()
         self._connections_lock = threading.Lock()
@@ -47,6 +48,12 @@ class SqliteBackend:
             conn.commit()
         finally:
             conn.close()
+
+    @classmethod
+    def _managed(cls, path: str | Path) -> Self:
+        backend = cls(path)
+        backend._track_connections = True
+        return backend
 
     def _connect(self, *, check_same_thread: bool) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -73,13 +80,16 @@ class SqliteBackend:
             # only so a quiesced higher-level owner can close them centrally.
             conn = self._connect(check_same_thread=False)
             try:
-                with self._connections_lock:
-                    self._connections.add(conn)
-                    try:
-                        self._local.conn = conn
-                    except BaseException:
-                        self._connections.remove(conn)
-                        raise
+                if self._track_connections:
+                    with self._connections_lock:
+                        self._connections.add(conn)
+                        try:
+                            self._local.conn = conn
+                        except BaseException:
+                            self._connections.remove(conn)
+                            raise
+                else:
+                    self._local.conn = conn
             except BaseException:
                 with suppress(Exception):
                     conn.close()

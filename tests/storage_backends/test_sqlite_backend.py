@@ -4,6 +4,7 @@ import multiprocessing
 import queue
 import sqlite3
 import threading
+import weakref
 from typing import TYPE_CHECKING, Literal
 
 import pytest
@@ -131,10 +132,40 @@ def test_operational_connections_are_retained_separately_per_thread(
     assert connections[0] is not connections[1]
 
 
+def test_direct_backend_does_not_retain_exited_thread_connections(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initialization = _FakeConnection()
+    operational = _FakeConnection()
+    available = queue.Queue[_FakeConnection]()
+    available.put(initialization)
+    available.put(operational)
+    operational_reference = weakref.ref(operational)
+    del operational
+
+    def connect(_path: str, **_settings: object) -> _FakeConnection:
+        return available.get_nowait()
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    backend = SqliteBackend(tmp_path / "store.db")
+
+    def use_backend() -> None:
+        assert backend._conn is backend._conn
+
+    thread = threading.Thread(target=use_backend)
+    thread.start()
+    thread.join(WATCHDOG_SECONDS)
+
+    assert not thread.is_alive()
+    assert backend._connections == set()
+    assert operational_reference() is None
+
+
 def test_close_connections_centrally_closes_all_worker_connections(
     tmp_path: Path,
 ) -> None:
-    backend = SqliteBackend(tmp_path / "store.db")
+    backend = SqliteBackend._managed(tmp_path / "store.db")
     connections = _collect_thread_connections(backend, 2)
 
     backend._close_connections()
@@ -162,7 +193,7 @@ def test_close_connections_attempts_every_close_before_reporting_failure(
         return available.get_nowait()
 
     monkeypatch.setattr(sqlite3, "connect", connect)
-    backend = SqliteBackend(tmp_path / "store.db")
+    backend = SqliteBackend._managed(tmp_path / "store.db")
     _collect_thread_connections(backend, 2)
 
     with pytest.raises(

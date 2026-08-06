@@ -40,7 +40,7 @@ class SqliteRecordCache(RecordCache):
     """Persistent Record Cache with one managed connection lifecycle."""
 
     def __init__(self, path: str | Path) -> None:
-        backend = SqliteBackend(path)
+        backend = SqliteBackend._managed(path)
         super().__init__(ObjectStore(backend))
         self._sqlite_backend = backend
         self._lifecycle = threading.Condition()
