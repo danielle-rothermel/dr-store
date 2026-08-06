@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tomllib
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -63,7 +64,6 @@ def test_term_names_are_unique() -> None:
     names = [term["name"] for term in terms]
 
     assert all(name.strip() for name in names)
-    assert len(names) == 24
     assert len(names) == len({name.casefold() for name in names})
 
 
@@ -73,6 +73,24 @@ def test_contract_titles_are_unique() -> None:
 
     assert all(title.strip() for title in titles)
     assert len(titles) == len({title.casefold() for title in titles})
+
+
+def test_contract_entries_have_required_shape() -> None:
+    contracts = _load_toml("contracts.toml")["contracts"]
+    required_fields = {"title", "statement", "rationale", "date"}
+    allowed_fields = required_fields | {"check"}
+
+    for contract in contracts:
+        assert required_fields <= contract.keys()
+        assert contract.keys() <= allowed_fields
+        assert all(
+            isinstance(value, str) and value.strip()
+            for value in contract.values()
+        )
+        assert (
+            date.fromisoformat(contract["date"]).isoformat()
+            == (contract["date"])
+        )
 
 
 def test_relationship_targets_exist_and_are_not_self_links() -> None:

@@ -23,11 +23,9 @@ if TYPE_CHECKING:
 
 
 def derive_cache_key(namespace: str, payload: Jsonable) -> str:
-    """Derive a cache key from a namespace and one payload record.
-
-    The payload is hashed through the same canonical JSON profile as a
-    content hash, so equivalent payloads derive the same key.
-    """
+    """Derive a key through the Object Store's canonical content hash."""
+    if not isinstance(namespace, str):
+        raise TypeError("namespace must be a string")
     return f"{namespace}:{compute_content_hash(payload)}"
 
 
@@ -45,11 +43,9 @@ class RecordCache:
         self._store = store
 
     def get(self, key: str, *, schema: str) -> CacheHit | None:
-        """Return a cache hit, or ``None`` for an expected cache miss.
+        """Return a hit or a miss for absent or unverifiable stored data.
 
-        An unbound key, a different schema, missing content, and unverifiable
-        stored data are misses. Invalid requested schemas and operational
-        backend failures raise.
+        Invalid requested schemas and operational backend failures raise.
         """
         validated_schema = _validate_reference_schema(schema)
         try:
@@ -72,11 +68,7 @@ class RecordCache:
         schema: str,
         record: Jsonable,
     ) -> ObjectReference:
-        """Store ``record`` and bind ``key`` to it, keeping the first winner.
-
-        A conflicting binding returns the existing reference instead of
-        replacing it; record validation failures are caller bugs and raise.
-        """
+        """Store a record and bind its key, keeping the first winner."""
         reference, _ = self._store.put(schema, record)
         try:
             self._store.bind(key, reference)

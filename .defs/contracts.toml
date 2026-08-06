@@ -187,4 +187,4 @@ record distinct from a miss. First-writer-wins keeps a deterministic key stable 
 when the caller's producer is not, and the absence of any removal path leaves \
 key versioning as the whole invalidation story."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/record_cache/test_record_cache.py"
+check = "uv run pytest -q tests/record_cache/test_cache.py"

@@ -219,9 +219,10 @@ is_a = ["key"]
 part_of = ["record cache"]
 
 [[terms]]
-name = "best-effort read"
+name = "record cache read"
 definition = """
 A read that reports an absent, missing, or unverifiable stored value as a miss \
 rather than a failure. Invalid requested schemas and operational backend faults \
 are still raised."""
 categories = ["record caching"]
+part_of = ["record cache"]

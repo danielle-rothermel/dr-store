@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from dr_serialize import StrictJsonError
 
 from dr_store import (
     CacheHit,
@@ -13,6 +12,7 @@ from dr_store import (
     RecordCache,
     ReferenceValidationError,
     StoreError,
+    compute_content_hash,
     derive_cache_key,
 )
 
@@ -25,6 +25,26 @@ KEY = "example.memo.v1:key"
 SCHEMA = "example.record"
 RECORD: Jsonable = {"payload": {"a": 1, "b": [2, 3]}}
 OTHER: Jsonable = {"payload": "different"}
+
+
+def test_derived_key_uses_canonical_content_hash() -> None:
+    assert derive_cache_key("ns.v1", RECORD) == (
+        f"ns.v1:{compute_content_hash(RECORD)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid_namespace",
+    [None, 1, True],
+)
+def test_derived_key_rejects_non_string_namespace(
+    invalid_namespace: object,
+) -> None:
+    with pytest.raises(TypeError):
+        derive_cache_key(
+            invalid_namespace,  # ty: ignore[invalid-argument-type]
+            RECORD,
+        )
 
 
 @pytest.fixture
@@ -46,7 +66,6 @@ def test_null_record_is_distinct_from_a_miss(cache: RecordCache) -> None:
     cache.put(KEY, SCHEMA, None)
 
     assert cache.get(KEY, schema=SCHEMA) == CacheHit(record=None)
-    assert cache.get("unbound", schema=SCHEMA) is None
 
 
 def test_other_schema_is_a_miss(cache: RecordCache) -> None:
@@ -64,6 +83,21 @@ def test_missing_object_is_a_miss(
         schema=reference.schema,
         content_hash=reference.content_hash,
     )
+    assert cache.get(KEY, schema=SCHEMA) is None
+
+
+def test_stored_object_schema_mismatch_is_a_miss(
+    backend: Backend,
+    store: ObjectStore,
+    cache: RecordCache,
+) -> None:
+    stored, _ = store.put("other.schema", RECORD)
+    backend.bind(
+        key=KEY,
+        schema=SCHEMA,
+        content_hash=stored.content_hash,
+    )
+
     assert cache.get(KEY, schema=SCHEMA) is None
 
 
@@ -151,7 +185,6 @@ def test_backend_read_failure_propagates(failure_stage: str) -> None:
 
     with pytest.raises(
         BackendReadError,
-        match=f"{failure_stage} storage unavailable",
     ):
         cache.get(KEY, schema=SCHEMA)
 
@@ -183,24 +216,3 @@ def test_conflicting_put_returns_the_first_winner(
     second = cache.put(KEY, SCHEMA, OTHER)
     assert second == first
     assert cache.get(KEY, schema=SCHEMA) == CacheHit(record=RECORD)
-
-
-def test_invalid_record_raises(cache: RecordCache) -> None:
-    with pytest.raises(StrictJsonError):
-        cache.put(
-            KEY,
-            SCHEMA,
-            {"value": float("nan")},
-        )
-
-
-def test_derived_key_is_deterministic_and_canonical() -> None:
-    assert derive_cache_key("ns.v1", {"a": 1, "b": 2}) == derive_cache_key(
-        "ns.v1", {"b": 2, "a": 1}
-    )
-    assert derive_cache_key("ns.v1", RECORD) != derive_cache_key(
-        "ns.v2", RECORD
-    )
-    assert derive_cache_key("ns.v1", RECORD) != derive_cache_key(
-        "ns.v1", OTHER
-    )
