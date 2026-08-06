@@ -69,18 +69,24 @@ check = "uv run pytest -q tests/object_store/test_binding.py"
 title = "Backends own atomicity and declare persistence scope"
 statement = """
 Every backend supplies atomic insert-if-absent operations for object rows and \
-bindings plus point reads. The in-memory backend is process-local; the SQLite \
-backend requires a non-transient filesystem path, captures its lexical absolute \
-path at construction, retains committed rows across reopen, and supports \
-cross-process contention without claiming power-loss durability. Empty and \
-`:memory:` paths are rejected. Capturing an absolute path prevents later \
-working-directory changes from redirecting it but does not freeze symlink \
-targets."""
+bindings, exact-key reads that return bindings with their referenced object \
+rows, and atomic write batches that store prepared objects and establish each \
+key's first-writer binding. The in-memory backend is process-local. The SQLite \
+backend chunks exact-key reads into joined queries without promising one \
+batch-wide read snapshot; each non-empty write batch uses one immediate \
+transaction and rolls that transaction back when the batch fails. SQLite \
+requires a non-transient filesystem path, captures its lexical absolute path at \
+construction, retains committed rows across reopen, and supports cross-process \
+contention without claiming power-loss durability. Empty and `:memory:` paths \
+are rejected. Capturing an absolute path prevents later working-directory \
+changes from redirecting it but does not freeze symlink targets."""
 rationale = """
 The object store owns hashing, verification, idempotency, and typed conflicts, \
-while the backend owns the atomic storage primitive those rules require. \
+while the backend owns the atomic storage primitives those rules require. \
+Joined reads avoid per-key binding and object round trips, while transaction-\
+scoped writes prevent a failed batch from leaving a partially committed set. \
 Persistence is stated per implementation rather than generalized into an \
-unsupported durability guarantee."""
+unsupported snapshot or durability guarantee."""
 date = "2026-08-05"
 check = "uv run pytest -q tests/storage_backends/test_contract.py tests/storage_backends/test_sqlite_backend.py"
 
@@ -89,8 +95,9 @@ title = "Callers own domain meaning"
 statement = """
 Schemas and binding keys are opaque strings, and manifest payload fields are \
 opaque strict JSON. Callers own their meaning, identity selection, lifecycle, \
-retention, and configured byte, depth, and sidecar cap policy; storage does not \
-infer those domain rules."""
+retention, cache scheduling, dirty tracking, key enumeration and prefix-query \
+policy, and configured byte, depth, and sidecar cap policy; storage does not \
+infer those domain rules or supply those cache policies."""
 rationale = """
 Keeping domain policy outside the foundational storage boundary lets the same \
 primitives serve unrelated consumers without silently redefining their data."""
@@ -243,21 +250,27 @@ check = "uv run pytest -q tests/document_directory/test_sidecar_verification.py"
 [[contracts]]
 title = "Record cache reads are best-effort and entries are never rebound"
 statement = """
-A record cache read validates its requested schema before storage access and \
-returns a typed hit only when the key is bound and the resolved reference passes \
-a verified get under that schema. An unbound key, missing content, schema \
-mismatch, and unverifiable stored object or binding all report a miss; \
-operational backend failures propagate. A cache put binds its key once and \
-returns the existing winner on conflict, so invalidation happens by choosing a \
-new caller-owned key rather than by deleting or expiring an entry."""
+A record cache batch read deduplicates its input keys and returns exactly one \
+typed hit or miss for every distinct exact requested key. It validates the \
+requested schema before storage access and parses and verifies each returned \
+bound object once. An unbound key, missing content, schema mismatch, and \
+unverifiable stored object or binding all report a per-key miss; operational \
+backend failures propagate. A cache batch put validates, canonicalizes, and \
+hashes each proposed entry once before one backend write batch, then returns \
+the first binding winner for every input key. Invalidation happens by choosing \
+a new caller-owned key rather than by deleting or expiring an entry. A batch \
+read does not promise a single snapshot across backend read chunks."""
 rationale = """
 Expected absence and unverifiable stored data do not prevent recomputation, \
 while invalid requested schemas, caller record-validation faults, and \
 unavailable storage stay visible. A typed hit preserves strict JSON null as a \
-record distinct from a miss. First-writer-wins keeps a deterministic key stable \
-when the caller's producer is not. Opaque keys preserve the general Object Store \
-contract, while the canonical derivation helper gives callers a versioned, \
-content-derived scheme without making that scheme mandatory."""
+record distinct from a miss. Preparing before the backend call prevents \
+caller-data validation failures from starting a storage batch, and one \
+verification pass keeps each key's outcome independent. First-writer-wins keeps \
+a deterministic key stable when the caller's producer is not. Opaque keys \
+preserve the general Object Store contract, while the canonical derivation \
+helper gives callers a versioned, content-derived scheme without making that \
+scheme mandatory."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/record_cache/test_cache.py"
 
@@ -265,8 +278,8 @@ check = "uv run pytest -q tests/record_cache/test_cache.py"
 title = "Managed SQLite record caches own their complete lifecycle"
 statement = """
 A managed SQLite record cache initializes its database schema before \
-construction returns and admits each cache read or write as one whole \
-operation while open. Closing rejects new operations with a typed closed \
+construction returns and admits each single or bulk cache read or write as one \
+whole operation while open. Closing rejects new operations with a typed closed \
 error before input validation, waits for every admitted operation to finish, \
 and then closes every operational connection tracked by that instance in the \
 current process. Normal and exceptional context-manager exits both perform \

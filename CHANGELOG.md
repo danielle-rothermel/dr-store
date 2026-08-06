@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Added `CacheEntry`, `RecordCache.get_many`, and `RecordCache.put_many` for
+  exact-key batch cache access. Batch reads return one per-key hit or miss for
+  every distinct requested key; batch puts return each key's first binding
+  winner. Added `BoundObjectRow`, `BoundObjectWrite`, and the backend batch
+  primitives that carry joined reads and prepared writes.
+
+### Changed
+
+- Record Cache operations prepare or verify each entry once through shared
+  single and bulk paths. SQLite performs chunked joined exact-key reads without
+  claiming a batch-wide snapshot, and executes each non-empty batch write in
+  one immediate transaction with rollback on failure. Managed SQLite lifecycle
+  admission and shutdown cover complete bulk operations. Cache scheduling,
+  dirty tracking, key enumeration, and prefix-query policy remain caller-owned;
+  SQLite persistence still does not promise power-loss durability.
+
 ## [0.1.4] - 2026-08-06
 
 ### Added

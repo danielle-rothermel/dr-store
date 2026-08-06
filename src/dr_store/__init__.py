@@ -41,6 +41,7 @@ from dr_store.object_store import (
     PutStatus,
 )
 from dr_store.record_cache import (
+    CacheEntry,
     CacheHit,
     RecordCache,
     SqliteRecordCache,
@@ -49,6 +50,8 @@ from dr_store.record_cache import (
 from dr_store.storage_backends import (
     Backend,
     BindOutcome,
+    BoundObjectRow,
+    BoundObjectWrite,
     MemoryBackend,
     PutOutcome,
     SqliteBackend,
@@ -61,6 +64,9 @@ __all__ = [
     "BindOutcome",
     "BindStatus",
     "BindingConflictError",
+    "BoundObjectRow",
+    "BoundObjectWrite",
+    "CacheEntry",
     "CacheHit",
     "CanonicalJsonFile",
     "ContentHashMismatchError",

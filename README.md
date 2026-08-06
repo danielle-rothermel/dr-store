@@ -19,14 +19,16 @@ document artifacts:
   provides immutable puts, verified reads, and atomic bindings from opaque
   caller-owned keys to object references.
 - **[Storage backends](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/storage_backends)**
-  supply the Object Store's atomic, append-only operations. `MemoryBackend` is
-  process-local; `SqliteBackend` persists data for cross-process use.
+  supply the Object Store's atomic, append-only point and batch operations.
+  `MemoryBackend` is process-local; `SqliteBackend` persists committed data for
+  cross-process use.
 - **[Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)**
   memoizes records under opaque caller-owned keys. Reads return typed hits;
   absent, missing, or unverifiable stored values are misses, while invalid
   requested schemas and operational backend faults raise. Entries are never
   rebound, so callers invalidate by selecting a new key; `derive_cache_key`
   provides a canonical scheme using a versioned namespace and payload.
+  Single and bulk methods share these per-key semantics;
   `SqliteRecordCache(path)` is the managed persistent lifecycle.
 - **[Canonical JSON document files](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)**
   publish and read one standalone, bounded canonical document in an existing
@@ -63,14 +65,25 @@ the context body is not suppressed; cleanup failure raises
 `SqliteRecordCacheCloseError`:
 
 ```python
-from dr_store import CacheHit, SqliteRecordCache, derive_cache_key
+from dr_store import CacheEntry, CacheHit, SqliteRecordCache, derive_cache_key
 
 key = derive_cache_key("example.summary.v1", {"document": "note-42"})
 with SqliteRecordCache("records.sqlite3") as cache:
-    cache.put(key, "example.summary.v1", {"summary": "hello"})
-    assert cache.get(key, schema="example.summary.v1") == CacheHit(
-        record={"summary": "hello"}
+    winners = cache.put_many(
+        {
+            key: CacheEntry(
+                schema="example.summary.v1",
+                record={"summary": "hello"},
+            )
+        }
     )
+    assert winners[key].schema == "example.summary.v1"
+    assert cache.get_many(
+        [key, "missing"], schema="example.summary.v1"
+    ) == {
+        key: CacheHit(record={"summary": "hello"}),
+        "missing": None,
+    }
 ```
 
 `CanonicalJsonFile` publishes one standalone document in an existing directory.
@@ -151,7 +164,8 @@ class ObjectStore:
 
 [Storage backends](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/storage_backends)
 implement one atomic protocol beneath the Object Store. Outcome objects carry
-the existing row when an append-only operation does not insert:
+the existing row when an append-only operation does not insert. Batch value
+objects carry prepared writes and joined binding/object read results:
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -165,6 +179,20 @@ class BindOutcome:
     bound: bool
     existing_schema: str
     existing_content_hash: str
+
+@dataclass(frozen=True, slots=True)
+class BoundObjectWrite:
+    key: str
+    schema: str
+    content_hash: str
+    canonical: str
+
+@dataclass(frozen=True, slots=True)
+class BoundObjectRow:
+    binding_schema: str
+    binding_content_hash: str
+    object_schema: str | None
+    canonical: str | None
 ```
 
 ```python
@@ -179,11 +207,23 @@ class Backend(Protocol):
         self, *, key: str, schema: str, content_hash: str
     ) -> BindOutcome: ...
     def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
+    def get_bound_objects(
+        self, *, keys: tuple[str, ...]
+    ) -> dict[str, BoundObjectRow]: ...
+    def put_bound_objects(
+        self, *, entries: tuple[BoundObjectWrite, ...]
+    ) -> dict[str, BindOutcome]: ...
 
 class MemoryBackend: ...
 class SqliteBackend:
     def __init__(self, path: str | Path) -> None: ...
 ```
+
+Batch reads address only the supplied exact keys. SQLite performs chunked
+joined binding/object queries and does not promise one snapshot across the
+chunks. Every non-empty SQLite write batch uses one immediate transaction; a
+failure rolls back that transaction. Committed rows persist across reopen, but
+the backend does not promise power-loss durability.
 
 ## Record Cache
 
@@ -201,12 +241,23 @@ def derive_cache_key(namespace: str, payload: Jsonable) -> str: ...
 class CacheHit:
     record: Jsonable
 
+@dataclass(frozen=True, slots=True)
+class CacheEntry:
+    schema: str
+    record: Jsonable
+
 class RecordCache:
     def __init__(self, store: ObjectStore) -> None: ...
     def get(self, key: str, *, schema: str) -> CacheHit | None: ...
+    def get_many(
+        self, keys: Iterable[str], *, schema: str
+    ) -> dict[str, CacheHit | None]: ...
     def put(
         self, key: str, schema: str, record: Jsonable
     ) -> ObjectReference: ...
+    def put_many(
+        self, entries: Mapping[str, CacheEntry]
+    ) -> dict[str, ObjectReference]: ...
 
 class SqliteRecordCache(RecordCache):
     def __init__(self, path: str | Path) -> None: ...
@@ -215,13 +266,26 @@ class SqliteRecordCache(RecordCache):
     def __exit__(self, ...) -> bool: ...
 ```
 
+`get_many` deduplicates requested keys and returns exactly those distinct keys,
+with each value independently classified as a hit or miss under the requested
+schema. It parses and verifies each returned bound object once; it does not
+promise that a multi-chunk backend read observes one snapshot. `put_many`
+validates, canonicalizes, and hashes each proposed entry once before invoking
+one backend write batch, then returns the first binding winner for every input
+key. Single-key `get` and `put` use the same paths and semantics.
+
+The cache intentionally provides no scheduler, dirty tracking, key enumeration,
+prefix query, delete, expiry, eviction, or size cap. Callers own those policies
+and choose new keys for invalidation.
+
 Construction captures a non-transient absolute filesystem path and establishes
 the SQLite schema before returning; empty and `:memory:` paths are rejected.
 Initialize a new database path with one constructor before starting concurrent
 constructors. Closing rejects new cache operations, waits for every admitted
-`get` or `put` to finish, and then closes all operational connections tracked by
-that cache instance in the current process. A successful close is idempotent for
-repeated and concurrent callers. `SqliteRecordCacheClosedError` reports
+`get`, `get_many`, `put`, or `put_many` to finish, and then closes all
+operational connections tracked by that cache instance in the current process.
+A successful close is idempotent for repeated and concurrent callers.
+`SqliteRecordCacheClosedError` reports
 operations requested after closing begins, before their inputs are validated;
 `SqliteRecordCacheCloseError` reports a terminal cleanup failure to close
 callers, including a context exit. An interruption before connection cleanup

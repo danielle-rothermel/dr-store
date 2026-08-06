@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import (  # noqa: TC003 - public hints resolve at runtime.
+    Iterable,
+    Mapping,
+)
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dr_serialize import Jsonable
 
 from dr_store.content_addressing import (
+    ObjectReference,
     _validate_reference_schema,
     compute_content_hash,
 )
 from dr_store.core.errors import (
-    BindingConflictError,
     ContentHashMismatchError,
     ObjectNotFoundError,
     ReferenceValidationError,
@@ -18,7 +22,6 @@ from dr_store.core.errors import (
 )
 
 if TYPE_CHECKING:
-    from dr_store.content_addressing import ObjectReference
     from dr_store.object_store import ObjectStore
 
 
@@ -36,6 +39,14 @@ class CacheHit:
     record: Jsonable
 
 
+@dataclass(frozen=True, slots=True)
+class CacheEntry:
+    """One schema-qualified record proposed for a cache key."""
+
+    schema: str
+    record: Jsonable
+
+
 class RecordCache:
     """Best-effort memoization facade over an :class:`ObjectStore`."""
 
@@ -47,20 +58,57 @@ class RecordCache:
 
         Invalid requested schemas and operational backend failures raise.
         """
+        return self._get_many((key,), schema=schema)[key]
+
+    def get_many(
+        self,
+        keys: Iterable[str],
+        *,
+        schema: str,
+    ) -> dict[str, CacheHit | None]:
+        """Return one hit or miss for every distinct requested key."""
+        return self._get_many(tuple(dict.fromkeys(keys)), schema=schema)
+
+    def _get_many(
+        self,
+        keys: tuple[str, ...],
+        *,
+        schema: str,
+    ) -> dict[str, CacheHit | None]:
         validated_schema = _validate_reference_schema(schema)
-        try:
-            reference = self._store.resolve(key)
-            if reference is None or reference.schema != validated_schema:
-                return None
-            record = self._store.get(reference)
-        except (
-            ContentHashMismatchError,
-            ObjectNotFoundError,
-            ReferenceValidationError,
-            SchemaMismatchError,
-        ):
-            return None
-        return CacheHit(record=record)
+        rows = self._store._get_bound_objects(keys)
+        results: dict[str, CacheHit | None] = {}
+        for key in keys:
+            row = rows.get(key)
+            if row is None:
+                results[key] = None
+                continue
+            try:
+                reference = ObjectReference(
+                    schema=row.binding_schema,
+                    content_hash=row.binding_content_hash,
+                )
+                if reference.schema != validated_schema:
+                    results[key] = None
+                    continue
+                if row.object_schema is None or row.canonical is None:
+                    results[key] = None
+                    continue
+                record = self._store._verify_stored_record(
+                    reference=reference,
+                    stored_schema=row.object_schema,
+                    canonical=row.canonical,
+                )
+            except (
+                ContentHashMismatchError,
+                ObjectNotFoundError,
+                ReferenceValidationError,
+                SchemaMismatchError,
+            ):
+                results[key] = None
+            else:
+                results[key] = CacheHit(record=record)
+        return results
 
     def put(
         self,
@@ -69,9 +117,24 @@ class RecordCache:
         record: Jsonable,
     ) -> ObjectReference:
         """Store a record and bind its key, keeping the first winner."""
-        reference, _ = self._store.put(schema, record)
-        try:
-            self._store.bind(key, reference)
-        except BindingConflictError as conflict:
-            return conflict.existing
-        return reference
+        return self._put_many({key: CacheEntry(schema=schema, record=record)})[
+            key
+        ]
+
+    def put_many(
+        self,
+        entries: Mapping[str, CacheEntry],
+    ) -> dict[str, ObjectReference]:
+        """Store records and return the first binding winner for each key."""
+        return self._put_many(entries)
+
+    def _put_many(
+        self,
+        entries: Mapping[str, CacheEntry],
+    ) -> dict[str, ObjectReference]:
+        return self._store._put_bound_records(
+            {
+                key: (entry.schema, entry.record)
+                for key, entry in entries.items()
+            }
+        )

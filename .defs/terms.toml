@@ -145,8 +145,8 @@ is_a = ["compare-and-set"]
 name = "backend"
 definition = """
 The storage boundary that supplies atomic insert-if-absent operations and \
-point reads for object and binding tables. Persistence scope belongs to each \
-backend implementation."""
+point and batch operations for object and binding tables. Persistence scope \
+belongs to each backend implementation."""
 exported_symbols = [
   "Backend",
   "MemoryBackend",
@@ -155,6 +155,16 @@ exported_symbols = [
   "BindOutcome",
 ]
 categories = ["object storage"]
+
+[[terms]]
+name = "bound object batch"
+definition = """
+A backend operation over caller-supplied exact keys that either reads each \
+available binding together with its referenced object row or atomically stores \
+prepared objects and establishes their first-writer bindings."""
+exported_symbols = ["BoundObjectRow", "BoundObjectWrite"]
+categories = ["object storage", "record caching"]
+part_of = ["backend"]
 
 [[terms]]
 name = "canonical JSON document file"
@@ -230,8 +240,9 @@ is_a = ["hash"]
 name = "record cache"
 definition = """
 The memoization facade that binds cache keys to object references over an \
-object store and returns a typed hit containing the stored record for a key. \
-It adds no delete, expiry, eviction, or size-cap path."""
+object store and returns a typed hit or miss for each exact requested key. It \
+adds no delete, expiry, eviction, size-cap, enumeration, prefix-query, dirty-\
+tracking, or scheduling path."""
 exported_symbols = ["RecordCache", "CacheHit"]
 categories = ["record caching"]
 
@@ -261,10 +272,19 @@ is_a = ["key"]
 part_of = ["record cache"]
 
 [[terms]]
+name = "cache entry"
+definition = """
+One caller-proposed schema-qualified record associated with an exact cache key \
+for a single or batch cache put."""
+exported_symbols = ["CacheEntry"]
+categories = ["record caching"]
+part_of = ["record cache"]
+
+[[terms]]
 name = "record cache read"
 definition = """
-A read that reports an absent, missing, or unverifiable stored value as a miss \
-rather than a failure. Invalid requested schemas and operational backend faults \
-are still raised."""
+A read that reports one hit or miss for every distinct exact requested key. An \
+absent, missing, wrong-schema, or unverifiable stored value is a miss; invalid \
+requested schemas and operational backend faults are still raised."""
 categories = ["record caching"]
 part_of = ["record cache"]

@@ -12,7 +12,11 @@ from dr_serialize import (
     validate_strict_json,
 )
 
-from dr_store.content_addressing import ObjectReference
+from dr_store.content_addressing import (
+    ObjectReference,
+    _hash_canonical,
+    _prepare_record,
+)
 from dr_store.core.errors import (
     BindingConflictError,
     ContentHashMismatchError,
@@ -20,8 +24,14 @@ from dr_store.core.errors import (
     ObjectNotFoundError,
     SchemaMismatchError,
 )
+from dr_store.storage_backends.contract import (
+    BoundObjectRow,
+    BoundObjectWrite,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from dr_store.storage_backends.contract import Backend
 
 
@@ -51,18 +61,20 @@ class ObjectStore:
         Identical canonical text is idempotent; different text at the same
         schema and content-hash pair raises :class:`ObjectConflictError`.
         """
-        validated = validate_strict_json(record)
-        canonical = canonical_json(validated)
-        reference = ObjectReference.for_record(schema, validated)
+        prepared = _prepare_record(record)
+        reference = ObjectReference(
+            schema=schema,
+            content_hash=prepared.content_hash,
+        )
         outcome = self._backend.put_object(
             schema=schema,
             content_hash=reference.content_hash,
-            canonical=canonical,
+            canonical=prepared.canonical,
         )
         if outcome.inserted:
             return reference, PutStatus.STORED
         # Distinguish an idempotent replay from a hash collision.
-        if outcome.stored_canonical == canonical:
+        if outcome.stored_canonical == prepared.canonical:
             return reference, PutStatus.IDEMPOTENT
         raise ObjectConflictError(
             schema=schema,
@@ -78,6 +90,19 @@ class ObjectStore:
         if stored is None:
             raise ObjectNotFoundError(reference=reference)
         stored_schema, canonical = stored
+        return self._verify_stored_record(
+            reference=reference,
+            stored_schema=stored_schema,
+            canonical=canonical,
+        )
+
+    def _verify_stored_record(
+        self,
+        *,
+        reference: ObjectReference,
+        stored_schema: str,
+        canonical: str,
+    ) -> Jsonable:
         if stored_schema != reference.schema:
             raise SchemaMismatchError(
                 expected=reference.schema,
@@ -93,7 +118,6 @@ class ObjectStore:
                 schema=reference.schema,
             ) from exc
         try:
-            reference.verify_record(record)
             verified_canonical = canonical_json(record)
         except JsonEncodeError as exc:
             raise ContentHashMismatchError(
@@ -101,6 +125,13 @@ class ObjectStore:
                 actual="<stored content is outside the canonical profile>",
                 schema=reference.schema,
             ) from exc
+        actual_hash = _hash_canonical(verified_canonical)
+        if actual_hash != reference.content_hash:
+            raise ContentHashMismatchError(
+                expected=reference.content_hash,
+                actual=actual_hash,
+                schema=reference.schema,
+            )
         # Stored text must equal its canonical re-encoding.
         if verified_canonical != canonical:
             raise ContentHashMismatchError(
@@ -109,6 +140,41 @@ class ObjectStore:
                 schema=reference.schema,
             )
         return record
+
+    def _get_bound_objects(
+        self,
+        keys: tuple[str, ...],
+    ) -> Mapping[str, BoundObjectRow]:
+        return self._backend.get_bound_objects(keys=keys)
+
+    def _put_bound_records(
+        self,
+        entries: Mapping[str, tuple[str, Jsonable]],
+    ) -> dict[str, ObjectReference]:
+        writes: list[BoundObjectWrite] = []
+        for key, (schema, record) in entries.items():
+            prepared = _prepare_record(record)
+            reference = ObjectReference(
+                schema=schema,
+                content_hash=prepared.content_hash,
+            )
+            writes.append(
+                BoundObjectWrite(
+                    key=key,
+                    schema=reference.schema,
+                    content_hash=reference.content_hash,
+                    canonical=prepared.canonical,
+                )
+            )
+
+        outcomes = self._backend.put_bound_objects(entries=tuple(writes))
+        return {
+            key: ObjectReference(
+                schema=outcome.existing_schema,
+                content_hash=outcome.existing_content_hash,
+            )
+            for key, outcome in outcomes.items()
+        }
 
     def bind(
         self,

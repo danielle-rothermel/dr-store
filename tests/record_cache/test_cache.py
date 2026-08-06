@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from dr_serialize import StrictJsonError
 
 from dr_store import (
+    CacheEntry,
     CacheHit,
     MemoryBackend,
     ObjectReference,
@@ -15,11 +17,13 @@ from dr_store import (
     compute_content_hash,
     derive_cache_key,
 )
+from dr_store import content_addressing as content_addressing_module
+from dr_store import object_store as object_store_module
 
 if TYPE_CHECKING:
     from dr_serialize import Jsonable
 
-    from dr_store import Backend
+    from dr_store import Backend, BoundObjectRow
 
 KEY = "example.memo.v1:key"
 SCHEMA = "example.record"
@@ -66,6 +70,48 @@ def test_null_record_is_distinct_from_a_miss(cache: RecordCache) -> None:
     cache.put(KEY, SCHEMA, None)
 
     assert cache.get(KEY, schema=SCHEMA) == CacheHit(record=None)
+
+
+def test_get_many_reports_each_hit_miss_null_and_corruption(
+    backend: Backend,
+    cache: RecordCache,
+) -> None:
+    hit_key = "batch:hit"
+    null_key = "batch:null"
+    missing_key = "batch:missing"
+    corrupt_key = "batch:corrupt"
+    cache.put_many(
+        {
+            hit_key: CacheEntry(schema=SCHEMA, record=RECORD),
+            null_key: CacheEntry(schema=SCHEMA, record=None),
+        }
+    )
+    corrupt_reference = ObjectReference.for_record(SCHEMA, OTHER)
+    backend.put_object(
+        schema=SCHEMA,
+        content_hash=corrupt_reference.content_hash,
+        canonical='{"tampered":true}',
+    )
+    backend.bind(
+        key=corrupt_key,
+        schema=SCHEMA,
+        content_hash=corrupt_reference.content_hash,
+    )
+
+    expected = {
+        hit_key: CacheHit(record=RECORD),
+        missing_key: None,
+        null_key: CacheHit(record=None),
+        corrupt_key: None,
+    }
+    assert (
+        cache.get_many(
+            [hit_key, missing_key, null_key, corrupt_key, hit_key],
+            schema=SCHEMA,
+        )
+        == expected
+    )
+    assert {key: cache.get(key, schema=SCHEMA) for key in expected} == expected
 
 
 def test_other_schema_is_a_miss(cache: RecordCache) -> None:
@@ -147,34 +193,16 @@ class BackendReadError(StoreError):
 
 
 class FailingReadBackend(MemoryBackend):
-    def __init__(self, failure_stage: str) -> None:
-        super().__init__()
-        self._failure_stage = failure_stage
-
-    def get_binding(self, *, key: str) -> tuple[str, str] | None:
-        if self._failure_stage == "binding":
-            raise BackendReadError(f"binding storage unavailable for {key!r}")
-        return super().get_binding(key=key)
-
-    def get_object(
+    def get_bound_objects(
         self,
         *,
-        schema: str,
-        content_hash: str,
-    ) -> tuple[str, str] | None:
-        if self._failure_stage == "object":
-            raise BackendReadError(
-                f"object storage unavailable for {schema!r}"
-            )
-        return super().get_object(
-            schema=schema,
-            content_hash=content_hash,
-        )
+        keys: tuple[str, ...],
+    ) -> dict[str, BoundObjectRow]:
+        raise BackendReadError(f"batch storage unavailable for {keys!r}")
 
 
-@pytest.mark.parametrize("failure_stage", ["binding", "object"])
-def test_backend_read_failure_propagates(failure_stage: str) -> None:
-    backend = FailingReadBackend(failure_stage)
+def test_backend_read_failure_propagates() -> None:
+    backend = FailingReadBackend()
     reference = ObjectReference.for_record(SCHEMA, RECORD)
     backend.bind(
         key=KEY,
@@ -200,7 +228,7 @@ def test_backend_read_failure_propagates(failure_stage: str) -> None:
 def test_invalid_requested_schema_raises_before_read(
     invalid_schema: object,
 ) -> None:
-    cache = RecordCache(ObjectStore(FailingReadBackend("binding")))
+    cache = RecordCache(ObjectStore(FailingReadBackend()))
 
     with pytest.raises(ReferenceValidationError):
         cache.get(
@@ -216,3 +244,125 @@ def test_conflicting_put_returns_the_first_winner(
     second = cache.put(KEY, SCHEMA, OTHER)
     assert second == first
     assert cache.get(KEY, schema=SCHEMA) == CacheHit(record=RECORD)
+
+
+def test_put_many_is_idempotent_and_returns_existing_conflict_winners(
+    cache: RecordCache,
+) -> None:
+    other_key = "example.memo.v1:other"
+    entries = {
+        KEY: CacheEntry(schema=SCHEMA, record=RECORD),
+        other_key: CacheEntry(schema=SCHEMA, record=OTHER),
+    }
+
+    first = cache.put_many(entries)
+    assert cache.put_many(entries) == first
+    conflicted = cache.put_many(
+        {
+            KEY: CacheEntry(schema=SCHEMA, record=OTHER),
+            other_key: CacheEntry(schema=SCHEMA, record=RECORD),
+        }
+    )
+
+    assert conflicted == first
+    assert cache.get_many([KEY, other_key], schema=SCHEMA) == {
+        KEY: CacheHit(record=RECORD),
+        other_key: CacheHit(record=OTHER),
+    }
+
+
+def test_put_many_prepares_every_record_before_backend_mutation() -> None:
+    backend = MemoryBackend()
+    cache = RecordCache(ObjectStore(backend))
+    valid_key = "batch:valid"
+    invalid_key = "batch:invalid"
+    valid_reference = ObjectReference.for_record(SCHEMA, RECORD)
+
+    with pytest.raises(StrictJsonError):
+        cache.put_many(
+            {
+                valid_key: CacheEntry(schema=SCHEMA, record=RECORD),
+                invalid_key: CacheEntry(
+                    schema=SCHEMA,
+                    record={"unsupported": {1}},  # ty: ignore[invalid-argument-type]
+                ),
+            }
+        )
+
+    assert backend.get_binding(key=valid_key) is None
+    assert backend.get_binding(key=invalid_key) is None
+    assert (
+        backend.get_object(
+            schema=valid_reference.schema,
+            content_hash=valid_reference.content_hash,
+        )
+        is None
+    )
+
+
+def test_put_many_canonicalizes_and_hashes_each_record_once(
+    cache: RecordCache,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonicalized: list[Jsonable] = []
+    hashed: list[str] = []
+    canonical_json = content_addressing_module.canonical_json
+    hash_canonical = content_addressing_module._hash_canonical
+
+    def canonical_spy(record: Jsonable) -> str:
+        canonicalized.append(record)
+        return canonical_json(record)
+
+    def hash_spy(canonical: str) -> str:
+        hashed.append(canonical)
+        return hash_canonical(canonical)
+
+    monkeypatch.setattr(
+        content_addressing_module, "canonical_json", canonical_spy
+    )
+    monkeypatch.setattr(content_addressing_module, "_hash_canonical", hash_spy)
+
+    cache.put_many(
+        {
+            KEY: CacheEntry(schema=SCHEMA, record=RECORD),
+            "batch:other": CacheEntry(schema=SCHEMA, record=OTHER),
+        }
+    )
+
+    assert canonicalized == [RECORD, OTHER]
+    assert hashed == [canonical_json(RECORD), canonical_json(OTHER)]
+
+
+def test_get_many_canonicalizes_and_hashes_each_hit_once(
+    cache: RecordCache,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    other_key = "batch:other"
+    cache.put_many(
+        {
+            KEY: CacheEntry(schema=SCHEMA, record=RECORD),
+            other_key: CacheEntry(schema=SCHEMA, record=OTHER),
+        }
+    )
+    canonicalized: list[Jsonable] = []
+    hashed: list[str] = []
+    canonical_json = object_store_module.canonical_json
+    hash_canonical = object_store_module._hash_canonical
+
+    def canonical_spy(record: Jsonable) -> str:
+        canonicalized.append(record)
+        return canonical_json(record)
+
+    def hash_spy(canonical: str) -> str:
+        hashed.append(canonical)
+        return hash_canonical(canonical)
+
+    monkeypatch.setattr(object_store_module, "canonical_json", canonical_spy)
+    monkeypatch.setattr(object_store_module, "_hash_canonical", hash_spy)
+
+    assert cache.get_many([KEY, other_key], schema=SCHEMA) == {
+        KEY: CacheHit(record=RECORD),
+        other_key: CacheHit(record=OTHER),
+    }
+    assert canonicalized == [RECORD, OTHER]
+    assert hashed == [canonical_json(RECORD), canonical_json(OTHER)]

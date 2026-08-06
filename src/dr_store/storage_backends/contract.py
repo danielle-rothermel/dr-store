@@ -22,6 +22,26 @@ class BindOutcome:
     existing_content_hash: str
 
 
+@dataclass(frozen=True, slots=True)
+class BoundObjectRow:
+    """One binding and its exact object row, when that row exists."""
+
+    binding_schema: str
+    binding_content_hash: str
+    object_schema: str | None
+    canonical: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class BoundObjectWrite:
+    """One prepared object and the key to bind to it."""
+
+    key: str
+    schema: str
+    content_hash: str
+    canonical: str
+
+
 class Backend(Protocol):
     """Atomic object and binding operations."""
 
@@ -66,3 +86,19 @@ class Backend(Protocol):
         ...
 
     def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
+
+    def get_bound_objects(
+        self,
+        *,
+        keys: tuple[str, ...],
+    ) -> dict[str, BoundObjectRow]:
+        """Return bound rows for the requested exact keys."""
+        ...
+
+    def put_bound_objects(
+        self,
+        *,
+        entries: tuple[BoundObjectWrite, ...],
+    ) -> dict[str, BindOutcome]:
+        """Atomically store prepared objects and bind their keys."""
+        ...

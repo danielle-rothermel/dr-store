@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 from dr_serialize import (
     Jsonable,
-    json_hash,
+    canonical_json,
     validate_strict_json,
 )
 
@@ -15,6 +16,25 @@ from dr_store.core.errors import (
 
 CONTENT_HASH_LENGTH = 64
 _HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedRecord:
+    canonical: str
+    content_hash: str
+
+
+def _hash_canonical(canonical: str) -> str:
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _prepare_record(record: Jsonable) -> _PreparedRecord:
+    validated = validate_strict_json(record)
+    canonical = canonical_json(validated)
+    return _PreparedRecord(
+        canonical=canonical,
+        content_hash=_hash_canonical(canonical),
+    )
 
 
 def _validate_reference_schema(schema: object) -> str:
@@ -33,7 +53,7 @@ def is_content_hash(value: str) -> bool:
 
 def compute_content_hash(record: Jsonable) -> str:
     """Validate ``record`` and hash it with dr-serialize's canonical JSON."""
-    return json_hash(validate_strict_json(record))
+    return _prepare_record(record).content_hash
 
 
 @dataclass(frozen=True, slots=True)
