@@ -214,8 +214,9 @@ categories = ["document artifacts"]
 [[terms]]
 name = "document directory"
 definition = """
-One document artifact grouping one canonical JSON manifest with zero or more \
-sidecars. The caller owns their meaning, coordination, and retention."""
+One mutable work-in-progress document artifact grouping one canonical JSON \
+manifest with zero or more sidecars. The caller owns their meaning, publication \
+coordination, completion policy, and retention."""
 exported_symbols = [
   "DocumentDirectory",
   "AllocationError",
