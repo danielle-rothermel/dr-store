@@ -55,6 +55,7 @@ from dr_store.storage_backends import (
     MemoryBackend,
     PutOutcome,
     SqliteBackend,
+    install_postgres,
 )
 
 __all__ = [
@@ -99,5 +100,6 @@ __all__ = [
     "StoreError",
     "compute_content_hash",
     "derive_cache_key",
+    "install_postgres",
     "is_content_hash",
 ]

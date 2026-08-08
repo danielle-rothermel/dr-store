@@ -24,6 +24,7 @@ FUNCTIONAL_MODULES = (
     "dr_store.storage_backends",
     "dr_store.storage_backends.contract",
     "dr_store.storage_backends.memory",
+    "dr_store.storage_backends.postgresql",
     "dr_store.storage_backends.sqlite",
 )
 

@@ -8,6 +8,7 @@ from dr_store.storage_backends.contract import (
     PutOutcome,
 )
 from dr_store.storage_backends.memory import MemoryBackend
+from dr_store.storage_backends.postgresql import install_postgres
 from dr_store.storage_backends.sqlite import SqliteBackend
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "MemoryBackend",
     "PutOutcome",
     "SqliteBackend",
+    "install_postgres",
 ]

@@ -45,6 +45,35 @@ dr-store requires Python 3.12 or newer.
 python -m pip install dr-store
 ```
 
+PostgreSQL 16 through 18 installations use required `asyncpg` and an explicit,
+absent-only schema installation step. The caller creates and owns the pool;
+dr-store neither accepts a DSN nor closes the pool:
+
+```python
+import asyncio
+import os
+
+import asyncpg
+
+from dr_store import install_postgres
+
+
+async def main() -> None:
+    pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
+    try:
+        await install_postgres(pool)
+    finally:
+        await pool.close()
+
+
+asyncio.run(main())
+```
+
+`install_postgres` creates the fixed `dr_store` namespace and its tables in one
+transaction on a UTF-8 database. Repeating installation is an error. The
+current PostgreSQL public surface is installation only; ordinary PostgreSQL
+object and binding operations are not exposed by this release.
+
 ## Usage
 
 ```python

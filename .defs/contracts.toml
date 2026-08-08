@@ -362,3 +362,70 @@ path, while persistence remains a property of committed rows rather than a \
 power-loss or process-global lifecycle guarantee."""
 date = "2026-08-08"
 check = "uv run pytest -q tests/record_cache/test_sqlite_cache.py tests/storage_backends/test_sqlite_backend.py"
+
+[[contracts]]
+title = "PostgreSQL schema installation is explicit"
+statement = """
+PostgreSQL schema installation occurs only through the public asynchronous \
+`install_postgres(pool)` operation against a caller-owned `asyncpg.Pool`. It \
+supports PostgreSQL 16 through 18 databases whose server encoding is UTF-8, \
+requires the fixed `dr_store` namespace to be absent, and creates that namespace \
+and its object and binding tables together in one transaction. A repeated or \
+concurrent losing installation fails visibly rather than adopting existing \
+objects. The namespace is not configurable, and installation defines no schema \
+version table, compatibility negotiation, or migration framework."""
+rationale = """
+Explicit installation keeps deployment privileges and failure recovery outside \
+arbitrary application startup. One absent-only namespace gives installation a \
+deterministic ownership boundary without schema introspection or drift policy."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_install.py"
+
+[[contracts]]
+title = "PostgreSQL installation uses one concrete caller-owned async pool"
+statement = """
+`asyncpg>=0.31.0` is a required runtime dependency. `install_postgres` accepts a \
+concrete caller-owned `asyncpg.Pool` as its only connection source. It releases \
+the connection acquired for installation but never closes the pool. The \
+installation API defines no custom connection-source Protocol, optional import \
+or dependency path, DSN acceptance or ownership, synchronous source, second \
+ownership mode, or source-lifecycle API."""
+rationale = """
+A single concrete caller-owned boundary avoids freezing an adapter abstraction \
+before a second implementation exists and avoids parallel import, construction, \
+shutdown, and failure semantics for an optional or managed source."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_install.py"
+
+[[contracts]]
+title = "PostgreSQL installation preserves exact text identity"
+statement = """
+On supported UTF-8 PostgreSQL 16 through 18 databases, the installed object and \
+binding tables store schemas, binding keys, canonical JSON text, and hash text \
+using `pg_catalog.ucs_basic`. Their equality and uniqueness do not inherit the \
+database default collation and preserve exact case-sensitive and non-ASCII text. \
+The object key is `PRIMARY KEY (content_hash, schema)`, and both hash columns \
+accept only a full 64-character lowercase hexadecimal representation. The \
+binding table deliberately defines no foreign key."""
+rationale = """
+Storage identity must have the same meaning in every deployment. Pinning text \
+comparison prevents locale or database configuration from changing identity \
+while the hash-leading object key supports exact and alternate-schema lookup."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_install.py"
+
+[[contracts]]
+title = "PostgreSQL installation keeps credentials at the connection boundary"
+statement = """
+The PostgreSQL installation API accepts only the caller-owned pool and never \
+accepts, stringifies, or retains a DSN or other credential-bearing connection \
+value. It does not include one in representations, messages, logs, storage \
+identities, or metadata that dr-store constructs. Driver exceptions propagate \
+without recursive rewriting, and the connection path is exercised against \
+password-authenticated PostgreSQL."""
+rationale = """
+Shared deployments require secrets that local trust authentication can hide \
+from tests. Constraining dr-store-owned output prevents accidental disclosure \
+without adding a fragile sanitizer for arbitrary third-party exception text."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_install.py"

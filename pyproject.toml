@@ -26,6 +26,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "asyncpg>=0.31.0",
     "dr-serialize>=0.1.2",
 ]
 

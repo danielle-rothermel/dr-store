@@ -161,6 +161,18 @@ exported_symbols = [
 categories = ["object storage"]
 
 [[terms]]
+name = "PostgreSQL backend"
+definition = """
+A persistent shared storage capability whose fixed `dr_store` schema is created \
+explicitly in a caller-selected PostgreSQL database through one concrete \
+caller-owned asynchronous pool. The public installation boundary prepares the \
+object and binding tables without taking ownership of the pool or accepting a \
+connection string."""
+exported_symbols = ["install_postgres"]
+categories = ["object storage"]
+is_a = ["backend"]
+
+[[terms]]
 name = "bound object batch"
 definition = """
 An awaited backend operation over caller-supplied exact keys that either reads \

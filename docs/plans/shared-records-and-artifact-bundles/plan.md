@@ -1,7 +1,8 @@
 # Async Shared Records and Artifact Bundles
 
 Status: agreed design plan with implementation selections frozen; the PR 1
-implementation is present, while PR 2 and PR 3 remain staged.
+implementation and PR 2 PostgreSQL installation boundary are present. PR 2
+storage operations and PR 3 remain staged.
 
 ## Planning sources and ownership
 
@@ -247,6 +248,11 @@ This PR is independently releasable without PostgreSQL. Downstream packages
 remain pinned until their own async hard cutovers are planned.
 
 ### PR 2: add the PostgreSQL backend
+
+The explicit installer, fixed schema, required driver, password-authenticated
+verification harness, and their implemented contracts are present. The
+`PostgresBackend` point and batch operations and their remaining proposed
+contracts stay staged in this plan.
 
 - Add required `asyncpg>=0.31.0` and accept caller-owned `asyncpg.Pool` only.
 - Add public `install_postgres` and `PostgresBackend` for PostgreSQL 16 through
