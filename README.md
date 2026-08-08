@@ -34,6 +34,9 @@ document artifacts:
 - **[Canonical JSON document files](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)**
   publish and read one standalone, bounded canonical document in an existing
   directory through descriptor-pinned filesystem operations.
+- **[Artifact bundles](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/artifact_bundle)**
+  publish one terminal task, run, or result directory containing complete raw
+  artifacts and a closed canonical manifest with caller-owned metadata.
 - **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
   delegates one bounded canonical Manifest to that file capability beside
   streamed binary Sidecars.
@@ -155,6 +158,39 @@ metadata = CanonicalJsonFile(
 metadata.publish({"state": "complete"})
 assert metadata.read() == {"state": "complete"}
 ```
+
+`ArtifactBundlePublication` allocates one fresh terminal publication. Distinct
+artifact writers may run concurrently; the non-waiting `publish` call succeeds
+only after every admitted writer finalizes:
+
+```python
+from pathlib import Path
+
+from dr_store import ArtifactBundlePublication
+
+root = Path("results")
+root.mkdir(exist_ok=True)
+bundle = ArtifactBundlePublication.allocate(root, prefix="task-42")
+
+stdout = bundle.open_artifact("stdout.bin")
+stdout.write(b"complete output\n")
+descriptor = stdout.finalize()
+
+bundle.publish(
+    {
+        "kind": "example.result.v1",
+        "stdout_sha256": descriptor.sha256,
+    }
+)
+assert (bundle.path / "manifest.json").is_file()
+```
+
+The bundle API is synchronous. Async applications offload a complete writer or
+publication operation rather than running its hashing and filesystem I/O on an
+event-loop thread. One bundle is a task, run, or result publication—not a
+per-event record or packed execution-record backend. Callers own partitioned
+allocation roots and retention; sustained creation near 100,000 bundles per
+hour is outside the directory format's intended envelope.
 
 Use the lower-level `await SqliteBackend.open(path)` when assembling an
 `ObjectStore` directly whose objects and bindings must persist across processes.
@@ -470,6 +506,48 @@ class SidecarWriter:
     def finalize(self) -> SidecarSummary: ...
 ```
 
+## Artifact bundles
+
+An artifact bundle is separate from the mutable `DocumentDirectory` lifecycle.
+It uses strict frozen boundary models, complete raw-byte writers, and one
+terminal manifest transition:
+
+```python
+class ArtifactBundlePublication:
+    @classmethod
+    def allocate(
+        cls, root: str | Path, *, prefix: str
+    ) -> ArtifactBundlePublication: ...
+
+    @property
+    def path(self) -> Path: ...
+    def open_artifact(self, name: str) -> BundleArtifactWriter: ...
+    def publish(self, payload: Jsonable) -> None: ...
+
+class BundleArtifactWriter:
+    def write(self, data: bytes) -> None: ...
+    def finalize(self) -> ArtifactDescriptor: ...
+
+class ArtifactDescriptor(BaseModel):
+    name: str
+    sha256: str
+    byte_length: int
+
+class BundleManifest(BaseModel):
+    format: Literal["dr-store-artifact-bundle-v1"]
+    artifacts: tuple[ArtifactDescriptor, ...]
+    payload: Jsonable
+```
+
+Artifact names are exact identities consisting of one non-empty relative path
+segment. `manifest.json`, dot segments, separators, and the
+`.dr-store-artifact-bundle-` temporary namespace are reserved. The format adds
+no case-folding or Unicode-normalization policy. A duplicate name rejected
+before admission does not poison the publication; a create, write, or finalize
+failure after admission does. Active writers and invalid payloads refuse
+publication without making it terminal. The first valid manifest attempt after
+all writers finalize makes it terminal whether replacement succeeds or fails.
+
 ## Filesystem and failure semantics
 
 Canonical document publication creates a reserved unique temporary file with
@@ -516,6 +594,14 @@ ordering on document publication.
 Sidecar verification also refuses final-component symlinks for both the
 Document Directory and named child, requires a regular direct child, and reads
 from the descriptor it inspected.
+
+Artifact-bundle publication has a deliberately weaker visibility-only
+filesystem boundary. Writers flush userspace buffers and close their files;
+manifest publication writes and closes one same-directory temporary file and
+atomically replaces `manifest.json`. It performs no `F_FULLFSYNC`, `fsync`, or
+directory flush and exposes no durability mode. Success is process-visible and
+terminal through this API, not a claim of crash, machine, filesystem, or
+power-loss durability.
 
 A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
 open and its accounting state advanced. The writer is unusable by contract and

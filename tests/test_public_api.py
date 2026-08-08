@@ -171,3 +171,47 @@ def test_sidecar_hash_public_surface_is_exact() -> None:
         "expected_head_length",
         "expected_tail_length",
     ]
+
+
+def test_artifact_bundle_public_surfaces_are_exact() -> None:
+    from pydantic import BaseModel
+
+    from dr_store import (
+        ArtifactBundlePublication,
+        ArtifactDescriptor,
+        BundleArtifactWriter,
+        BundleManifest,
+        BundlePublishError,
+    )
+    from dr_store.artifact_bundle import __all__ as bundle_exports
+
+    assert bundle_exports == [
+        "ArtifactBundleError",
+        "ArtifactBundlePublication",
+        "ArtifactDescriptor",
+        "BundleAllocationError",
+        "BundleArtifactWriter",
+        "BundleManifest",
+        "BundlePublicationPhase",
+        "BundlePublishError",
+    ]
+    assert issubclass(ArtifactDescriptor, BaseModel)
+    assert issubclass(BundleManifest, BaseModel)
+    assert ArtifactDescriptor.model_config["strict"] is True
+    assert ArtifactDescriptor.model_config["frozen"] is True
+    assert BundleManifest.model_config["strict"] is True
+    assert BundleManifest.model_config["frozen"] is True
+    assert {
+        name
+        for name in dir(ArtifactBundlePublication)
+        if not name.startswith("_")
+    } == {"allocate", "open_artifact", "path", "publish"}
+    assert {
+        name for name in dir(BundleArtifactWriter) if not name.startswith("_")
+    } == {"finalize", "write"}
+    assert list(inspect.signature(BundlePublishError).parameters) == [
+        "path",
+        "phase",
+        "replacement_state",
+        "detail",
+    ]

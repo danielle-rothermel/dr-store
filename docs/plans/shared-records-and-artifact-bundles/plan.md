@@ -1,8 +1,9 @@
 # Async Shared Records and Artifact Bundles
 
 Status: agreed design plan with implementation selections frozen; the PR 1
-async record stack, complete PR 2 PostgreSQL backend, and sidecar-hash hard
-cutover are present. The artifact-bundle remainder of PR 3 remains staged.
+async record stack, complete PR 2 PostgreSQL backend, sidecar-hash hard
+cutover, and artifact-bundle publication half of PR 3 are present. The bounded
+reader, eager audit, and one-pass verified-consumption half remains staged.
 
 ## Planning sources and ownership
 
@@ -15,13 +16,16 @@ The following files retain the proposal and implementation sources for this
 plan. `.defs` contains the authoritative entries already implemented, while the
 remaining artifact-bundle entries stay staged until their implementing PR:
 
-- [plan-terms.toml](plan-terms.toml) contains new PostgreSQL and
-  artifact-bundle terms.
+- [plan-terms.toml](plan-terms.toml) contains the source PostgreSQL and
+  artifact-bundle terms. Implemented publication terms are authoritative in
+  `.defs`; the artifact-bundle read terms remain staged here.
 - [update-terms.toml](update-terms.toml) records the complete replacements for
   existing terms changed by the implemented async and sidecar-hash hard
   cutovers.
-- [plan-contracts.toml](plan-contracts.toml) contains new PostgreSQL and
-  artifact-bundle contracts.
+- [plan-contracts.toml](plan-contracts.toml) contains the source PostgreSQL and
+  artifact-bundle contracts. Implemented publication contracts are
+  authoritative in `.defs`; read, audit, and consumption contracts remain
+  staged here.
 - [update-contracts.toml](update-contracts.toml) records the implemented
   replacements and lifecycle contracts required by async storage and
   sidecar-hash behavior.
@@ -276,23 +280,25 @@ harness, vocabulary, and binding contracts are present.
 
 ### PR 3: add artifact bundles
 
-- Add strict frozen `ArtifactDescriptor` and `BundleManifest` models;
+Publication half complete; reader half staged.
+
+- Complete: strict frozen `ArtifactDescriptor` and `BundleManifest` models;
   `ArtifactBundlePublication.allocate/open_artifact/publish`;
-  `BundleArtifactWriter.write/finalize`; `ArtifactBundleReader(path, limits)`
-  with `audit` and `consume_and_verify_artifact`; `BundleReadLimits`; the
-  read-only `VerifyingArtifactReader` callback facade; and the public error
-  hierarchy.
-- Publish through close and atomic manifest replacement without file or
-  directory synchronization or a durability mode.
+  `BundleArtifactWriter.write/finalize`; publication errors; close and atomic
+  manifest replacement without file or directory synchronization or a
+  durability mode.
+- Staged: `ArtifactBundleReader(path, limits)` with `audit` and
+  `consume_and_verify_artifact`; `BundleReadLimits`; the read-only
+  `VerifyingArtifactReader` callback facade; and reader errors.
 - Keep `DocumentDirectory` public with its distinct mutable lifecycle.
 - Add async-offload guidance and state the directory-format workload ceiling.
-- Add state-synchronized interrupted-publication, writer-concurrency, EOF, and
-  single-read tests.
-- Land the implemented artifact-bundle terms and contracts with public symbol
-  mappings and evidence checks.
+- Complete: state-synchronized writer-concurrency, terminal-publication, wire
+  format, and failure tests; publication terms and contracts with public symbol
+  mappings and runnable evidence checks.
+- Staged: interrupted-reader, EOF, eager-audit, and single-read consumption
+  tests together with their terms and contracts.
 
-The sidecar-hash hard cutover landed before this remaining artifact-bundle
-implementation.
+The sidecar-hash hard cutover landed before the artifact-bundle implementation.
 
 Each PR must satisfy its own contracts; a later PR is never required to make an
 earlier PR truthful.

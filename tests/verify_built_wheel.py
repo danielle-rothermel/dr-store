@@ -7,6 +7,12 @@ import pkgutil
 import sys
 
 FUNCTIONAL_MODULES = (
+    "dr_store.artifact_bundle",
+    "dr_store.artifact_bundle._wire",
+    "dr_store.artifact_bundle.errors",
+    "dr_store.artifact_bundle.models",
+    "dr_store.artifact_bundle.names",
+    "dr_store.artifact_bundle.publication",
     "dr_store.content_addressing",
     "dr_store.core",
     "dr_store.core.errors",

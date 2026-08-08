@@ -28,6 +28,7 @@ classifiers = [
 dependencies = [
     "asyncpg>=0.31.0",
     "dr-serialize>=0.1.2",
+    "pydantic>=2.13.4",
 ]
 
 [project.urls]

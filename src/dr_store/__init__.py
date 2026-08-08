@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+from dr_store.artifact_bundle import (
+    ArtifactBundleError,
+    ArtifactBundlePublication,
+    ArtifactDescriptor,
+    BundleAllocationError,
+    BundleArtifactWriter,
+    BundleManifest,
+    BundlePublicationPhase,
+    BundlePublishError,
+)
 from dr_store.content_addressing import (
     CONTENT_HASH_LENGTH,
     ObjectReference,
@@ -62,12 +72,20 @@ from dr_store.storage_backends import (
 __all__ = [
     "CONTENT_HASH_LENGTH",
     "AllocationError",
+    "ArtifactBundleError",
+    "ArtifactBundlePublication",
+    "ArtifactDescriptor",
     "Backend",
     "BindOutcome",
     "BindStatus",
     "BindingConflictError",
     "BoundObjectRow",
     "BoundObjectWrite",
+    "BundleAllocationError",
+    "BundleArtifactWriter",
+    "BundleManifest",
+    "BundlePublicationPhase",
+    "BundlePublishError",
     "CacheEntry",
     "CacheHit",
     "CanonicalJsonFile",
