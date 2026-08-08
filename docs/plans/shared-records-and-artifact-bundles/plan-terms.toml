@@ -1,0 +1,68 @@
+# Proposed additions to .defs/terms.toml for plan review. These terms do not
+# become repository vocabulary until the corresponding implementation lands.
+#:schema ../../../.defs/terms.schema.json
+
+[[terms]]
+name = "PostgreSQL backend"
+definition = """
+A persistent shared backend that stores object and binding tables in a \
+caller-selected PostgreSQL database. Independently running clients observe the \
+same backend semantics without PostgreSQL-specific behavior entering the object \
+store or record cache surfaces."""
+categories = ["object storage"]
+is_a = ["backend"]
+
+[[terms]]
+name = "artifact bundle"
+definition = """
+An immutable completed publication composed of one bundle manifest and exactly \
+the zero or more bundle artifacts described by it. A directory left before \
+final manifest publication is an incomplete publication, not an artifact \
+bundle."""
+categories = ["document artifacts"]
+
+[[terms]]
+name = "bundle artifact"
+definition = """
+One immutable raw-byte regular file included as a direct child of an artifact \
+bundle and identified by a safe relative name. Its domain meaning belongs to \
+the caller's manifest payload."""
+categories = ["document artifacts"]
+part_of = ["artifact bundle"]
+
+[[terms]]
+name = "artifact digest"
+definition = """
+The full 64-character lowercase SHA-256 hash of one bundle artifact's complete \
+stored bytes. Its input is raw bytes, so it is not a content hash."""
+categories = ["document artifacts"]
+is_a = ["hash"]
+part_of = ["artifact descriptor"]
+
+[[terms]]
+name = "artifact descriptor"
+definition = """
+A storage-owned manifest entry containing one bundle artifact's exact relative \
+name, artifact digest, and byte length. It describes integrity and extent, not \
+the artifact's domain-specific meaning."""
+categories = ["document artifacts"]
+part_of = ["bundle manifest"]
+
+[[terms]]
+name = "bundle manifest"
+definition = """
+A canonical JSON document file published as the final artifact-bundle step. It \
+enumerates the bundle's exact artifact descriptors and carries an opaque strict \
+JSON payload whose domain schema belongs to the caller."""
+categories = ["document artifacts"]
+is_a = ["manifest"]
+part_of = ["artifact bundle"]
+
+[[terms]]
+name = "artifact bundle publication"
+definition = """
+The storage-owned operation that allocates a fresh location, finalizes its \
+bundle artifacts, and publishes its bundle manifest once as the completion \
+transition. Completion exposes no supported mutation or republishing path."""
+categories = ["document artifacts"]
+
