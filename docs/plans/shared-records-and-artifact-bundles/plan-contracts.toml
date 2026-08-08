@@ -16,71 +16,75 @@ database-specific semantics from leaking through the foundational boundary."""
 date = "2026-08-08"
 
 [[contracts]]
-title = "PostgreSQL schema changes are explicit"
+title = "PostgreSQL schema installation is explicit"
 statement = """
-PostgreSQL schema installation and migration occur only through an explicit \
-operation. Backend construction and ordinary storage operations require the \
-exact supported schema version and fail visibly when the schema is absent or \
-incompatible; they never create or upgrade tables as a side effect."""
+PostgreSQL schema installation occurs only through an explicit operation. \
+Backend construction and ordinary storage operations require the installed \
+tables and fail visibly when they are absent; they never create, alter, or \
+upgrade tables as a side effect. The initial storage contract defines no schema \
+version table, compatibility negotiation, or migration framework."""
 rationale = """
-Explicit schema ownership keeps deployment privileges, migration timing, and \
-failure recovery outside arbitrary application startup and makes every database \
-shape change a reviewable boundary event."""
+Explicit installation keeps deployment privileges and failure recovery outside \
+arbitrary application startup. Migration machinery remains outside the initial \
+implementation until an actual schema evolution requires a separately reviewed \
+contract."""
 date = "2026-08-08"
 
 [[contracts]]
-title = "PostgreSQL connection ownership is explicit"
+title = "PostgreSQL uses a caller-owned connection source"
 statement = """
-Construction identifies whether the PostgreSQL connection source is \
-caller-owned or backend-owned. The backend releases every connection it \
-acquires for an operation and closes only the source it owns; closing a backend \
-never disposes a caller-owned source or governs resources owned by another \
-backend instance or process."""
+The PostgreSQL backend is constructed with one caller-owned connection source. \
+It releases every connection it acquires for an operation but never closes the \
+source or governs resources owned by another backend instance or process. The \
+backend defines no second ownership mode or source-lifecycle API."""
 rationale = """
-An explicit lifecycle boundary supports dependency injection and managed local \
-use without double-closing shared pools, leaking checked-out connections, or \
-claiming process-global resource ownership."""
+A single caller-owned boundary supports dependency injection without adding \
+parallel construction, shutdown, and failure semantics for an optional managed \
+source."""
 date = "2026-08-08"
 
 [[contracts]]
 title = "PostgreSQL credentials remain at the connection boundary"
 statement = """
-The PostgreSQL backend does not render, log, persist, or include connection \
-credentials in representations, storage identities, or translated errors. A \
-credential-bearing connection value is used only to establish the connection, \
-and credential-redaction behavior is exercised against password-authenticated \
-PostgreSQL."""
+The PostgreSQL backend never stringifies or retains a credential-bearing \
+connection value and does not include one in representations, messages, logs, \
+storage identities, or metadata that dr-store constructs. Driver exceptions \
+remain available as causes rather than being recursively rewritten, and the \
+connection path is exercised against password-authenticated PostgreSQL."""
 rationale = """
 Shared deployments require secrets that local trust authentication can hide \
-from tests. Keeping them at the connection boundary prevents routine debugging, \
-serialization, and failure reporting from becoming exfiltration paths."""
+from tests. Constraining dr-store-owned output prevents accidental disclosure \
+without adding a fragile sanitizer for arbitrary third-party exception text."""
 date = "2026-08-08"
 
 [[contracts]]
 title = "Artifact bundle publication is manifest-committed"
 statement = """
 Artifact bundle publication owns one collision-safe fresh allocation, finalizes \
-every bundle artifact before publishing the bundle manifest, and publishes that \
-manifest exactly once as its final step. Before a valid bundle manifest is \
-visible the allocation is incomplete and cannot be opened as a bundle; after \
-completion no supported write, replacement, or append operation remains."""
+every bundle artifact, and then makes one bundle-manifest publication attempt as \
+its final operation. The writer becomes terminal when that attempt begins and \
+exposes no retry, replacement, or append operation. A reader recognizes a \
+completed bundle only when it can read a valid bundle manifest."""
 rationale = """
-One storage-owned completion transition distinguishes interrupted work from an \
-immutable publication and prevents callers from coordinating incompatible \
-last-write-wins directory conventions."""
+One API-level terminal transition distinguishes interrupted work from a \
+completed publication without claiming a durable cross-process once-only lock. \
+It also prevents callers from coordinating incompatible last-write-wins \
+directory conventions."""
 date = "2026-08-08"
 
 [[contracts]]
-title = "Bundle descriptors enumerate exact contents"
+title = "Bundle descriptors define verified contents"
 statement = """
 The bundle manifest contains exactly one artifact descriptor for every bundle \
-artifact and no duplicate artifact name. Each descriptor pins the artifact's \
-relative name, full lowercase SHA-256 digest, and non-negative byte length; any \
-unexpected file other than the manifest is a verification error."""
+artifact and no duplicate exact artifact name. Each descriptor pins the \
+artifact's relative name, full lowercase SHA-256 hash, and non-negative byte \
+length. Files not named by the manifest are outside the bundle, are ignored by \
+bundle verification, and are never returned as bundle artifacts."""
 rationale = """
-Exact enumeration makes the immutable publication auditable and detects both \
-missing declared content and undeclared additions. Digest and length distinguish \
-modification from truncation without assigning domain meaning to raw bytes."""
+The manifest remains authoritative for every byte the bundle claims without \
+requiring a coherent snapshot or lock over unrelated directory entries. Hash \
+and length distinguish modification from truncation without assigning domain \
+meaning to raw bytes."""
 date = "2026-08-08"
 
 [[contracts]]
@@ -88,12 +92,14 @@ title = "Bundle artifact names are safe direct children"
 statement = """
 Every artifact name is one non-empty relative path segment. Publication and \
 reading reject absolute paths, dot segments, separators, reserved temporary or \
-manifest names, and names that collide under the supported case-insensitive \
-comparison; artifact access never traverses a caller-supplied path hierarchy."""
+manifest names. Descriptor names are unique by exact string, and artifact \
+creation is exclusive and never replaces an existing child; the format defines \
+no cross-platform case-folding or Unicode-normalization profile."""
 rationale = """
-Restricting artifacts to uniquely named direct children keeps allocation and \
-verification inside one directory boundary and removes traversal, aliasing, and \
-platform-dependent nested-path interpretation from the bundle format."""
+Restricting artifacts to exclusively created direct children keeps publication \
+and verification inside one directory boundary. It prevents traversal and \
+replacement without introducing a portable-filename subsystem merely to predict \
+every filesystem's aliasing rules."""
 date = "2026-08-08"
 
 [[contracts]]
@@ -103,12 +109,14 @@ A bundle read first validates and pins one canonical bundle manifest, then opens
 each declared regular direct-child artifact with required no-follow, \
 directory-relative behavior and reads from the descriptor it inspected. It \
 accepts the bundle only when every declared file has the exact descriptor byte \
-length and digest and no undeclared file exists; missing platform support or \
-any mismatch fails through a typed verification error."""
+length and hash; files outside the manifest are not inspected. Missing platform \
+support or any declared-file mismatch fails through a typed verification \
+error."""
 rationale = """
 Descriptor-pinned reads prevent name replacement between inspection and use, \
-while complete verification ensures that a manifest is evidence of the bytes \
-actually recovered rather than an unchecked claim about a directory."""
+while declared-file verification ensures that the manifest is evidence of the \
+bytes actually recovered without claiming a snapshot of the surrounding \
+directory."""
 date = "2026-08-08"
 
 [[contracts]]
@@ -128,7 +136,7 @@ date = "2026-08-08"
 [[contracts]]
 title = "Artifact bundles do not own domain meaning"
 statement = """
-The bundle format owns artifact names, byte lengths, digests, completeness, and \
+The bundle format owns artifact names, byte lengths, hashes, completeness, and \
 verification. The bundle manifest carries a separate opaque strict JSON payload; \
 evaluation, provider, corpus, experiment, and other caller packages own that \
 payload's schema and all interpretation of the described artifacts."""
@@ -137,4 +145,3 @@ Separating a general integrity envelope from caller-owned metadata lets one \
 publication primitive serve unrelated domains without making dr-store an owner \
 of their evidence, identity, or analysis models."""
 date = "2026-08-08"
-

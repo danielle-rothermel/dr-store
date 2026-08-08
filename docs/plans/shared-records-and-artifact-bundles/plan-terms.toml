@@ -31,7 +31,7 @@ categories = ["document artifacts"]
 part_of = ["artifact bundle"]
 
 [[terms]]
-name = "artifact digest"
+name = "artifact hash"
 definition = """
 The full 64-character lowercase SHA-256 hash of one bundle artifact's complete \
 stored bytes. Its input is raw bytes, so it is not a content hash."""
@@ -40,10 +40,18 @@ is_a = ["hash"]
 part_of = ["artifact descriptor"]
 
 [[terms]]
+name = "sidecar hash"
+definition = """
+The full 64-character lowercase SHA-256 hash of a sidecar's stored bytes after \
+any truncation. Its input is raw bytes, so it is not a content hash."""
+categories = ["document artifacts"]
+is_a = ["hash"]
+
+[[terms]]
 name = "artifact descriptor"
 definition = """
 A storage-owned manifest entry containing one bundle artifact's exact relative \
-name, artifact digest, and byte length. It describes integrity and extent, not \
+name, artifact hash, and byte length. It describes integrity and extent, not \
 the artifact's domain-specific meaning."""
 categories = ["document artifacts"]
 part_of = ["bundle manifest"]
@@ -62,7 +70,7 @@ part_of = ["artifact bundle"]
 name = "artifact bundle publication"
 definition = """
 The storage-owned operation that allocates a fresh location, finalizes its \
-bundle artifacts, and publishes its bundle manifest once as the completion \
-transition. Completion exposes no supported mutation or republishing path."""
+bundle artifacts, and attempts bundle-manifest publication only as its final \
+transition. Once that attempt begins, the operation is terminal and exposes no \
+supported mutation, retry, or republishing path."""
 categories = ["document artifacts"]
-
