@@ -13,15 +13,17 @@ connection until driver cleanup makes that resource reusable. Cancellation is \
 an operational failure and does not prove whether a write committed; storage \
 performs no automatic retry, while exact immutable replay remains supported. The \
 in-memory backend is process-local. Each SQLite backend owns one dedicated \
-worker and one connection, serializes complete operations on that worker outside \
-the event-loop thread, chunks exact-key reads into joined queries without \
-promising one batch-wide snapshot, and uses one immediate transaction for each \
-non-empty write batch. A cancelled SQLite await does not abandon its worker \
-operation or publish cancellation before that operation and its cleanup settle. \
-SQLite requires a non-transient filesystem path, captures its lexical absolute \
-path at construction, retains committed rows across reopen, and supports \
-cross-process contention without claiming power-loss durability. Empty and \
-`:memory:` paths are rejected; the captured absolute path prevents later \
+worker and one connection and admits at most one submitted or running worker \
+operation. Other callers await an async admission gate before work is submitted. \
+The worker executes complete operations outside the event-loop thread, chunks \
+exact-key reads into joined queries without promising one batch-wide snapshot, \
+and uses one immediate transaction for each non-empty write batch. Cancellation \
+while awaiting admission starts no SQLite work. A cancelled admitted operation \
+does not abandon its worker work or publish cancellation before the operation \
+and its cleanup settle. SQLite requires a non-transient filesystem path, captures \
+its lexical absolute path during open, retains committed rows across reopen, and \
+supports cross-process contention without claiming power-loss durability. Empty \
+and `:memory:` paths are rejected; the captured absolute path prevents later \
 working-directory redirection but does not freeze symlink targets."""
 rationale = """
 The object store owns hashing, verification, idempotency, and typed conflicts, \
@@ -37,16 +39,36 @@ title = "SQLite backends own one asynchronous worker lifecycle"
 statement = """
 `SqliteBackend.open(...)` returns only after its dedicated worker, connection, \
 and schema are ready. The instance admits each point or batch request as one \
-whole serialized worker operation. `aclose()` rejects new work, waits for every \
-admitted operation and its cleanup to settle, closes the connection and worker, \
-and leaves the instance terminal; successful close is idempotent. Async context \
-exit performs the same close, while direct construction, lazy first-use \
-initialization, and context-entry-only initialization are not public paths."""
+whole serialized worker operation. The backend is a long-lived resource; no \
+supported path opens and closes it around one record operation. `aclose()` \
+rejects new work, waits for every admitted operation and its cleanup to settle, \
+closes the connection and worker, and leaves the instance terminal; successful \
+close is idempotent. Async context exit performs the same close, while direct \
+construction, lazy first-use initialization, and context-entry-only \
+initialization are not public paths."""
 rationale = """
 One connection-affine worker makes SQLite transaction and cancellation behavior \
 predictable without consuming the process-wide executor or inventing parallel \
 read machinery. Awaited opening and terminal close prevent callers from \
 observing a partially initialized or reopened backend."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "SQLite indexing and synchronization match its persistence claim"
+statement = """
+The async SQLite backend uses WAL with `synchronous=NORMAL` and defines no \
+public durability mode. The objects table uses `PRIMARY KEY (content_hash, \
+schema)`, or an equivalent key plus an index whose leading column is \
+`content_hash`, so exact and alternate-schema lookups are indexed. A missing or \
+wrong-schema lookup must not scan the object table. Completed commits persist \
+across ordinary close and reopen and the database recovers validly after process \
+failure, without promising survival of the last acknowledged transaction across \
+power loss."""
+rationale = """
+Hash-leading lookup prevents the required schema-mismatch distinction from \
+becoming linear in stored object count. WAL NORMAL avoids a durable synchronization \
+barrier for every small commit while matching the deliberately bounded \
+persistence claim."""
 date = "2026-08-08"
 
 [[contracts]]
@@ -76,19 +98,20 @@ title = "Managed SQLite record caches own their complete lifecycle"
 statement = """
 `SqliteRecordCache.open(...)` returns only after its owned SQLite backend, \
 dedicated worker, connection, and schema are ready. Each single or bulk cache \
-read or write is admitted as one whole operation while open. `aclose()` rejects \
-new operations with a typed closed error, waits for every admitted operation and \
-its worker cleanup to settle, and then closes the backend resources owned by \
-that instance. Async context exit performs the same close; direct construction, \
-lazy initialization, and context-entry-only initialization are not public \
-paths. Once close begins the lifecycle remains terminal; cancelling one close \
-waiter does not cancel shared cleanup or reopen the cache. Concurrent and later \
-close callers observe the same successful or typed terminal-failure outcome, \
-and successful close is idempotent. The persistent database path is made \
-absolute during open without freezing symlink targets, transient paths are \
-rejected, completed commits persist across close and reopen, and separate \
-instances and processes retain independent lifecycles even when they use the \
-same path."""
+read or write is admitted as one whole operation while open. The cache is a \
+long-lived resource; no supported path opens and closes it around one record \
+operation. `aclose()` rejects new operations with a typed closed error, waits \
+for every admitted operation and its worker cleanup to settle, and then closes \
+the backend resources owned by that instance. Async context exit performs the \
+same close; direct construction, lazy initialization, and context-entry-only \
+initialization are not public paths. Once close begins the lifecycle remains \
+terminal; cancelling one close waiter does not cancel shared cleanup or reopen \
+the cache. Concurrent and later close callers observe the same successful or \
+typed terminal-failure outcome, and successful close is idempotent. The \
+persistent database path is made absolute during open without freezing symlink \
+targets, transient paths are rejected, completed commits persist across close \
+and reopen, and separate instances and processes retain independent lifecycles \
+even when they use the same path."""
 rationale = """
 Whole-operation admission prevents asynchronous shutdown from invalidating work \
 between binding and object-store steps. One shared terminal cleanup operation \

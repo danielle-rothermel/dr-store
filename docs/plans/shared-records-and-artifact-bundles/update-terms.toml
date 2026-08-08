@@ -51,9 +51,9 @@ categories = ["record caching"]
 [[terms]]
 name = "managed SQLite record cache"
 definition = """
-An asynchronous persistent record cache that owns the current-process SQLite \
-backend, dedicated worker, connection, and resource lifecycle for one cache \
-instance."""
+A long-lived asynchronous persistent record cache that owns the current-process \
+SQLite backend, dedicated worker, connection, and resource lifecycle for one \
+cache instance."""
 exported_symbols = [
   "SqliteRecordCache",
   "SqliteRecordCacheCloseError",

@@ -67,6 +67,25 @@ winners while retaining natural string values and diagnostics."""
 date = "2026-08-08"
 
 [[contracts]]
+title = "PostgreSQL object lookup and batches scale by bounded chunks"
+statement = """
+The PostgreSQL objects table uses `PRIMARY KEY (content_hash, schema)`, or an \
+equivalent key plus an index whose leading column is `content_hash`. Point \
+methods may use point statements. Batch methods deduplicate identical object \
+references before sending canonical object data, chunk requests by explicit \
+driver and statement bounds, fetch bindings in set-based statements, fetch \
+distinct referenced objects separately in set-based statements, and reconstruct \
+binding results in Python. Database round trips grow with bounded chunks rather \
+than entries, one canonical record is not transferred once per referring key, \
+and each non-empty write batch uses one transaction."""
+rationale = """
+The semantic batch boundary must remain useful over a network database. \
+Hash-leading lookup avoids scans for alternate-schema resolution, while \
+set-based binding and distinct-object fetches prevent N-plus-one round trips and \
+payload multiplication when many keys refer to one object."""
+date = "2026-08-08"
+
+[[contracts]]
 title = "PostgreSQL credentials remain at the connection boundary"
 statement = """
 The PostgreSQL backend never stringifies or retains a credential-bearing \
@@ -104,18 +123,23 @@ statement = """
 Artifact bundle publication owns one collision-safe fresh allocation, finalizes \
 every bundle artifact from exactly the complete bytes supplied by the caller, \
 and then makes one bundle-manifest publication attempt as its final operation. \
-It admits at most one active artifact writer, does not publish the manifest \
-until that writer is finalized, and supplies no truncation, retention, task, or \
-multi-writer coordination policy. The bundle writer becomes terminal when the \
+It admits multiple active synchronous artifact writers only for distinct exact \
+names. Name reservation and writer-state changes are thread-safe; each writer \
+owns one file and incremental SHA-256 state, while the bundle schedules no tasks \
+and multiplexes no bytes. Manifest publication is non-waiting and fails visibly \
+while any admitted writer remains active or failed. It begins only after every \
+admitted writer finalized, orders descriptors deterministically, and supplies no \
+truncation or retention policy. The bundle writer becomes terminal when the \
 manifest attempt begins and exposes no retry, replacement, or append operation. \
 A reader recognizes a completed bundle only when it can read a valid bundle \
 manifest."""
 rationale = """
 One API-level terminal transition distinguishes interrupted work from a \
 completed publication without claiming a durable cross-process once-only lock. \
-One active artifact writer keeps publication deterministic, while exact-byte \
-storage leaves domain-specific retention and production coordination with the \
-caller."""
+Independent distinct-name writers support concurrent producers without making \
+the bundle a scheduler. Thread-safe admission and a non-waiting manifest gate \
+preserve one deterministic terminal transition, while exact-byte storage leaves \
+retention policy with the caller."""
 date = "2026-08-08"
 
 [[contracts]]
@@ -149,38 +173,57 @@ every filesystem's aliasing rules."""
 date = "2026-08-08"
 
 [[contracts]]
-title = "Artifact bundle reads verify pinned bytes"
+title = "Artifact bundle integrity audits verify every declared file"
 statement = """
-A bundle read enforces caller-supplied bounds for manifest bytes, manifest \
-nesting depth, artifact count, bytes per artifact, and total artifact bytes. It \
-first validates and pins one canonical bundle manifest, then opens each declared \
-regular direct-child artifact with required no-follow, directory-relative \
-behavior and streams from the descriptor it inspected. It returns verified \
-descriptor metadata and absolute artifact paths only after every declared file \
-has the exact descriptor byte length and hash; files outside the manifest are \
-not inspected. The result describes bytes verified at read time and does not \
-claim that external actors cannot later mutate a returned path. Missing platform \
-support, an exceeded bound, or any declared-file mismatch fails through a typed \
-read error."""
+An explicit whole-bundle integrity audit enforces caller-supplied bounds for \
+manifest bytes, manifest nesting depth, artifact count, bytes per artifact, and \
+total artifact bytes. It first validates and pins one canonical bundle manifest, \
+then opens each declared regular direct-child artifact with required no-follow, \
+directory-relative behavior and streams from the descriptor it inspected. It \
+returns verified descriptor metadata only after every declared file has the \
+exact descriptor byte length and hash; files outside the manifest are not \
+inspected. The result describes bytes verified at audit time and does not claim \
+that external actors cannot later mutate a path. Missing platform support, an \
+exceeded bound, or any declared-file mismatch fails through a typed read error."""
 rationale = """
 Descriptor-pinned reads prevent name replacement between inspection and use, \
-while eager bounded verification gives callers one accepted state without \
-loading whole artifacts into memory. Returning ordinary paths preserves simple \
-random access while keeping the point-in-time guarantee no stronger than the \
-bytes the reader actually recovered."""
+while eager bounded verification gives explicit integrity-audit callers one \
+accepted state without loading whole artifacts into memory. The point-in-time \
+guarantee remains no stronger than the bytes the auditor actually recovered."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "Verified artifact consumption reads selected content once"
+statement = """
+A synchronous verified-consumption operation validates and pins one canonical \
+bundle manifest under caller bounds, opens one selected declared regular \
+direct-child artifact with the same no-follow and directory-relative \
+requirements as an integrity audit, and delivers bytes from that descriptor to \
+a synchronous consumer callback through a package-owned read facade while \
+hashing and counting those same bytes. It reports success only after the \
+consumer reaches end of file and the exact descriptor hash and byte length \
+agree. Early consumer termination is incomplete consumption, never verified \
+success. A successful operation returns verified descriptor metadata and makes \
+no claim about a later path read."""
+rationale = """
+Consumption-coupled verification avoids the mandatory verify-then-read double \
+pass for large artifacts while retaining descriptor lifetime and terminal \
+integrity checks inside one storage-owned operation."""
 date = "2026-08-08"
 
 [[contracts]]
 title = "Artifact bundle failures use one small typed hierarchy"
 statement = """
 `ArtifactBundleError` is the common base. `BundleAllocationError` reports fresh \
-allocation failure. `BundlePublishError` reports publication phase and \
-replacement state. `BundleReadError` reports manifest or filesystem read \
-failure; `BundleIncompleteError` and `BundleVerificationError` specialize it for \
-a missing valid terminal manifest and a declared-artifact mismatch. Verification \
-failures identify the artifact name and a structured reason. Translated document \
-and operating-system exceptions remain available as causes rather than becoming \
-the primary bundle error."""
+allocation or artifact-writer admission failure. `BundlePublishError` reports a \
+publication precondition or terminal-manifest phase and carries replacement \
+state when a manifest replacement was attempted. `BundleReadError` reports \
+manifest, filesystem, or consumption failure; `BundleIncompleteError` and \
+`BundleVerificationError` specialize it for a missing valid terminal manifest \
+and a declared-artifact mismatch or incomplete consumption. Verification \
+failures identify the artifact name and a structured reason. Translated \
+document, consumer, and operating-system exceptions remain available as causes \
+rather than becoming the primary bundle error."""
 rationale = """
 These categories distinguish recovery-relevant publication, incompleteness, and \
 integrity outcomes without exposing implementation exceptions or freezing one \
@@ -188,18 +231,50 @@ public type for every low-level failure step."""
 date = "2026-08-08"
 
 [[contracts]]
-title = "Completed bundles make bounded durability claims"
+title = "Completed bundles claim visibility without crash durability"
 statement = """
-Successful publication flushes and closes every artifact before manifest \
-publication and completes the manifest's file and bundle-directory flush. A \
-completed bundle is terminal through the supported bundle API under the \
-filesystem's documented operations. It does not claim protection from mutation \
-by external filesystem actors, survival across power loss, or survival of a \
-failure to flush the caller-owned root directory."""
+Each artifact writer hashes the exact supplied bytes, flushes userspace buffers, \
+and closes its descriptor. Manifest publication writes and closes one \
+same-directory temporary manifest and atomically replaces `manifest.json`. The \
+default path does not call `F_FULLFSYNC`, `fsync`, or a directory flush and \
+defines no configurable durability mode. A completed bundle is terminal and \
+process-visible through the supported API, without claiming protection from \
+external filesystem mutation or survival across process, machine, filesystem, \
+or power failure."""
 rationale = """
-Ordering and flush evidence support a truthful completion boundary without \
-turning a local directory primitive into filesystem containment or an \
-unverified crash-durable storage guarantee."""
+Close and same-directory replacement support the intended process-visible \
+terminal boundary. Omitting storage barriers avoids paying per-artifact crash \
+durability costs for a capability that deliberately makes no such guarantee; a \
+future crash-durable publication requires its own design."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "Artifact bundle operations remain synchronous and offloadable"
+statement = """
+Artifact writer, manifest publication, integrity-audit, and verified-consumption \
+operations are synchronous and the package owns no event loop, executor, or \
+async filesystem twin. An async caller offloads one complete bundle operation; \
+it does not run package hashing or filesystem I/O on its event-loop thread or \
+split one operation across independently scheduled per-chunk calls."""
+rationale = """
+Keeping descriptor ownership and terminal verification inside one synchronous \
+operation makes the boundary deterministic. Async applications can choose and \
+govern their executor without duplicating the bundle API or hiding thread-pool \
+policy inside storage."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "The directory bundle format has an explicit workload ceiling"
+statement = """
+One artifact bundle represents one task, run, or result publication and is never \
+a per-event record or packed execution-record backend. Callers own partitioned \
+allocation roots and retention. Sustained creation near 100,000 bundles per hour \
+is outside the intended directory-format envelope and requires aggregation or a \
+separately designed blob-storage capability."""
+rationale = """
+Each bundle consumes a directory, manifest, and artifact filesystem entries. An \
+explicit granularity and rate ceiling prevents a local terminal-publication \
+primitive from being mistaken for a high-volume record or retention system."""
 date = "2026-08-08"
 
 [[contracts]]
