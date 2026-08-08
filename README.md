@@ -29,7 +29,7 @@ document artifacts:
   rebound, so callers invalidate by selecting a new key; `derive_cache_key`
   provides a canonical scheme using a versioned namespace and payload.
   Single and bulk methods share these per-key semantics;
-  `SqliteRecordCache(path)` is the managed persistent lifecycle.
+  `await SqliteRecordCache.open(path)` is the managed persistent lifecycle.
 - **[Canonical JSON document files](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)**
   publish and read one standalone, bounded canonical document in an existing
   directory through descriptor-pinned filesystem operations.
@@ -48,42 +48,57 @@ python -m pip install dr-store
 ## Usage
 
 ```python
+import asyncio
+
 from dr_store import MemoryBackend, ObjectStore
 
-store = ObjectStore(MemoryBackend())
-reference, _ = store.put("example.note.v1", {"title": "hello"})
-store.bind("notes/latest", reference)
 
-assert store.resolve("notes/latest") == reference
-assert store.get(reference) == {"title": "hello"}
+async def main() -> None:
+    store = ObjectStore(MemoryBackend())
+    reference, _ = await store.put("example.note.v1", {"title": "hello"})
+    await store.bind("notes/latest", reference)
+
+    assert await store.resolve("notes/latest") == reference
+    assert await store.get(reference) == {"title": "hello"}
+
+
+asyncio.run(main())
 ```
 
-`SqliteRecordCache(path)` is the paved persistent Record Cache. It initializes
-its database before returning and closes its current-process resources on
-normal or exceptional context exit. When cleanup succeeds, an exception from
-the context body is not suppressed; cleanup failure raises
+`await SqliteRecordCache.open(path)` is the paved persistent Record Cache. It
+returns only after its dedicated worker, connection, and schema are ready and
+closes those resources on normal or exceptional async context exit. When
+cleanup succeeds, an exception from the context body is not suppressed;
+cleanup failure raises
 `SqliteRecordCacheCloseError`:
 
 ```python
+import asyncio
+
 from dr_store import CacheEntry, CacheHit, SqliteRecordCache, derive_cache_key
 
-key = derive_cache_key("example.summary.v1", {"document": "note-42"})
-with SqliteRecordCache("records.sqlite3") as cache:
-    winners = cache.put_many(
-        {
-            key: CacheEntry(
-                schema="example.summary.v1",
-                record={"summary": "hello"},
-            )
+
+async def main() -> None:
+    key = derive_cache_key("example.summary.v1", {"document": "note-42"})
+    async with await SqliteRecordCache.open("records.sqlite3") as cache:
+        winners = await cache.put_many(
+            {
+                key: CacheEntry(
+                    schema="example.summary.v1",
+                    record={"summary": "hello"},
+                )
+            }
+        )
+        assert winners[key].schema == "example.summary.v1"
+        assert await cache.get_many(
+            [key, "missing"], schema="example.summary.v1"
+        ) == {
+            key: CacheHit(record={"summary": "hello"}),
+            "missing": None,
         }
-    )
-    assert winners[key].schema == "example.summary.v1"
-    assert cache.get_many(
-        [key, "missing"], schema="example.summary.v1"
-    ) == {
-        key: CacheHit(record={"summary": "hello"}),
-        "missing": None,
-    }
+
+
+asyncio.run(main())
 ```
 
 `CanonicalJsonFile` publishes one standalone document in an existing directory.
@@ -105,8 +120,9 @@ metadata.publish({"state": "complete"})
 assert metadata.read() == {"state": "complete"}
 ```
 
-Use the lower-level `SqliteBackend(path)` when assembling an `ObjectStore`
-directly whose objects and bindings must persist across processes. The rendered
+Use the lower-level `await SqliteBackend.open(path)` when assembling an
+`ObjectStore` directly whose objects and bindings must persist across processes.
+Close it with `await backend.aclose()` or an async context. The rendered
 [definitions](https://danielle-rothermel.github.io/dr-store/), authoritative
 [terms](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/terms.toml),
 and binding
@@ -150,14 +166,14 @@ class BindStatus(Enum):
 
 class ObjectStore:
     def __init__(self, backend: Backend) -> None: ...
-    def put(
+    async def put(
         self, schema: str, record: Jsonable
     ) -> tuple[ObjectReference, PutStatus]: ...
-    def get(self, reference: ObjectReference) -> Jsonable: ...
-    def bind(
+    async def get(self, reference: ObjectReference) -> Jsonable: ...
+    async def bind(
         self, key: str, reference: ObjectReference
     ) -> BindStatus: ...
-    def resolve(self, key: str) -> ObjectReference | None: ...
+    async def resolve(self, key: str) -> ObjectReference | None: ...
 ```
 
 ## Storage backends
@@ -197,26 +213,28 @@ class BoundObjectRow:
 
 ```python
 class Backend(Protocol):
-    def put_object(
+    async def put_object(
         self, *, schema: str, content_hash: str, canonical: str
     ) -> PutOutcome: ...
-    def get_object(
+    async def get_object(
         self, *, schema: str, content_hash: str
     ) -> tuple[str, str] | None: ...
-    def bind(
+    async def bind(
         self, *, key: str, schema: str, content_hash: str
     ) -> BindOutcome: ...
-    def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
-    def get_bound_objects(
+    async def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
+    async def get_bound_objects(
         self, *, keys: tuple[str, ...]
     ) -> dict[str, BoundObjectRow]: ...
-    def put_bound_objects(
+    async def put_bound_objects(
         self, *, entries: tuple[BoundObjectWrite, ...]
     ) -> dict[str, BindOutcome]: ...
 
 class MemoryBackend: ...
 class SqliteBackend:
-    def __init__(self, path: str | Path) -> None: ...
+    @classmethod
+    async def open(cls, path: str | Path) -> SqliteBackend: ...
+    async def aclose(self) -> None: ...
 ```
 
 Batch reads address only the supplied exact keys. SQLite performs chunked
@@ -248,22 +266,21 @@ class CacheEntry:
 
 class RecordCache:
     def __init__(self, store: ObjectStore) -> None: ...
-    def get(self, key: str, *, schema: str) -> CacheHit | None: ...
-    def get_many(
+    async def get(self, key: str, *, schema: str) -> CacheHit | None: ...
+    async def get_many(
         self, keys: Iterable[str], *, schema: str
     ) -> dict[str, CacheHit | None]: ...
-    def put(
+    async def put(
         self, key: str, schema: str, record: Jsonable
     ) -> ObjectReference: ...
-    def put_many(
+    async def put_many(
         self, entries: Mapping[str, CacheEntry]
     ) -> dict[str, ObjectReference]: ...
 
 class SqliteRecordCache(RecordCache):
-    def __init__(self, path: str | Path) -> None: ...
-    def close(self) -> None: ...
-    def __enter__(self) -> SqliteRecordCache: ...
-    def __exit__(self, ...) -> bool: ...
+    @classmethod
+    async def open(cls, path: str | Path) -> SqliteRecordCache: ...
+    async def aclose(self) -> None: ...
 ```
 
 `get_many` deduplicates requested keys and returns exactly those distinct keys,
@@ -278,20 +295,18 @@ The cache intentionally provides no scheduler, dirty tracking, key enumeration,
 prefix query, delete, expiry, eviction, or size cap. Callers own those policies
 and choose new keys for invalidation.
 
-Construction captures a non-transient absolute filesystem path and establishes
-the SQLite schema before returning; empty and `:memory:` paths are rejected.
-Initialize a new database path with one constructor before starting concurrent
-constructors. Closing rejects new cache operations, waits for every admitted
-`get`, `get_many`, `put`, or `put_many` to finish, and then closes all
-operational connections tracked by that cache instance in the current process.
-A successful close is idempotent for repeated and concurrent callers.
+Opening captures a non-transient absolute filesystem path and establishes the
+SQLite schema before returning; empty and `:memory:` paths are rejected. Each
+instance owns one connection-affine worker and connection. Closing rejects new
+cache operations, waits for every admitted `get`, `get_many`, `put`, or
+`put_many` to finish, and then closes those owned resources. A successful close
+is idempotent for repeated and concurrent callers.
 `SqliteRecordCacheClosedError` reports
 operations requested after closing begins, before their inputs are validated;
 `SqliteRecordCacheCloseError` reports a terminal cleanup failure to close
-callers, including a context exit. An interruption before connection cleanup
-begins restores the open lifecycle and wakes another closer; a process-level
-cleanup interruption terminalizes it before propagating to the elected caller.
-Committed records remain available after close and reopen. Closing one cache
+callers, including a context exit. Cancelling one close waiter does not cancel
+the shared terminal cleanup. Committed records remain available after close and
+reopen. Closing one cache
 does not close a separate instance or coordinate another process, even when
 both use the same database path. These persistence semantics do not promise
 power-loss durability.

@@ -16,6 +16,7 @@ from dr_store.content_addressing import (
     ObjectReference,
     _hash_canonical,
     _prepare_record,
+    _validate_binding_key,
 )
 from dr_store.core.errors import (
     BindingConflictError,
@@ -51,7 +52,7 @@ class ObjectStore:
     def __init__(self, backend: Backend) -> None:
         self._backend = backend
 
-    def put(
+    async def put(
         self,
         schema: str,
         record: Jsonable,
@@ -66,7 +67,7 @@ class ObjectStore:
             schema=schema,
             content_hash=prepared.content_hash,
         )
-        outcome = self._backend.put_object(
+        outcome = await self._backend.put_object(
             schema=schema,
             content_hash=reference.content_hash,
             canonical=prepared.canonical,
@@ -81,9 +82,9 @@ class ObjectStore:
             content_hash=reference.content_hash,
         )
 
-    def get(self, reference: ObjectReference) -> Jsonable:
+    async def get(self, reference: ObjectReference) -> Jsonable:
         """Read after verifying schema, hash, and canonical text."""
-        stored = self._backend.get_object(
+        stored = await self._backend.get_object(
             schema=reference.schema,
             content_hash=reference.content_hash,
         )
@@ -141,18 +142,21 @@ class ObjectStore:
             )
         return record
 
-    def _get_bound_objects(
+    async def _get_bound_objects(
         self,
         keys: tuple[str, ...],
     ) -> Mapping[str, BoundObjectRow]:
-        return self._backend.get_bound_objects(keys=keys)
+        for key in keys:
+            _validate_binding_key(key)
+        return await self._backend.get_bound_objects(keys=keys)
 
-    def _put_bound_records(
+    async def _put_bound_records(
         self,
         entries: Mapping[str, tuple[str, Jsonable]],
     ) -> dict[str, ObjectReference]:
         writes: list[BoundObjectWrite] = []
         for key, (schema, record) in entries.items():
+            _validate_binding_key(key)
             prepared = _prepare_record(record)
             reference = ObjectReference(
                 schema=schema,
@@ -167,7 +171,7 @@ class ObjectStore:
                 )
             )
 
-        outcomes = self._backend.put_bound_objects(entries=tuple(writes))
+        outcomes = await self._backend.put_bound_objects(entries=tuple(writes))
         return {
             key: ObjectReference(
                 schema=outcome.existing_schema,
@@ -176,7 +180,7 @@ class ObjectStore:
             for key, outcome in outcomes.items()
         }
 
-    def bind(
+    async def bind(
         self,
         key: str,
         reference: ObjectReference,
@@ -186,7 +190,8 @@ class ObjectStore:
         Rebinding the same reference is idempotent; a different reference
         raises :class:`BindingConflictError` and preserves the existing one.
         """
-        outcome = self._backend.bind(
+        _validate_binding_key(key)
+        outcome = await self._backend.bind(
             key=key,
             schema=reference.schema,
             content_hash=reference.content_hash,
@@ -205,8 +210,9 @@ class ObjectStore:
             requested=reference,
         )
 
-    def resolve(self, key: str) -> ObjectReference | None:
-        bound = self._backend.get_binding(key=key)
+    async def resolve(self, key: str) -> ObjectReference | None:
+        _validate_binding_key(key)
+        bound = await self._backend.get_binding(key=key)
         if bound is None:
             return None
         return ObjectReference(schema=bound[0], content_hash=bound[1])

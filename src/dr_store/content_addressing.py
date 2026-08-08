@@ -42,7 +42,24 @@ def _validate_reference_schema(schema: object) -> str:
         raise ReferenceValidationError(
             "ObjectReference schema must be a non-empty string"
         )
+    _validate_storage_text(schema, name="ObjectReference schema")
     return schema
+
+
+def _validate_binding_key(key: object) -> str:
+    if not isinstance(key, str):
+        raise ReferenceValidationError("binding key must be a string")
+    _validate_storage_text(key, name="binding key")
+    return key
+
+
+def _validate_storage_text(value: str, *, name: str) -> None:
+    if "\0" in value or any(
+        "\ud800" <= character <= "\udfff" for character in value
+    ):
+        raise ReferenceValidationError(
+            f"{name} must not contain NUL or unpaired surrogate code points"
+        )
 
 
 def is_content_hash(value: str) -> bool:

@@ -1,35 +1,31 @@
 from __future__ import annotations
 
+import asyncio
 import enum
-import threading
 from collections.abc import (  # noqa: TC003 - public hints resolve at runtime.
+    AsyncIterator,
     Iterable,
     Mapping,
 )
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path  # noqa: TC003 - public hints resolve at runtime.
-from types import (
-    TracebackType,  # noqa: TC003 - public hints resolve at runtime.
+from types import (  # noqa: TC003 - public hints resolve at runtime.
+    TracebackType,
 )
-from typing import TYPE_CHECKING, Self
+from typing import Self
 
 from dr_serialize import (
     Jsonable,  # noqa: TC002 - public hints resolve at runtime.
 )
 
-from dr_store.content_addressing import (  # noqa: TC001
-    ObjectReference,
-)
+from dr_store.content_addressing import ObjectReference  # noqa: TC001
 from dr_store.core.errors import (
     SqliteRecordCacheClosedError,
     SqliteRecordCacheCloseError,
 )
 from dr_store.object_store import ObjectStore
 from dr_store.record_cache.cache import CacheEntry, CacheHit, RecordCache
-from dr_store.storage_backends.sqlite import SqliteBackend
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
+from dr_store.storage_backends.sqlite import SqliteBackend, _await_settled
 
 
 class _Lifecycle(enum.Enum):
@@ -39,195 +35,128 @@ class _Lifecycle(enum.Enum):
     FAILED = enum.auto()
 
 
-class _ClosePhase(enum.Enum):
-    PRE_CLEANUP = enum.auto()
-    CLEANUP_STARTED = enum.auto()
-
-
-class _OperationLocal(threading.local):
-    def __init__(self) -> None:
-        self.depth = 0
-
-
 class SqliteRecordCache(RecordCache):
-    """Persistent cache requiring serialized first-time initialization."""
+    """Long-lived asynchronous cache owning one SQLite backend lifecycle."""
+
+    _sqlite_backend: SqliteBackend
+    _loop: asyncio.AbstractEventLoop
+    _state: _Lifecycle
+    _active_operations: int
+    _operation_tasks: set[asyncio.Task[object]]
+    _drained: asyncio.Event
+    _close_task: asyncio.Task[None] | None
 
     def __init__(self, path: str | Path) -> None:
-        backend = SqliteBackend._managed(path)
-        super().__init__(ObjectStore(backend))
+        del path
+        raise TypeError("use 'await SqliteRecordCache.open(path)'")
+
+    @classmethod
+    async def open(cls, path: str | Path) -> Self:
+        backend = await SqliteBackend.open(path)
+        self = object.__new__(cls)
+        RecordCache.__init__(self, ObjectStore(backend))
         self._sqlite_backend = backend
-        self._lifecycle = threading.Condition()
+        self._loop = asyncio.get_running_loop()
         self._state = _Lifecycle.OPEN
         self._active_operations = 0
-        self._operation_local = _OperationLocal()
-        self._close_attempt: object | None = None
-        self._close_failure: BaseException | None = None
+        self._operation_tasks = set()
+        self._drained = asyncio.Event()
+        self._drained.set()
+        self._close_task = None
+        return self
 
-    @contextmanager
-    def _admit_operation(self) -> Iterator[None]:
-        with self._lifecycle:
-            if self._state is not _Lifecycle.OPEN:
-                raise SqliteRecordCacheClosedError(
-                    "SQLite record cache is closed"
-                )
-            self._active_operations += 1
-            self._operation_local.depth += 1
+    def _check_loop(self) -> None:
+        if asyncio.get_running_loop() is not self._loop:
+            raise RuntimeError(
+                "SQLite record cache must be used on the event loop that "
+                "opened it"
+            )
 
+    @asynccontextmanager
+    async def _admit_operation(self) -> AsyncIterator[None]:
+        self._check_loop()
+        if self._state is not _Lifecycle.OPEN:
+            raise SqliteRecordCacheClosedError("SQLite record cache is closed")
+        task = asyncio.current_task()
+        assert task is not None
+        self._active_operations += 1
+        self._operation_tasks.add(task)
+        self._drained.clear()
         try:
             yield
         finally:
-            with self._lifecycle:
-                self._operation_local.depth -= 1
-                self._active_operations -= 1
-                if self._active_operations == 0:
-                    self._lifecycle.notify_all()
+            self._operation_tasks.remove(task)
+            self._active_operations -= 1
+            if self._active_operations == 0:
+                self._drained.set()
 
-    def get(self, key: str, *, schema: str) -> CacheHit | None:
-        with self._admit_operation():
-            return super().get(key, schema=schema)
+    async def get(self, key: str, *, schema: str) -> CacheHit | None:
+        async with self._admit_operation():
+            return await super().get(key, schema=schema)
 
-    def put(
+    async def put(
         self,
         key: str,
         schema: str,
         record: Jsonable,
     ) -> ObjectReference:
-        with self._admit_operation():
-            return super().put(key, schema, record)
+        async with self._admit_operation():
+            return await super().put(key, schema, record)
 
-    def get_many(
+    async def get_many(
         self,
         keys: Iterable[str],
         *,
         schema: str,
     ) -> dict[str, CacheHit | None]:
-        with self._admit_operation():
-            return super().get_many(keys, schema=schema)
+        async with self._admit_operation():
+            return await super().get_many(keys, schema=schema)
 
-    def put_many(
+    async def put_many(
         self,
         entries: Mapping[str, CacheEntry],
     ) -> dict[str, ObjectReference]:
-        with self._admit_operation():
-            return super().put_many(entries)
+        async with self._admit_operation():
+            return await super().put_many(entries)
 
-    def close(self) -> None:
-        if self._operation_local.depth:
+    async def aclose(self) -> None:
+        if self._state is _Lifecycle.CLOSED:
+            return
+        self._check_loop()
+        task = asyncio.current_task()
+        if task in self._operation_tasks:
             raise SqliteRecordCacheCloseError(
                 "cannot close SQLite record cache from an active operation"
             )
-        attempt = object()
-        phase = _ClosePhase.PRE_CLEANUP
-        close_required = False
-        owns_attempt = False
-        failure: BaseException | None = None
-        try:
-            close_required = self._elect_closer(attempt)
-            if close_required:
-                owns_attempt = True
-                phase = _ClosePhase.CLEANUP_STARTED
-                self._sqlite_backend._close_connections()
-        # Closing must publish a terminal state even for process-level exits.
-        except BaseException as error:  # noqa: BLE001
-            failure = error
-            owns_attempt = self._owns_close_attempt(attempt)
-        finally:
-            try:
-                self._finish_close_attempt(attempt, phase, failure)
-            except BaseException as publication_error:  # noqa: BLE001
-                if failure is None or (
-                    isinstance(failure, Exception)
-                    and not isinstance(publication_error, Exception)
-                ):
-                    failure = publication_error
-                self._recover_close_publication(attempt, phase, failure)
+        if self._close_task is None:
+            self._state = _Lifecycle.CLOSING
+            self._close_task = self._loop.create_task(self._close_resources())
+        await _await_settled(self._close_task)
 
-        if not close_required and failure is None:
-            return
-        if failure is not None:
-            if not owns_attempt:
-                raise failure
-            if not isinstance(failure, Exception):
-                raise failure
+    async def _close_resources(self) -> None:
+        try:
+            await self._drained.wait()
+            await self._sqlite_backend.aclose()
+        except Exception as error:
+            self._state = _Lifecycle.FAILED
             raise SqliteRecordCacheCloseError(
                 "failed to close SQLite record cache"
-            ) from failure
+            ) from error
+        else:
+            self._state = _Lifecycle.CLOSED
 
-    def _elect_closer(self, attempt: object) -> bool:
-        with self._lifecycle:
-            while True:
-                if self._state is _Lifecycle.CLOSED:
-                    return False
-                if self._state is _Lifecycle.FAILED:
-                    assert self._close_failure is not None
-                    raise SqliteRecordCacheCloseError(
-                        "SQLite record cache close previously failed"
-                    ) from self._close_failure
-                if self._state is _Lifecycle.OPEN:
-                    try:
-                        self._close_attempt = attempt
-                        self._state = _Lifecycle.CLOSING
-                        self._lifecycle.notify_all()
-                        while self._active_operations:
-                            self._lifecycle.wait()
-                    except BaseException:
-                        if self._close_attempt is attempt:
-                            self._close_attempt = None
-                            self._state = _Lifecycle.OPEN
-                            self._lifecycle.notify_all()
-                        raise
-                    else:
-                        return True
-                if self._state is _Lifecycle.CLOSING:
-                    self._lifecycle.wait()
-
-    def _owns_close_attempt(self, attempt: object) -> bool:
-        with self._lifecycle:
-            return self._close_attempt is attempt
-
-    def _finish_close_attempt(
-        self,
-        attempt: object,
-        phase: _ClosePhase,
-        failure: BaseException | None,
-    ) -> None:
-        with self._lifecycle:
-            if self._close_attempt is not attempt:
-                return
-            if failure is None:
-                self._state = _Lifecycle.CLOSED
-            elif phase is _ClosePhase.PRE_CLEANUP:
-                self._state = _Lifecycle.OPEN
-            else:
-                self._close_failure = failure
-                self._state = _Lifecycle.FAILED
-            self._close_attempt = None
-            self._lifecycle.notify_all()
-
-    def _recover_close_publication(
-        self,
-        attempt: object,
-        phase: _ClosePhase,
-        failure: BaseException,
-    ) -> None:
-        with self._lifecycle:
-            if self._close_attempt is attempt:
-                if phase is _ClosePhase.PRE_CLEANUP:
-                    self._state = _Lifecycle.OPEN
-                else:
-                    self._close_failure = failure
-                    self._state = _Lifecycle.FAILED
-                self._close_attempt = None
-            self._lifecycle.notify_all()
-
-    def __enter__(self) -> Self:
+    async def __aenter__(self) -> Self:
+        self._check_loop()
+        if self._state is not _Lifecycle.OPEN:
+            raise SqliteRecordCacheClosedError("SQLite record cache is closed")
         return self
 
-    def __exit__(
+    async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> bool:
-        self.close()
+        del exc_type, exc_value, traceback
+        await self.aclose()
         return False

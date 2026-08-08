@@ -1,7 +1,7 @@
 # Async Shared Records and Artifact Bundles
 
-Status: agreed design plan with implementation selections frozen; implementation
-has not started.
+Status: agreed design plan with implementation selections frozen; the PR 1
+implementation is present, while PR 2 and PR 3 remain staged.
 
 ## Planning sources and ownership
 

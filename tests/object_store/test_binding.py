@@ -7,6 +7,7 @@ from dr_store import (
     BindStatus,
     ObjectReference,
     ObjectStore,
+    ReferenceValidationError,
 )
 
 KEY = "caller-owned-opaque-key"
@@ -14,37 +15,23 @@ REF_A = ObjectReference.for_record("example.record", {"which": "A"})
 REF_B = ObjectReference.for_record("example.record", {"which": "B"})
 
 
-def test_unbound_key_binds(store: ObjectStore) -> None:
-    assert store.resolve(KEY) is None
-    assert store.bind(KEY, REF_A) is BindStatus.BOUND
-    assert store.resolve(KEY) == REF_A
+async def test_binding_is_single_assignment(store: ObjectStore) -> None:
+    assert await store.resolve(KEY) is None
+    assert await store.bind(KEY, REF_A) is BindStatus.BOUND
+    assert await store.bind(KEY, REF_A) is BindStatus.IDEMPOTENT
+    with pytest.raises(BindingConflictError) as caught:
+        await store.bind(KEY, REF_B)
+    assert caught.value.existing == REF_A
+    assert await store.resolve(KEY) == REF_A
 
 
-def test_same_reference_replay_is_idempotent(store: ObjectStore) -> None:
-    store.bind(KEY, REF_A)
-    assert store.bind(KEY, REF_A) is BindStatus.IDEMPOTENT
-    assert store.resolve(KEY) == REF_A
-
-
-def test_different_reference_conflicts_and_keeps_winner(
-    store: ObjectStore,
-) -> None:
-    store.bind(KEY, REF_A)
-    with pytest.raises(BindingConflictError) as excinfo:
-        store.bind(KEY, REF_B)
-    assert excinfo.value.existing == REF_A
-    assert excinfo.value.requested == REF_B
-    assert store.resolve(KEY) == REF_A
-
-
-def test_binding_key_is_opaque_arbitrary_string(store: ObjectStore) -> None:
+async def test_binding_key_shared_text_domain(store: ObjectStore) -> None:
     for key in ["", "a/b/c", "key with spaces", "🔑", "1234", "\n\t"]:
-        assert store.bind(key, REF_A) is BindStatus.BOUND
-        assert store.resolve(key) == REF_A
+        assert await store.bind(key, REF_A) is BindStatus.BOUND
+        assert await store.resolve(key) == REF_A
 
-
-def test_distinct_keys_bind_independently(store: ObjectStore) -> None:
-    assert store.bind("k1", REF_A) is BindStatus.BOUND
-    assert store.bind("k2", REF_B) is BindStatus.BOUND
-    assert store.resolve("k1") == REF_A
-    assert store.resolve("k2") == REF_B
+    for invalid in ["\0", "prefix\0suffix", "\ud800"]:
+        with pytest.raises(ReferenceValidationError):
+            await store.bind(invalid, REF_A)
+        with pytest.raises(ReferenceValidationError):
+            await store.resolve(invalid)

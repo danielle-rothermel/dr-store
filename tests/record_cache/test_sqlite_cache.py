@@ -1,29 +1,25 @@
 from __future__ import annotations
 
-import queue
-import sqlite3
-import threading
+import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
 
 from dr_store import (
-    BoundObjectRow,
     CacheEntry,
     CacheHit,
-    ObjectReference,
-    ObjectStore,
     SqliteRecordCache,
     SqliteRecordCacheClosedError,
     SqliteRecordCacheCloseError,
 )
-from dr_store.record_cache import sqlite as sqlite_module
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
     from pathlib import Path
 
     from dr_serialize import Jsonable
+
+    from dr_store import BoundObjectRow
 
 KEY = "example.memo.v1:key"
 SCHEMA = "example.record"
@@ -31,736 +27,218 @@ RECORD: Jsonable = {"payload": {"a": 1, "b": [2, 3]}}
 WATCHDOG_SECONDS = 15
 
 
-class _ObservedCondition(threading.Condition):
-    def __init__(self, waiting: threading.Event) -> None:
-        super().__init__()
-        self._waiting = waiting
-
-    def wait(self, timeout: float | None = None) -> bool:
-        self._waiting.set()
-        return super().wait(timeout)
-
-
-class _InterruptingDrainCondition(threading.Condition):
-    def __init__(
-        self,
-        interruption: RuntimeError,
-        elected_waiting: threading.Event,
-        concurrent_waiting: threading.Event,
-    ) -> None:
-        super().__init__()
-        self._interruption = interruption
-        self._elected_waiting = elected_waiting
-        self._concurrent_waiting = concurrent_waiting
-        self._interrupted = False
-
-    def wait(self, timeout: float | None = None) -> bool:
-        if (
-            threading.current_thread().name == "interrupted-closer"
-            and not self._interrupted
-        ):
-            self._interrupted = True
-            self._elected_waiting.set()
-            super().wait(timeout)
-            raise self._interruption
-        self._concurrent_waiting.set()
-        return super().wait(timeout)
-
-
-def _capture(
-    operation: Callable[[], object],
-    results: queue.Queue[object],
-) -> None:
-    try:
-        results.put(operation())
-    except Exception as error:  # noqa: BLE001 - propagate worker failures.
-        results.put(error)
-
-
-def _capture_base_exception(
-    operation: Callable[[], object],
-    results: queue.Queue[object],
-) -> None:
-    try:
-        results.put(operation())
-    except BaseException as error:  # noqa: BLE001 - inspect process exits.
-        results.put(error)
-
-
-def _join(thread: threading.Thread) -> None:
-    thread.join(WATCHDOG_SECONDS)
-    assert not thread.is_alive(), f"{thread.name} exceeded its watchdog"
-
-
-def _await_closing(cache: SqliteRecordCache) -> None:
-    with cache._lifecycle:
-        reached = cache._lifecycle.wait_for(
-            lambda: cache._state is sqlite_module._Lifecycle.CLOSING,
-            WATCHDOG_SECONDS,
-        )
-    assert reached, "cache did not begin closing"
-
-
-def _run_interrupted_and_concurrent_close(
-    cache: SqliteRecordCache,
-    interruption_ready: threading.Event,
-    concurrent_waiting: threading.Event,
-    release_interruption: threading.Event,
-) -> list[object]:
-    results: queue.Queue[object] = queue.Queue()
-    interrupted = threading.Thread(
-        target=_capture_base_exception,
-        args=(cache.close, results),
-        name="interrupted-closer",
-    )
-    concurrent = threading.Thread(
-        target=_capture,
-        args=(cache.close, results),
-        name="concurrent-closer",
-    )
-
-    interrupted.start()
-    assert interruption_ready.wait(WATCHDOG_SECONDS)
-    concurrent.start()
-    assert concurrent_waiting.wait(WATCHDOG_SECONDS)
-    release_interruption.set()
-    _join(interrupted)
-    _join(concurrent)
-
-    return [results.get_nowait(), results.get_nowait()]
-
-
-def _use_cache_then_raise(
-    cache: SqliteRecordCache,
-    failure: RuntimeError,
-) -> None:
-    with cache:
-        cache.put(KEY, SCHEMA, RECORD)
-        raise failure
+def test_direct_construction_is_private(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match=r"await SqliteRecordCache\.open"):
+        SqliteRecordCache(tmp_path / "cache.db")
 
 
 @pytest.mark.parametrize("path", ["", ":memory:"])
-def test_construction_rejects_transient_database_paths(path: str) -> None:
-    with pytest.raises(ValueError, match=r".+"):
-        SqliteRecordCache(path)
+async def test_open_rejects_transient_paths(path: str) -> None:
+    with pytest.raises(ValueError, match="persistent filesystem path"):
+        await SqliteRecordCache.open(path)
 
 
-def test_records_persist_across_close_and_reopen(tmp_path: Path) -> None:
-    path = tmp_path / "cache.db"
-    first = SqliteRecordCache(path)
-    reference = first.put(KEY, SCHEMA, RECORD)
-    first.close()
-
-    with SqliteRecordCache(path) as reopened:
-        assert reopened.get(KEY, schema=SCHEMA) == CacheHit(record=RECORD)
-        assert reopened.put(KEY, SCHEMA, RECORD) == reference
-
-
-def test_batch_records_persist_across_close_and_reopen(tmp_path: Path) -> None:
-    path = tmp_path / "cache.db"
-    entries = {
-        KEY: CacheEntry(schema=SCHEMA, record=RECORD),
-        "batch:null": CacheEntry(schema=SCHEMA, record=None),
-    }
-    first = SqliteRecordCache(path)
-    references = first.put_many(entries)
-    first.close()
-
-    with SqliteRecordCache(path) as reopened:
-        assert reopened.get_many(entries, schema=SCHEMA) == {
-            KEY: CacheHit(record=RECORD),
-            "batch:null": CacheHit(record=None),
-        }
-        assert reopened.put_many(entries) == references
-
-
-def test_context_manager_closes_after_normal_block(tmp_path: Path) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-
-    with cache as entered:
-        assert entered is cache
-        cache.put(KEY, SCHEMA, RECORD)
-
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(KEY, schema=SCHEMA)
-
-
-def test_context_manager_closes_without_swallowing_body_exception(
+async def test_records_persist_across_close_and_reopen(
     tmp_path: Path,
 ) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    body_failure = RuntimeError()
+    path = tmp_path / "cache.db"
+    first = await SqliteRecordCache.open(path)
+    entries = {
+        KEY: CacheEntry(SCHEMA, RECORD),
+        "null": CacheEntry(SCHEMA, None),
+    }
+    references = await first.put_many(entries)
+    await first.aclose()
+    await first.aclose()
+
+    async with await SqliteRecordCache.open(path) as reopened:
+        assert await reopened.get_many(entries, schema=SCHEMA) == {
+            KEY: CacheHit(RECORD),
+            "null": CacheHit(None),
+        }
+        assert await reopened.put_many(entries) == references
+
+
+async def test_async_context_closes_without_suppressing_body_failure(
+    tmp_path: Path,
+) -> None:
+    cache = await SqliteRecordCache.open(tmp_path / "cache.db")
+    body_failure = RuntimeError("body failed")
+
+    async def use_then_raise() -> None:
+        async with cache as entered:
+            assert entered is cache
+            await cache.put(KEY, SCHEMA, RECORD)
+            raise body_failure
 
     with pytest.raises(RuntimeError) as caught:
-        _use_cache_then_raise(cache, body_failure)
-
+        await use_then_raise()
     assert caught.value is body_failure
-
     with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(KEY, schema=SCHEMA)
+        await cache.get(KEY, schema=SCHEMA)
 
 
-def test_context_cleanup_failure_replaces_body_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    body_failure = RuntimeError()
-    cleanup_failure = RuntimeError()
-
-    def fail_cleanup() -> None:
-        raise cleanup_failure
-
-    monkeypatch.setattr(
-        cache._sqlite_backend,
-        "_close_connections",
-        fail_cleanup,
-    )
-
-    with pytest.raises(SqliteRecordCacheCloseError) as caught:
-        _use_cache_then_raise(cache, body_failure)
-
-    assert caught.value.__cause__ is cleanup_failure
-    assert cleanup_failure.__context__ is body_failure
-    with pytest.raises(SqliteRecordCacheCloseError) as repeated:
-        cache.close()
-    assert repeated.value.__cause__ is cleanup_failure
+async def test_closed_error_precedes_input_validation(tmp_path: Path) -> None:
+    cache = await SqliteRecordCache.open(tmp_path / "cache.db")
+    await cache.aclose()
     with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(KEY, schema=SCHEMA)
-
-
-def test_closed_operations_fail_before_input_validation(
-    tmp_path: Path,
-) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    cache.close()
-
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(
+        await cache.get(
             None,  # ty: ignore[invalid-argument-type]
             schema=None,  # ty: ignore[invalid-argument-type]
         )
     with pytest.raises(SqliteRecordCacheClosedError):
-        cache.put(
-            None,  # ty: ignore[invalid-argument-type]
-            None,  # ty: ignore[invalid-argument-type]
-            object(),  # ty: ignore[invalid-argument-type]
-        )
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get_many(
-            None,  # ty: ignore[invalid-argument-type]
-            schema=None,  # ty: ignore[invalid-argument-type]
-        )
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.put_many(None)  # ty: ignore[invalid-argument-type]
+        await cache.put_many(None)  # ty: ignore[invalid-argument-type]
 
 
-def test_repeated_and_concurrent_close_are_idempotent(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_close_waits_for_whole_cache_operation_and_rejects_new(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    cache.get(KEY, schema=SCHEMA)
-    cleanup_started = threading.Event()
-    release_cleanup = threading.Event()
-    closer_waiting = threading.Event()
-    cache._lifecycle = _ObservedCondition(closer_waiting)
-    close_connections = cache._sqlite_backend._close_connections
+    cache = await SqliteRecordCache.open(tmp_path / "cache.db")
+    await cache.put(KEY, SCHEMA, RECORD)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    close_started = asyncio.Event()
+    original = cache._store._get_bound_objects
+    close_resources = cache._close_resources
 
-    def gated_cleanup() -> None:
-        cleanup_started.set()
-        assert release_cleanup.wait(WATCHDOG_SECONDS)
-        close_connections()
-
-    monkeypatch.setattr(
-        cache._sqlite_backend,
-        "_close_connections",
-        gated_cleanup,
-    )
-    results: queue.Queue[object] = queue.Queue()
-    elected = threading.Thread(
-        target=_capture,
-        args=(cache.close, results),
-        name="elected-closer",
-    )
-    concurrent = threading.Thread(
-        target=_capture,
-        args=(cache.close, results),
-        name="concurrent-closer",
-    )
-
-    elected.start()
-    assert cleanup_started.wait(WATCHDOG_SECONDS)
-    concurrent.start()
-    assert closer_waiting.wait(WATCHDOG_SECONDS)
-    release_cleanup.set()
-    _join(elected)
-    _join(concurrent)
-
-    assert [results.get_nowait(), results.get_nowait()] == [None, None]
-    cache.close()
-
-
-def test_close_waits_for_complete_get_many_and_rejects_new_operation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    cache.put_many({KEY: CacheEntry(schema=SCHEMA, record=RECORD)})
-    get_started = threading.Event()
-    release_get = threading.Event()
-    original_get_many = ObjectStore._get_bound_objects
-
-    def gated_get_many(
-        store: ObjectStore,
+    async def gated_get(
         keys: tuple[str, ...],
     ) -> Mapping[str, BoundObjectRow]:
-        get_started.set()
-        assert release_get.wait(WATCHDOG_SECONDS)
-        return original_get_many(store, keys)
+        started.set()
+        await release.wait()
+        return await original(keys)
 
-    monkeypatch.setattr(ObjectStore, "_get_bound_objects", gated_get_many)
-    results: queue.Queue[object] = queue.Queue()
-    reader = threading.Thread(
-        target=_capture,
-        args=(lambda: cache.get_many([KEY], schema=SCHEMA), results),
-        name="active-get-many",
-    )
-    closer = threading.Thread(
-        target=_capture,
-        args=(cache.close, results),
-        name="waiting-closer",
-    )
+    async def observed_close() -> None:
+        close_started.set()
+        await close_resources()
 
-    reader.start()
-    assert get_started.wait(WATCHDOG_SECONDS)
-    closer.start()
-    _await_closing(cache)
+    monkeypatch.setattr(cache._store, "_get_bound_objects", gated_get)
+    monkeypatch.setattr(cache, "_close_resources", observed_close)
+    operation = asyncio.create_task(cache.get_many([KEY], schema=SCHEMA))
+    await asyncio.wait_for(started.wait(), WATCHDOG_SECONDS)
+    closing = asyncio.create_task(cache.aclose())
+    await asyncio.wait_for(close_started.wait(), WATCHDOG_SECONDS)
     with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get_many(
+        await cache.get_many(
             None,  # ty: ignore[invalid-argument-type]
             schema=None,  # ty: ignore[invalid-argument-type]
         )
-
-    release_get.set()
-    _join(reader)
-    _join(closer)
-
-    observed = [results.get_nowait(), results.get_nowait()]
-    assert {KEY: CacheHit(record=RECORD)} in observed
-    assert None in observed
+    release.set()
+    assert await operation == {KEY: CacheHit(RECORD)}
+    await closing
 
 
-def test_close_waits_for_complete_put_many_and_reopen_observes_bindings(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_cancelled_close_waiter_does_not_abandon_shared_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = tmp_path / "cache.db"
-    cache = SqliteRecordCache(path)
-    put_started = threading.Event()
-    release_put = threading.Event()
-    original_put_many = ObjectStore._put_bound_records
+    cache = await SqliteRecordCache.open(tmp_path / "cache.db")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    close_started = asyncio.Event()
+    original = cache._store._get_bound_objects
+    close_resources = cache._close_resources
 
-    def gated_put_many(
-        store: ObjectStore,
-        entries: Mapping[str, tuple[str, Jsonable]],
-    ) -> dict[str, ObjectReference]:
-        put_started.set()
-        assert release_put.wait(WATCHDOG_SECONDS)
-        return original_put_many(store, entries)
-
-    monkeypatch.setattr(ObjectStore, "_put_bound_records", gated_put_many)
-    results: queue.Queue[object] = queue.Queue()
-    writer = threading.Thread(
-        target=_capture,
-        args=(
-            lambda: cache.put_many(
-                {KEY: CacheEntry(schema=SCHEMA, record=RECORD)}
-            ),
-            results,
-        ),
-        name="active-put-many",
-    )
-    closer = threading.Thread(
-        target=_capture,
-        args=(cache.close, results),
-        name="waiting-closer",
-    )
-
-    writer.start()
-    assert put_started.wait(WATCHDOG_SECONDS)
-    closer.start()
-    _await_closing(cache)
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.put_many(None)  # ty: ignore[invalid-argument-type]
-
-    release_put.set()
-    _join(writer)
-    _join(closer)
-
-    observed = [results.get_nowait(), results.get_nowait()]
-    assert any(
-        isinstance(result, dict) and KEY in result for result in observed
-    )
-    assert None in observed
-    with SqliteRecordCache(path) as reopened:
-        assert reopened.get_many([KEY], schema=SCHEMA) == {
-            KEY: CacheHit(record=RECORD)
-        }
-
-
-def test_same_thread_reentrant_close_fails_without_closing_cache(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    cache.put(KEY, SCHEMA, RECORD)
-    original_get_many = ObjectStore._get_bound_objects
-    close_errors: list[SqliteRecordCacheCloseError] = []
-
-    def get_many_and_try_close(
-        store: ObjectStore,
+    async def gated_get(
         keys: tuple[str, ...],
     ) -> Mapping[str, BoundObjectRow]:
-        with pytest.raises(SqliteRecordCacheCloseError) as raised:
-            cache.close()
-        close_errors.append(raised.value)
-        return original_get_many(store, keys)
+        started.set()
+        await release.wait()
+        return await original(keys)
 
-    monkeypatch.setattr(
-        ObjectStore,
-        "_get_bound_objects",
-        get_many_and_try_close,
-    )
+    async def observed_close() -> None:
+        close_started.set()
+        await close_resources()
 
-    assert cache.get_many([KEY], schema=SCHEMA) == {
-        KEY: CacheHit(record=RECORD)
-    }
-    assert len(close_errors) == 1
-    cache.close()
+    monkeypatch.setattr(cache._store, "_get_bound_objects", gated_get)
+    monkeypatch.setattr(cache, "_close_resources", observed_close)
+    operation = asyncio.create_task(cache.get(KEY, schema=SCHEMA))
+    await asyncio.wait_for(started.wait(), WATCHDOG_SECONDS)
+    cancelled_waiter = asyncio.create_task(cache.aclose())
+    await asyncio.wait_for(close_started.wait(), WATCHDOG_SECONDS)
+    cancelled_waiter.cancel()
+    release.set()
+    assert await operation is None
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_waiter
+    await cache.aclose()
+    assert cache._state.name == "CLOSED"
 
 
-def test_drain_interruption_wakes_a_concurrent_close_caller(
-    tmp_path: Path,
+async def test_concurrent_close_is_idempotent(tmp_path: Path) -> None:
+    cache = await SqliteRecordCache.open(tmp_path / "cache.db")
+    await asyncio.gather(cache.aclose(), cache.aclose(), cache.aclose())
+    await cache.aclose()
+
+
+async def test_cleanup_failure_is_shared_and_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    operation_started = threading.Event()
-    release_operation = threading.Event()
-    elected_waiting = threading.Event()
-    concurrent_waiting = threading.Event()
-    interruption = RuntimeError()
-    results: queue.Queue[object] = queue.Queue()
-
-    def active_operation() -> None:
-        with cache._admit_operation():
-            operation_started.set()
-            assert release_operation.wait(WATCHDOG_SECONDS)
-
-    worker = threading.Thread(
-        target=_capture,
-        args=(active_operation, results),
-        name="active-operation",
-    )
-    worker.start()
-    assert operation_started.wait(WATCHDOG_SECONDS)
-    cache._lifecycle = _InterruptingDrainCondition(
-        interruption,
-        elected_waiting,
-        concurrent_waiting,
-    )
-    interrupted = threading.Thread(
-        target=_capture,
-        args=(cache.close, results),
-        name="interrupted-closer",
-    )
-    concurrent = threading.Thread(
-        target=_capture,
-        args=(cache.close, results),
-        name="concurrent-closer",
-    )
-
-    interrupted.start()
-    assert elected_waiting.wait(WATCHDOG_SECONDS)
-    concurrent.start()
-    assert concurrent_waiting.wait(WATCHDOG_SECONDS)
-
-    release_operation.set()
-    _join(worker)
-    _join(interrupted)
-    _join(concurrent)
-
-    observed = [results.get_nowait() for _ in range(3)]
-    assert any(result is interruption for result in observed)
-    assert observed.count(None) == 2
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(KEY, schema=SCHEMA)
-    cache.close()
-
-
-def test_post_election_interruption_wakes_a_concurrent_close_caller(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    interrupted_elected = threading.Event()
-    concurrent_waiting = threading.Event()
-    release_interruption = threading.Event()
-    interruption = KeyboardInterrupt("injected post-election interruption")
-    cache._lifecycle = _ObservedCondition(concurrent_waiting)
-    elect_closer = cache._elect_closer
-
-    def interrupt_after_election(attempt: object) -> bool:
-        elected = elect_closer(attempt)
-        if threading.current_thread().name == "interrupted-closer":
-            assert elected
-            interrupted_elected.set()
-            assert release_interruption.wait(WATCHDOG_SECONDS)
-            raise interruption
-        return elected
-
-    monkeypatch.setattr(cache, "_elect_closer", interrupt_after_election)
-
-    observed = _run_interrupted_and_concurrent_close(
-        cache,
-        interrupted_elected,
-        concurrent_waiting,
-        release_interruption,
-    )
-    assert any(result is interruption for result in observed)
-    assert None in observed
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(KEY, schema=SCHEMA)
-    cache.close()
-
-
-def test_publication_interruption_terminalizes_for_waiting_close_caller(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    cache.get(KEY, schema=SCHEMA)
-    publication_started = threading.Event()
-    concurrent_waiting = threading.Event()
-    release_publication = threading.Event()
-    interruption = KeyboardInterrupt("injected publication interruption")
-    cache._lifecycle = _ObservedCondition(concurrent_waiting)
-    finish_close_attempt = cache._finish_close_attempt
-
-    def interrupt_publication(
-        attempt: object,
-        phase: sqlite_module._ClosePhase,
-        failure: BaseException | None,
-    ) -> None:
-        if threading.current_thread().name == "interrupted-closer":
-            publication_started.set()
-            assert release_publication.wait(WATCHDOG_SECONDS)
-            raise interruption
-        finish_close_attempt(attempt, phase, failure)
-
-    monkeypatch.setattr(
-        cache,
-        "_finish_close_attempt",
-        interrupt_publication,
-    )
-
-    observed = _run_interrupted_and_concurrent_close(
-        cache,
-        publication_started,
-        concurrent_waiting,
-        release_publication,
-    )
-    assert any(result is interruption for result in observed)
-    repeated = next(
-        result
-        for result in observed
-        if isinstance(result, SqliteRecordCacheCloseError)
-    )
-    assert repeated.__cause__ is interruption
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(KEY, schema=SCHEMA)
-    with pytest.raises(SqliteRecordCacheCloseError) as later:
-        cache.close()
-    assert later.value.__cause__ is interruption
-
-
-def test_publication_interruption_supersedes_repeated_close_error(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
+    cache = await SqliteRecordCache.open(tmp_path / "cache.db")
     cleanup_failure = RuntimeError("injected cleanup failure")
 
-    def fail_cleanup() -> None:
+    async def fail_cleanup() -> None:
         raise cleanup_failure
 
-    monkeypatch.setattr(
-        cache._sqlite_backend,
-        "_close_connections",
-        fail_cleanup,
+    monkeypatch.setattr(cache._sqlite_backend, "aclose", fail_cleanup)
+    results = await asyncio.gather(
+        cache.aclose(), cache.aclose(), return_exceptions=True
     )
-    with pytest.raises(SqliteRecordCacheCloseError):
-        cache.close()
-
-    interruption = KeyboardInterrupt("injected publication interruption")
-
-    def interrupt_publication(
-        _attempt: object,
-        _phase: sqlite_module._ClosePhase,
-        _failure: BaseException | None,
-    ) -> None:
-        raise interruption
-
-    monkeypatch.setattr(
-        cache,
-        "_finish_close_attempt",
-        interrupt_publication,
-    )
-
-    with pytest.raises(KeyboardInterrupt) as caught:
-        cache.close()
-    assert caught.value is interruption
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(KEY, schema=SCHEMA)
-
-
-def test_process_level_cleanup_failure_terminalizes_lifecycle(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    cache.get(KEY, schema=SCHEMA)
-    interruption = KeyboardInterrupt("injected cleanup interruption")
-
-    def interrupt_cleanup() -> None:
-        raise interruption
-
-    monkeypatch.setattr(
-        cache._sqlite_backend,
-        "_close_connections",
-        interrupt_cleanup,
-    )
-
-    with pytest.raises(KeyboardInterrupt) as first:
-        cache.close()
-    assert first.value is interruption
-    with pytest.raises(SqliteRecordCacheCloseError) as repeated:
-        cache.close()
-    assert repeated.value.__cause__ is interruption
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(KEY, schema=SCHEMA)
-
-
-def test_cleanup_failure_is_terminal_for_all_close_callers(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    cache.get(KEY, schema=SCHEMA)
-    cleanup_started = threading.Event()
-    release_cleanup = threading.Event()
-    closer_waiting = threading.Event()
-    cache._lifecycle = _ObservedCondition(closer_waiting)
-    close_connections = cache._sqlite_backend._close_connections
-    cleanup_failure = RuntimeError("injected cleanup failure")
-
-    def failing_cleanup() -> None:
-        cleanup_started.set()
-        assert release_cleanup.wait(WATCHDOG_SECONDS)
-        close_connections()
-        raise cleanup_failure
-
-    monkeypatch.setattr(
-        cache._sqlite_backend,
-        "_close_connections",
-        failing_cleanup,
-    )
-    results: queue.Queue[object] = queue.Queue()
-    elected = threading.Thread(
-        target=_capture,
-        args=(cache.close, results),
-        name="failing-closer",
-    )
-    concurrent = threading.Thread(
-        target=_capture,
-        args=(cache.close, results),
-        name="concurrent-closer",
-    )
-
-    elected.start()
-    assert cleanup_started.wait(WATCHDOG_SECONDS)
-    with pytest.raises(SqliteRecordCacheClosedError):
-        cache.get(KEY, schema=SCHEMA)
-    concurrent.start()
-    assert closer_waiting.wait(WATCHDOG_SECONDS)
-    release_cleanup.set()
-    _join(elected)
-    _join(concurrent)
-
-    close_results = [results.get_nowait(), results.get_nowait()]
-    for result in close_results:
+    assert len(results) == 2
+    for result in results:
         assert isinstance(result, SqliteRecordCacheCloseError)
         assert result.__cause__ is cleanup_failure
     with pytest.raises(SqliteRecordCacheCloseError) as repeated:
-        cache.close()
+        await cache.aclose()
     assert repeated.value.__cause__ is cleanup_failure
     with pytest.raises(SqliteRecordCacheClosedError):
-        cache.put(KEY, SCHEMA, RECORD)
+        await cache.put(KEY, SCHEMA, RECORD)
 
 
-def test_close_centrally_closes_worker_thread_connections(
+async def test_close_from_active_operation_fails_without_deadlock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = await SqliteRecordCache.open(tmp_path / "cache.db")
+    original = cache._store._get_bound_objects
+    observed: list[SqliteRecordCacheCloseError] = []
+
+    async def close_during_get(
+        keys: tuple[str, ...],
+    ) -> Mapping[str, BoundObjectRow]:
+        with pytest.raises(SqliteRecordCacheCloseError) as caught:
+            await cache.aclose()
+        observed.append(caught.value)
+        return await original(keys)
+
+    monkeypatch.setattr(cache._store, "_get_bound_objects", close_during_get)
+    assert await cache.get(KEY, schema=SCHEMA) is None
+    assert len(observed) == 1
+    await cache.aclose()
+
+
+async def test_same_path_instances_have_independent_lifecycles(
     tmp_path: Path,
 ) -> None:
-    cache = SqliteRecordCache(tmp_path / "cache.db")
-    ready = threading.Barrier(3)
-    release_workers = threading.Event()
-    results: queue.Queue[object] = queue.Queue()
-
-    def read_from_worker() -> None:
-        cache.get(KEY, schema=SCHEMA)
-        ready.wait(WATCHDOG_SECONDS)
-        assert release_workers.wait(WATCHDOG_SECONDS)
-
-    workers = [
-        threading.Thread(
-            target=_capture,
-            args=(read_from_worker, results),
-            name=f"cache-worker-{index}",
-        )
-        for index in range(2)
-    ]
-    for worker in workers:
-        worker.start()
-
-    try:
-        ready.wait(WATCHDOG_SECONDS)
-        with cache._sqlite_backend._connections_lock:
-            connections = tuple(cache._sqlite_backend._connections)
-    finally:
-        release_workers.set()
-        for worker in workers:
-            _join(worker)
-
-    assert [results.get_nowait(), results.get_nowait()] == [None, None]
-    assert len(connections) == 2
-    cache.close()
-    for connection in connections:
-        with pytest.raises(sqlite3.ProgrammingError):
-            connection.execute("SELECT 1")
-
-
-def test_same_path_instances_have_isolated_lifecycles(tmp_path: Path) -> None:
     path = tmp_path / "cache.db"
-    first = SqliteRecordCache(path)
-    second = SqliteRecordCache(path)
-    first.put(KEY, SCHEMA, RECORD)
-    assert second.get(KEY, schema=SCHEMA) == CacheHit(record=RECORD)
+    first = await SqliteRecordCache.open(path)
+    second = await SqliteRecordCache.open(path)
+    await first.put(KEY, SCHEMA, RECORD)
+    assert await second.get(KEY, schema=SCHEMA) == CacheHit(RECORD)
+    await first.aclose()
+    assert await second.get(KEY, schema=SCHEMA) == CacheHit(RECORD)
+    await second.aclose()
 
-    first.close()
 
-    with pytest.raises(SqliteRecordCacheClosedError):
-        first.get(KEY, schema=SCHEMA)
-    assert second.get(KEY, schema=SCHEMA) == CacheHit(record=RECORD)
-    second.close()
+async def test_cross_loop_use_fails_visibly(tmp_path: Path) -> None:
+    cache = await SqliteRecordCache.open(tmp_path / "cache.db")
 
-    with SqliteRecordCache(path) as reopened:
-        assert reopened.get(KEY, schema=SCHEMA) == CacheHit(record=RECORD)
+    def other_loop() -> BaseException:
+        try:
+            asyncio.run(cache.get(KEY, schema=SCHEMA))
+        except BaseException as error:  # noqa: BLE001 - inspect boundary.
+            return error
+        raise AssertionError("cross-loop operation unexpectedly succeeded")
+
+    error = await asyncio.to_thread(other_loop)
+    assert isinstance(error, RuntimeError)
+    assert "event loop" in str(error)
+    await cache.aclose()

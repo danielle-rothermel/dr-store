@@ -1,25 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import multiprocessing
-import queue
 import sqlite3
 import threading
-import weakref
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import pytest
 
-from dr_store import (
-    BindOutcome,
-    BoundObjectWrite,
-    PutOutcome,
-    SqliteBackend,
-)
+from dr_store import SqliteBackend
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-    from multiprocessing.connection import Connection
-    from multiprocessing.process import BaseProcess
+    from multiprocessing.queues import Queue
     from multiprocessing.synchronize import Event
     from pathlib import Path
 
@@ -27,557 +19,289 @@ SCHEMA = "example.record"
 CONTENT_HASH = "a" * 64
 CANONICAL = '{"value":"stored"}'
 KEY = "durable-key"
-PROCESS_CONTENDERS = 6
 WATCHDOG_SECONDS = 15
 
-Operation = Literal["put", "bind"]
-ProcessResult = tuple[str, int, bool, str, str]
-Contender = tuple[str, Operation, int, str]
+
+async def _thread_event(event: threading.Event) -> None:
+    assert await asyncio.wait_for(
+        asyncio.to_thread(event.wait), WATCHDOG_SECONDS
+    )
 
 
-class _FakeConnection:
-    def __init__(
-        self,
-        *,
-        fail_on_execute: int | None = None,
-        close_error: BaseException | None = None,
-    ) -> None:
-        self.fail_on_execute = fail_on_execute
-        self.close_error = close_error
-        self.execute_calls = 0
-        self.close_calls = 0
-
-    def execute(self, _statement: str) -> None:
-        self.execute_calls += 1
-        if self.execute_calls == self.fail_on_execute:
-            raise RuntimeError("injected PRAGMA failure")
-
-    def executescript(self, _script: str) -> None:
-        pass
-
-    def commit(self) -> None:
-        pass
-
-    def close(self) -> None:
-        self.close_calls += 1
-        if self.close_error is not None:
-            raise self.close_error
-
-
-class _MidBatchOperationalFailure:
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self._connection = connection
-        self._binding_inserts = 0
-
-    @property
-    def in_transaction(self) -> bool:
-        return self._connection.in_transaction
-
-    def execute(
-        self,
-        statement: str,
-        parameters: tuple[str, ...] = (),
-    ) -> sqlite3.Cursor:
-        if statement.startswith("INSERT OR IGNORE INTO bindings"):
-            self._binding_inserts += 1
-            if self._binding_inserts == 2:
-                raise sqlite3.OperationalError(
-                    "injected mid-batch operational failure"
-                )
-        return self._connection.execute(statement, parameters)
-
-    def executemany(
-        self,
-        statement: str,
-        parameters: Iterable[tuple[str, ...]],
-    ) -> sqlite3.Cursor:
-        return self._connection.executemany(statement, parameters)
+def test_direct_construction_is_private(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match=r"await SqliteBackend\.open"):
+        SqliteBackend(tmp_path / "store.db")
 
 
 @pytest.mark.parametrize("path", ["", ":memory:"])
-def test_transient_database_paths_are_rejected(path: str) -> None:
-    with pytest.raises(ValueError, match=r".+"):
-        SqliteBackend(path)
+async def test_open_rejects_transient_paths(path: str) -> None:
+    with pytest.raises(ValueError, match="persistent filesystem path"):
+        await SqliteBackend.open(path)
 
 
-def test_relative_database_path_is_captured_at_construction(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_open_captures_relative_path_and_is_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     first = tmp_path / "first"
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
     monkeypatch.chdir(first)
-    backend = SqliteBackend("store.db")
-
+    backend = await SqliteBackend.open("store.db")
     monkeypatch.chdir(second)
-    assert backend.bind(
-        key=KEY,
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-    ).bound
-
+    try:
+        assert (
+            await backend.bind(
+                key=KEY, schema=SCHEMA, content_hash=CONTENT_HASH
+            )
+        ).bound
+    finally:
+        await backend.aclose()
     assert (first / "store.db").exists()
     assert not (second / "store.db").exists()
 
 
-def test_initialization_explicitly_closes_its_connection(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    connection = _FakeConnection()
-
-    def connect(_path: str, **_settings: object) -> _FakeConnection:
-        return connection
-
-    monkeypatch.setattr(sqlite3, "connect", connect)
-
-    SqliteBackend(tmp_path / "store.db")
-
-    assert connection.close_calls == 1
-
-
-def test_partial_connection_setup_failure_closes_before_reraising(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    connection = _FakeConnection(fail_on_execute=2)
-
-    def connect(_path: str, **_settings: object) -> _FakeConnection:
-        return connection
-
-    monkeypatch.setattr(sqlite3, "connect", connect)
-
-    with pytest.raises(RuntimeError):
-        SqliteBackend(tmp_path / "store.db")
-
-    assert connection.close_calls == 1
-
-
-def _collect_thread_connections(
-    backend: SqliteBackend,
-    count: int,
-) -> list[sqlite3.Connection]:
-    ready = threading.Barrier(count + 1)
-    release = threading.Event()
-    connections: queue.Queue[sqlite3.Connection] = queue.Queue()
-
-    def connect() -> None:
-        first = backend._conn
-        ready.wait(WATCHDOG_SECONDS)
-        if not release.wait(WATCHDOG_SECONDS):
-            return
-        assert backend._conn is first
-        connections.put(first)
-
-    threads = [threading.Thread(target=connect) for _ in range(count)]
-    for thread in threads:
-        thread.start()
-
-    try:
-        ready.wait(WATCHDOG_SECONDS)
-    finally:
-        release.set()
-        for thread in threads:
-            thread.join(WATCHDOG_SECONDS)
-
-    assert all(not thread.is_alive() for thread in threads)
-    return [connections.get_nowait() for _ in range(count)]
-
-
-def test_operational_connections_are_retained_separately_per_thread(
-    tmp_path: Path,
-) -> None:
-    backend = SqliteBackend(tmp_path / "store.db")
-
-    connections = _collect_thread_connections(backend, 2)
-
-    assert connections[0] is not connections[1]
-
-
-def test_direct_backend_does_not_retain_exited_thread_connections(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    initialization = _FakeConnection()
-    operational = _FakeConnection()
-    available = queue.Queue[_FakeConnection]()
-    available.put(initialization)
-    available.put(operational)
-    operational_reference = weakref.ref(operational)
-    del operational
-
-    def connect(_path: str, **_settings: object) -> _FakeConnection:
-        return available.get_nowait()
-
-    monkeypatch.setattr(sqlite3, "connect", connect)
-    backend = SqliteBackend(tmp_path / "store.db")
-
-    def use_backend() -> None:
-        assert backend._conn is backend._conn
-
-    thread = threading.Thread(target=use_backend)
-    thread.start()
-    thread.join(WATCHDOG_SECONDS)
-
-    assert not thread.is_alive()
-    assert backend._connections == set()
-    assert operational_reference() is None
-
-
-def test_close_connections_centrally_closes_all_worker_connections(
-    tmp_path: Path,
-) -> None:
-    backend = SqliteBackend._managed(tmp_path / "store.db")
-    connections = _collect_thread_connections(backend, 2)
-
-    backend._close_connections()
-
-    for connection in connections:
-        with pytest.raises(sqlite3.ProgrammingError):
-            connection.execute("SELECT 1")
-    backend._close_connections()
-
-
-def test_close_connections_attempts_every_close_before_reporting_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    initialization = _FakeConnection()
-    failed = _FakeConnection(
-        close_error=RuntimeError("injected close failure")
-    )
-    succeeded = _FakeConnection()
-    available = queue.Queue[_FakeConnection]()
-    for connection in (initialization, failed, succeeded):
-        available.put(connection)
-
-    def connect(_path: str, **_settings: object) -> _FakeConnection:
-        return available.get_nowait()
-
-    monkeypatch.setattr(sqlite3, "connect", connect)
-    backend = SqliteBackend._managed(tmp_path / "store.db")
-    _collect_thread_connections(backend, 2)
-
-    with pytest.raises(ExceptionGroup) as raised:
-        backend._close_connections()
-
-    assert raised.value.exceptions == (failed.close_error,)
-    assert failed.close_calls == 1
-    assert succeeded.close_calls == 1
-
-
-def test_process_interruption_does_not_skip_later_connection_closes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    interruption = KeyboardInterrupt()
-    initialization = _FakeConnection()
-    first = _FakeConnection(close_error=interruption)
-    second = _FakeConnection(close_error=interruption)
-    available = queue.Queue[_FakeConnection]()
-    for connection in (initialization, first, second):
-        available.put(connection)
-
-    def connect(_path: str, **_settings: object) -> _FakeConnection:
-        return available.get_nowait()
-
-    monkeypatch.setattr(sqlite3, "connect", connect)
-    backend = SqliteBackend._managed(tmp_path / "store.db")
-    _collect_thread_connections(backend, 2)
-
-    with pytest.raises(KeyboardInterrupt) as raised:
-        backend._close_connections()
-
-    assert raised.value is interruption
-    assert first.close_calls == 1
-    assert second.close_calls == 1
-
-
-def test_rows_and_replay_outcomes_persist_after_reopen(
+async def test_wal_normal_and_hash_lookup_plan_upgrades_existing_file(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "store.db"
-    original = SqliteBackend(path)
-    assert original.put_object(
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-        canonical=CANONICAL,
-    ).inserted
-    assert original.bind(
-        key=KEY,
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-    ).bound
-
-    reopened = SqliteBackend(path)
-    assert reopened.get_object(
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-    ) == (SCHEMA, CANONICAL)
-    assert reopened.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
-    assert reopened.put_object(
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-        canonical=CANONICAL,
-    ) == PutOutcome(
-        inserted=False,
-        stored_schema=SCHEMA,
-        stored_canonical=CANONICAL,
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE objects (
+            schema TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            canonical TEXT NOT NULL,
+            PRIMARY KEY (schema, content_hash)
+        ) WITHOUT ROWID;
+        CREATE TABLE bindings (
+            key TEXT PRIMARY KEY NOT NULL,
+            schema TEXT NOT NULL,
+            content_hash TEXT NOT NULL
+        ) WITHOUT ROWID;
+        """
     )
-    assert reopened.bind(
-        key=KEY,
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-    ) == BindOutcome(
-        bound=False,
-        existing_schema=SCHEMA,
-        existing_content_hash=CONTENT_HASH,
-    )
+    connection.close()
+
+    backend = await SqliteBackend.open(path)
+    try:
+        journal_mode = await backend._run(
+            lambda: backend._connection.execute(
+                "PRAGMA journal_mode"
+            ).fetchone()[0]
+        )
+        synchronous = await backend._run(
+            lambda: backend._connection.execute(
+                "PRAGMA synchronous"
+            ).fetchone()[0]
+        )
+        plan = await backend._run(
+            lambda: backend._connection.execute(
+                "EXPLAIN QUERY PLAN SELECT schema, canonical FROM objects "
+                "WHERE content_hash = ? "
+                "ORDER BY schema = ? DESC LIMIT 1",
+                (CONTENT_HASH, SCHEMA),
+            ).fetchall()
+        )
+    finally:
+        await backend.aclose()
+
+    assert journal_mode == "wal"
+    assert synchronous == 1  # SQLite's numeric value for NORMAL.
+    details = [row[3] for row in plan]
+    assert any("objects_by_content_hash" in detail for detail in details)
+    assert not any("SCAN objects" in detail for detail in details)
 
 
-def test_failed_transaction_rolls_back_and_connection_is_reusable(
+async def test_rows_persist_after_terminal_close_and_reopen(
     tmp_path: Path,
 ) -> None:
-    backend = SqliteBackend(tmp_path / "store.db")
-    connection = backend._conn
-
-    with pytest.raises(RuntimeError, match="injected transaction failure"):
-        _write_then_fail(backend)
-
-    assert backend._conn is connection
-    assert backend.get_binding(key=KEY) is None
-    assert backend.bind(
-        key=KEY,
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-    ) == BindOutcome(
-        bound=True,
-        existing_schema=SCHEMA,
-        existing_content_hash=CONTENT_HASH,
-    )
-    assert backend.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
-
-
-def test_mid_batch_operational_failure_rolls_back_objects_and_bindings(
-    tmp_path: Path,
-) -> None:
-    backend = SqliteBackend(tmp_path / "store.db")
-    connection = backend._conn
-    backend._local.conn = _MidBatchOperationalFailure(connection)
-    entries = (
-        BoundObjectWrite(
-            key="batch:first",
+    path = tmp_path / "store.db"
+    first = await SqliteBackend.open(path)
+    assert (
+        await first.put_object(
             schema=SCHEMA,
             content_hash=CONTENT_HASH,
             canonical=CANONICAL,
-        ),
-        BoundObjectWrite(
-            key="batch:second",
-            schema=SCHEMA,
-            content_hash="b" * 64,
-            canonical='{"value":"second"}',
-        ),
-    )
+        )
+    ).inserted
+    assert (
+        await first.bind(key=KEY, schema=SCHEMA, content_hash=CONTENT_HASH)
+    ).bound
+    await first.aclose()
+    await first.aclose()
 
+    with pytest.raises(RuntimeError, match="closed"):
+        await first.get_binding(key="\0")
+
+    reopened = await SqliteBackend.open(path)
     try:
-        with pytest.raises(
-            sqlite3.OperationalError,
-            match="injected mid-batch operational failure",
-        ):
-            backend.put_bound_objects(entries=entries)
+        assert await reopened.get_object(
+            schema=SCHEMA, content_hash=CONTENT_HASH
+        ) == (SCHEMA, CANONICAL)
+        assert await reopened.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
     finally:
-        backend._local.conn = connection
-
-    for entry in entries:
-        assert backend.get_binding(key=entry.key) is None
-        assert (
-            backend.get_object(
-                schema=entry.schema,
-                content_hash=entry.content_hash,
-            )
-            is None
-        )
+        await reopened.aclose()
 
 
-def _write_then_fail(backend: SqliteBackend) -> None:
-    with backend._immediate() as transaction:
-        transaction.execute(
-            "INSERT INTO bindings (key, schema, content_hash) "
-            "VALUES (?, ?, ?)",
-            (KEY, SCHEMA, CONTENT_HASH),
-        )
-        raise RuntimeError("injected transaction failure")
-
-
-def _sqlite_contender(
-    contender: Contender,
-    messages: Connection,
-    release: Event,
+async def test_admission_cancellation_submits_no_second_worker_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    db_path, operation, identity, value = contender
-    backend = SqliteBackend(db_path)
-    messages.send(("ready", identity))
-    if not release.wait(WATCHDOG_SECONDS):
-        messages.send(("watchdog", identity))
-        return
+    backend = await SqliteBackend.open(tmp_path / "store.db")
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
 
-    if operation == "put":
-        put = backend.put_object(
-            schema=SCHEMA,
-            content_hash=CONTENT_HASH,
-            canonical=value,
+    def gated_get(key: str) -> tuple[str, str] | None:
+        calls.append(key)
+        started.set()
+        assert release.wait(WATCHDOG_SECONDS)
+        return None
+
+    monkeypatch.setattr(backend, "_get_binding", gated_get)
+    admitted = asyncio.create_task(backend.get_binding(key="first"))
+    await _thread_event(started)
+    waiting = asyncio.create_task(backend.get_binding(key="second"))
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    release.set()
+    assert await admitted is None
+    assert calls == ["first"]
+    await backend.aclose()
+
+
+async def test_cancelled_admitted_operation_settles_and_failure_is_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = await SqliteBackend.open(tmp_path / "store.db")
+    started = threading.Event()
+    release = threading.Event()
+    worker_failure = RuntimeError("injected worker failure")
+
+    def fail_after_release(_key: str) -> None:
+        started.set()
+        assert release.wait(WATCHDOG_SECONDS)
+        raise worker_failure
+
+    monkeypatch.setattr(backend, "_get_binding", fail_after_release)
+    operation = asyncio.create_task(backend.get_binding(key=KEY))
+    await _thread_event(started)
+    operation.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await operation
+    assert caught.value.__cause__ is worker_failure
+
+    monkeypatch.undo()
+    assert await backend.get_binding(key=KEY) is None
+    await backend.aclose()
+
+
+async def test_close_waits_for_admitted_work_and_rejects_new_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = await SqliteBackend.open(tmp_path / "store.db")
+    started = threading.Event()
+    release = threading.Event()
+    close_started = asyncio.Event()
+    close_resources = backend._close_resources
+
+    def gated_get(_key: str) -> None:
+        started.set()
+        assert release.wait(WATCHDOG_SECONDS)
+
+    async def observed_close() -> None:
+        close_started.set()
+        await close_resources()
+
+    monkeypatch.setattr(backend, "_get_binding", gated_get)
+    monkeypatch.setattr(backend, "_close_resources", observed_close)
+    operation = asyncio.create_task(backend.get_binding(key=KEY))
+    await _thread_event(started)
+    closing = asyncio.create_task(backend.aclose())
+    await asyncio.wait_for(close_started.wait(), WATCHDOG_SECONDS)
+    with pytest.raises(RuntimeError, match="closed"):
+        await backend.get_binding(key="new")
+    release.set()
+    assert await operation is None
+    await closing
+
+
+async def test_cross_loop_use_fails_visibly(tmp_path: Path) -> None:
+    backend = await SqliteBackend.open(tmp_path / "store.db")
+
+    def other_loop() -> BaseException:
+        try:
+            asyncio.run(backend.get_binding(key=KEY))
+        except BaseException as error:  # noqa: BLE001 - inspect boundary.
+            return error
+        raise AssertionError("cross-loop operation unexpectedly succeeded")
+
+    error = await asyncio.to_thread(other_loop)
+    assert isinstance(error, RuntimeError)
+    assert "event loop" in str(error)
+    await backend.aclose()
+
+
+def _process_bind(
+    path: str,
+    identity: int,
+    release: Event,
+    results: Queue[tuple[bool, str, str]],
+) -> None:
+    async def run() -> None:
+        backend = await SqliteBackend.open(path)
+        assert release.wait(WATCHDOG_SECONDS)
+        outcome = await backend.bind(
+            key=KEY,
+            schema=f"schema.{identity}",
+            content_hash=f"{identity:x}" * 64,
         )
-        messages.send(
+        results.put(
             (
-                "result",
-                identity,
-                put.inserted,
-                put.stored_schema,
-                put.stored_canonical,
+                outcome.bound,
+                outcome.existing_schema,
+                outcome.existing_content_hash,
             )
         )
-        return
+        await backend.aclose()
 
-    bound = backend.bind(
-        key=KEY,
-        schema=f"schema.{value}",
-        content_hash=value * 64,
-    )
-    messages.send(
-        (
-            "result",
-            identity,
-            bound.bound,
-            bound.existing_schema,
-            bound.existing_content_hash,
-        )
-    )
+    asyncio.run(run())
 
 
-def _run_process_contenders(
-    db_path: Path,
-    operation: Operation,
-    values: list[str],
-) -> list[ProcessResult]:
-    # Concurrent first initialization is outside this contention test's scope.
-    SqliteBackend(db_path)
+async def test_cross_process_contention_has_one_correlated_winner(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "store.db"
+    initialized = await SqliteBackend.open(path)
+    await initialized.aclose()
     context = multiprocessing.get_context("spawn")
     release = context.Event()
-    processes: list[BaseProcess] = []
-    receivers: list[Connection] = []
-    results: list[ProcessResult] = []
-    stuck: list[int | None] = []
-
-    for identity, value in enumerate(values):
-        receiver, sender = context.Pipe(duplex=False)
-        process = context.Process(
-            target=_sqlite_contender,
-            args=(
-                (str(db_path), operation, identity, value),
-                sender,
-                release,
-            ),
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_process_bind,
+            args=(str(path), identity, release, results),
         )
-        receivers.append(receiver)
-        processes.append(process)
+        for identity in range(4)
+    ]
+    for process in processes:
         process.start()
-        sender.close()
-
-    try:
-        for identity, receiver in enumerate(receivers):
-            if not receiver.poll(WATCHDOG_SECONDS):
-                raise AssertionError(
-                    f"contender {identity} did not report ready"
-                )
-            assert receiver.recv() == ("ready", identity)
-
-        release.set()
-        for identity, receiver in enumerate(receivers):
-            if not receiver.poll(WATCHDOG_SECONDS):
-                raise AssertionError(
-                    f"contender {identity} did not report an outcome"
-                )
-            message = receiver.recv()
-            assert message[0] == "result", message
-            results.append(message)
-    finally:
-        release.set()
-        for process in processes:
-            process.join(WATCHDOG_SECONDS)
-            if process.is_alive():
-                stuck.append(process.pid)
-                process.terminate()
-                process.join(WATCHDOG_SECONDS)
-            process.close()
-        for receiver in receivers:
-            receiver.close()
-
-    assert stuck == [], f"contenders exceeded teardown watchdog: {stuck}"
-    return results
-
-
-@pytest.mark.parametrize(
-    "canonicals",
-    [
-        pytest.param([CANONICAL] * PROCESS_CONTENDERS, id="same-value"),
-        pytest.param(
-            [
-                f'{{"contender":{index}}}'
-                for index in range(PROCESS_CONTENDERS)
-            ],
-            id="competing-values",
-        ),
-    ],
-)
-def test_cross_process_put_has_one_reopened_correlated_winner(
-    tmp_path: Path,
-    canonicals: list[str],
-) -> None:
-    path = tmp_path / "store.db"
-    results = _run_process_contenders(path, "put", canonicals)
-
-    assert sum(result[2] for result in results) == 1
-    reopened = SqliteBackend(path)
-    winner = reopened.get_object(
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-    )
-    assert winner is not None
-    winner_schema, winner_canonical = winner
-    assert winner_schema == SCHEMA
-    assert winner_canonical in canonicals
-    for _, identity, inserted, stored_schema, stored_canonical in results:
-        assert stored_schema == winner_schema
-        assert stored_canonical == winner_canonical
-        if inserted:
-            assert canonicals[identity] == winner_canonical
-
-
-@pytest.mark.parametrize(
-    "values",
-    [
-        pytest.param(["a"] * PROCESS_CONTENDERS, id="same-reference"),
-        pytest.param(
-            [f"{index:x}" for index in range(PROCESS_CONTENDERS)],
-            id="competing-references",
-        ),
-    ],
-)
-def test_cross_process_bind_has_one_reopened_correlated_winner(
-    tmp_path: Path,
-    values: list[str],
-) -> None:
-    path = tmp_path / "store.db"
-    results = _run_process_contenders(path, "bind", values)
-
-    assert sum(result[2] for result in results) == 1
-    reopened = SqliteBackend(path)
-    winner = reopened.get_binding(key=KEY)
-    expected_references = [(f"schema.{value}", value * 64) for value in values]
-    assert winner in expected_references
-    for _, identity, bound, existing_schema, existing_hash in results:
-        assert (existing_schema, existing_hash) == winner
-        if bound:
-            assert expected_references[identity] == winner
+    release.set()
+    observed = [
+        await asyncio.wait_for(
+            asyncio.to_thread(results.get), WATCHDOG_SECONDS
+        )
+        for _ in processes
+    ]
+    for process in processes:
+        await asyncio.to_thread(process.join, WATCHDOG_SECONDS)
+        assert not process.is_alive()
+        assert process.exitcode == 0
+        process.close()
+    results.close()
+    results.join_thread()
+    assert sum(bound for bound, _, _ in observed) == 1
+    winners = {(schema, content_hash) for _, schema, content_hash in observed}
+    assert len(winners) == 1

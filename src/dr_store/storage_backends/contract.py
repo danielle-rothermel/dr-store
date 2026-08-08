@@ -45,7 +45,7 @@ class BoundObjectWrite:
 class Backend(Protocol):
     """Atomic object and binding operations."""
 
-    def put_object(
+    async def put_object(
         self,
         *,
         schema: str,
@@ -60,7 +60,7 @@ class Backend(Protocol):
         """
         ...
 
-    def get_object(
+    async def get_object(
         self,
         *,
         schema: str,
@@ -72,7 +72,7 @@ class Backend(Protocol):
         """
         ...
 
-    def bind(
+    async def bind(
         self,
         *,
         key: str,
@@ -85,9 +85,9 @@ class Backend(Protocol):
         """
         ...
 
-    def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
+    async def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
 
-    def get_bound_objects(
+    async def get_bound_objects(
         self,
         *,
         keys: tuple[str, ...],
@@ -95,7 +95,7 @@ class Backend(Protocol):
         """Return bound rows for the requested exact keys."""
         ...
 
-    def put_bound_objects(
+    async def put_bound_objects(
         self,
         *,
         entries: tuple[BoundObjectWrite, ...],

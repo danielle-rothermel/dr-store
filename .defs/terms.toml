@@ -10,9 +10,10 @@ categories = ["content addressing", "object storage"]
 [[terms]]
 name = "schema"
 definition = """
-A caller-declared label for the shape and meaning of a record. The label is \
-opaque to storage and distinguishes references to the same content under \
-different declared shapes."""
+A non-empty caller-declared text label for the shape and meaning of a record. \
+It contains neither NUL nor unpaired surrogate code points, is otherwise opaque \
+to storage, and distinguishes references to the same content under different \
+declared shapes."""
 categories = ["content addressing", "object storage"]
 part_of = ["object reference"]
 
@@ -35,8 +36,9 @@ categories = ["content addressing", "document artifacts"]
 [[terms]]
 name = "key"
 definition = """
-An opaque caller-owned string naming one place in a binding table. Storage \
-does not parse the string or assign it domain meaning."""
+An opaque caller-owned text string naming one place in a binding table. It may \
+be empty but contains neither NUL nor unpaired surrogate code points; storage \
+does not otherwise parse it or assign it domain meaning."""
 categories = ["object storage"]
 part_of = ["binding"]
 
@@ -95,8 +97,8 @@ part_of = ["object reference"]
 [[terms]]
 name = "object reference"
 definition = """
-A validated content-addressed handle composed of a declared schema and the \
-full content hash of one record."""
+A validated content-addressed handle composed of a schema from the shared text \
+domain and the full content hash of one record."""
 exported_symbols = ["ObjectReference", "ReferenceValidationError"]
 categories = ["content addressing", "object storage"]
 part_of = ["binding"]
@@ -104,8 +106,9 @@ part_of = ["binding"]
 [[terms]]
 name = "object store"
 definition = """
-The append-only mapping from object references to immutable records together \
-with the single-assignment mapping from caller-owned keys to those references."""
+The asynchronous append-only mapping from object references to immutable records \
+together with the single-assignment mapping from caller-owned keys to those \
+references."""
 exported_symbols = ["ObjectStore", "StoreError"]
 categories = ["object storage"]
 
@@ -144,9 +147,10 @@ is_a = ["compare-and-set"]
 [[terms]]
 name = "backend"
 definition = """
-The storage boundary that supplies atomic insert-if-absent operations and \
-point and batch operations for object and binding tables. Persistence scope \
-belongs to each backend implementation."""
+The asynchronous storage boundary that supplies atomic insert-if-absent \
+operations and point and batch operations for object and binding tables. Each \
+implementation owns its persistence scope and completes transaction and resource \
+cleanup before an awaited operation terminates."""
 exported_symbols = [
   "Backend",
   "MemoryBackend",
@@ -159,8 +163,8 @@ categories = ["object storage"]
 [[terms]]
 name = "bound object batch"
 definition = """
-A backend operation over caller-supplied exact keys that either reads each \
-available binding together with its referenced object row or atomically stores \
+An awaited backend operation over caller-supplied exact keys that either reads \
+each available binding together with its referenced object row or atomically stores \
 prepared objects and establishes their first-writer bindings."""
 exported_symbols = ["BoundObjectRow", "BoundObjectWrite"]
 categories = ["object storage", "record caching"]
@@ -239,18 +243,19 @@ is_a = ["hash"]
 [[terms]]
 name = "record cache"
 definition = """
-The memoization facade that binds cache keys to object references over an \
-object store and returns a typed hit or miss for each exact requested key. It \
-adds no delete, expiry, eviction, size-cap, enumeration, prefix-query, dirty-\
-tracking, or scheduling path."""
+The asynchronous memoization facade that binds cache keys to object references \
+over an object store and returns a typed hit or miss for each exact requested \
+key. It adds no delete, expiry, eviction, size-cap, enumeration, prefix-query, \
+dirty-tracking, or scheduling path."""
 exported_symbols = ["RecordCache", "CacheHit"]
 categories = ["record caching"]
 
 [[terms]]
 name = "managed SQLite record cache"
 definition = """
-A persistent record cache that owns the current-process resource lifecycle for \
-one cache instance."""
+A long-lived asynchronous persistent record cache that owns the current-process \
+SQLite backend, dedicated worker, connection, and resource lifecycle for one \
+cache instance."""
 exported_symbols = [
   "SqliteRecordCache",
   "SqliteRecordCacheCloseError",
@@ -283,8 +288,9 @@ part_of = ["record cache"]
 [[terms]]
 name = "record cache read"
 definition = """
-A read that reports one hit or miss for every distinct exact requested key. An \
-absent, missing, wrong-schema, or unverifiable stored value is a miss; invalid \
-requested schemas and operational backend faults are still raised."""
+An awaited read that reports one hit or miss for every distinct exact requested \
+key. An absent, missing, wrong-schema, or unverifiable stored value is a miss; \
+invalid requested schemas, cancellation, and operational backend faults remain \
+visible."""
 categories = ["record caching"]
 part_of = ["record cache"]

@@ -61,6 +61,8 @@ def test_is_content_hash_accepts_only_64_lowercase_hex() -> None:
         pytest.param(None, id="none"),
         pytest.param(123, id="integer"),
         pytest.param(b"bytes", id="bytes"),
+        pytest.param("schema\0tail", id="nul"),
+        pytest.param("\ud800", id="unpaired-surrogate"),
     ],
 )
 def test_reference_rejects_invalid_schema(bad_schema: object) -> None:

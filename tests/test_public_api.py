@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import pkgutil
 import re
 
@@ -53,3 +54,78 @@ def test_object_store_public_surface_is_exact() -> None:
 
     public = {name for name in dir(ObjectStore) if not name.startswith("_")}
     assert public == {"put", "get", "bind", "resolve"}
+
+
+def test_backend_public_surfaces_are_exact() -> None:
+    from dr_store import Backend, MemoryBackend
+
+    expected = {
+        "bind",
+        "get_binding",
+        "get_bound_objects",
+        "get_object",
+        "put_bound_objects",
+        "put_object",
+    }
+    for backend_type in (Backend, MemoryBackend):
+        public = {
+            name for name in dir(backend_type) if not name.startswith("_")
+        }
+        assert public == expected
+        assert all(
+            inspect.iscoroutinefunction(getattr(backend_type, name))
+            for name in expected
+        )
+
+
+def test_record_cache_public_surface_is_exact() -> None:
+    from dr_store import RecordCache
+
+    public = {name for name in dir(RecordCache) if not name.startswith("_")}
+    assert public == {"get", "get_many", "put", "put_many"}
+    assert all(
+        inspect.iscoroutinefunction(getattr(RecordCache, name))
+        for name in public
+    )
+
+
+def test_sqlite_backend_public_surface_is_exact() -> None:
+    from dr_store import SqliteBackend
+
+    public = {name for name in dir(SqliteBackend) if not name.startswith("_")}
+    expected = {
+        "aclose",
+        "bind",
+        "get_binding",
+        "get_bound_objects",
+        "get_object",
+        "open",
+        "put_bound_objects",
+        "put_object",
+    }
+    assert public == expected
+    assert all(
+        inspect.iscoroutinefunction(getattr(SqliteBackend, name))
+        for name in expected
+    )
+
+
+def test_sqlite_record_cache_public_surface_is_exact() -> None:
+    from dr_store import SqliteRecordCache
+
+    public = {
+        name for name in dir(SqliteRecordCache) if not name.startswith("_")
+    }
+    expected = {
+        "aclose",
+        "get",
+        "get_many",
+        "open",
+        "put",
+        "put_many",
+    }
+    assert public == expected
+    assert all(
+        inspect.iscoroutinefunction(getattr(SqliteRecordCache, name))
+        for name in expected
+    )

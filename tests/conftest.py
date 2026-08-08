@@ -1,21 +1,21 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import pytest
 
 from dr_store import Backend, MemoryBackend, ObjectStore, SqliteBackend
 
-type BackendFactory = Callable[[Path], Backend]
+type BackendFactory = Callable[[Path], Awaitable[Backend]]
 
 
-def _memory_backend(_path: Path) -> Backend:
+async def _memory_backend(_path: Path) -> Backend:
     return MemoryBackend()
 
 
-def _sqlite_backend(path: Path) -> Backend:
-    return SqliteBackend(path)
+async def _sqlite_backend(path: Path) -> Backend:
+    return await SqliteBackend.open(path)
 
 
 @pytest.fixture(
@@ -29,8 +29,13 @@ def backend_factory(request: pytest.FixtureRequest) -> BackendFactory:
 
 
 @pytest.fixture
-def backend(backend_factory: BackendFactory, tmp_path: Path) -> Backend:
-    return backend_factory(tmp_path / "store.db")
+async def backend(
+    backend_factory: BackendFactory, tmp_path: Path
+) -> AsyncIterator[Backend]:
+    instance = await backend_factory(tmp_path / "store.db")
+    yield instance
+    if isinstance(instance, SqliteBackend):
+        await instance.aclose()
 
 
 @pytest.fixture
