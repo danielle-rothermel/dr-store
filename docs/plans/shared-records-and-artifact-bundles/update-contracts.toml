@@ -3,6 +3,38 @@
 # evidence checks land.
 
 [[contracts]]
+title = "Object references validate their declared parts"
+statement = """
+An object reference contains a schema from the shared text domain and a \
+64-character lowercase hexadecimal content hash. Schemas are non-empty and \
+contain neither NUL nor unpaired surrogate code points. Construction and every \
+public backend or facade path that accepts schema text reject any other shape \
+before storage work begins."""
+rationale = """
+One validation domain prevents direct backend use from bypassing the object \
+reference boundary while retaining every other schema character as opaque \
+caller-owned text. This validation does not claim that referenced content \
+already exists."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "Bindings are single-assignment"
+statement = """
+Binding an unbound caller-owned key stores one object reference atomically; \
+replaying the same reference is idempotent, and requesting a different \
+reference raises a typed conflict that preserves the existing winner. Binding \
+keys may be empty and contain any text except NUL or unpaired surrogate code \
+points. Every public backend and facade binding path validates that domain \
+before storage work begins, and the object-store surface exposes no clear, \
+overwrite, or rebind operation."""
+rationale = """
+Single assignment makes a successful key resolution stable while allowing \
+concurrent contenders to observe one correlated winner. One shared permissive \
+text domain preserves opaque caller-owned keys without letting backend-specific \
+string constraints select different winners."""
+date = "2026-08-08"
+
+[[contracts]]
 title = "Backends own atomicity and declare persistence scope"
 statement = """
 Every backend supplies awaited atomic insert-if-absent operations for object \
@@ -19,12 +51,14 @@ The worker executes complete operations outside the event-loop thread, chunks \
 exact-key reads into joined queries without promising one batch-wide snapshot, \
 and uses one immediate transaction for each non-empty write batch. Cancellation \
 while awaiting admission starts no SQLite work. A cancelled admitted operation \
-does not abandon its worker work or publish cancellation before the operation \
-and its cleanup settle. SQLite requires a non-transient filesystem path, captures \
-its lexical absolute path during open, retains committed rows across reopen, and \
-supports cross-process contention without claiming power-loss durability. Empty \
-and `:memory:` paths are rejected; the captured absolute path prevents later \
-working-directory redirection but does not freeze symlink targets."""
+does not abandon its worker work: the caller waits until the operation and its \
+cleanup settle, then cancellation wins. If that worker path also fails, its \
+failure remains the cause of the cancellation. SQLite requires a non-transient \
+filesystem path, captures its lexical absolute path during open, retains \
+committed rows across reopen, and supports cross-process contention without \
+claiming power-loss durability. Empty and `:memory:` paths are rejected; the \
+captured absolute path prevents later working-directory redirection but does not \
+freeze symlink targets."""
 rationale = """
 The object store owns hashing, verification, idempotency, and typed conflicts, \
 while each asynchronous backend owns the atomic storage and resource-cleanup \
@@ -38,14 +72,18 @@ date = "2026-08-08"
 title = "SQLite backends own one asynchronous worker lifecycle"
 statement = """
 `SqliteBackend.open(...)` returns only after its dedicated worker, connection, \
-and schema are ready. The instance admits each point or batch request as one \
-whole serialized worker operation. The backend is a long-lived resource; no \
-supported path opens and closes it around one record operation. `aclose()` \
-rejects new work, waits for every admitted operation and its cleanup to settle, \
-closes the connection and worker, and leaves the instance terminal; successful \
-close is idempotent. Async context exit performs the same close, while direct \
-construction, lazy first-use initialization, and context-entry-only \
-initialization are not public paths."""
+and schema are ready and binds those resources to the event loop performing the \
+open. While resources remain open, every backend operation and `aclose()` must \
+run on that loop; cross-loop use fails visibly. The instance admits each point \
+or batch request as one whole serialized worker operation. The backend is a \
+long-lived resource; no supported path opens and closes it around one record \
+operation. `aclose()` rejects new work, waits for every admitted operation and \
+its cleanup to settle, closes the connection and worker, and leaves the instance \
+terminal; successful close is idempotent. A raw backend storage operation after \
+close raises `RuntimeError`; no new public backend-closed exception is defined. \
+Async context exit performs the same close, while direct construction, lazy \
+first-use initialization, and context-entry-only initialization are not public \
+paths."""
 rationale = """
 One connection-affine worker makes SQLite transaction and cancellation behavior \
 predictable without consuming the process-wide executor or inventing parallel \
@@ -94,24 +132,41 @@ stable even when a cancelled write has an uncertain observed outcome."""
 date = "2026-08-08"
 
 [[contracts]]
+title = "Callers own domain meaning"
+statement = """
+Schemas and binding keys are opaque within their shared validated text domains, \
+and manifest payload fields are opaque strict JSON. Callers own their meaning, \
+identity selection, lifecycle, retention, cache scheduling, dirty tracking, key \
+enumeration and prefix-query policy, and configured byte, depth, and sidecar cap \
+policy; storage does not infer those domain rules or supply those cache policies."""
+rationale = """
+Keeping domain policy outside the foundational storage boundary lets the same \
+primitives serve unrelated consumers without silently redefining their data. \
+The minimal shared text validation is a storage interoperability boundary, not \
+domain interpretation."""
+date = "2026-08-08"
+
+[[contracts]]
 title = "Managed SQLite record caches own their complete lifecycle"
 statement = """
 `SqliteRecordCache.open(...)` returns only after its owned SQLite backend, \
-dedicated worker, connection, and schema are ready. Each single or bulk cache \
-read or write is admitted as one whole operation while open. The cache is a \
-long-lived resource; no supported path opens and closes it around one record \
-operation. `aclose()` rejects new operations with a typed closed error, waits \
-for every admitted operation and its worker cleanup to settle, and then closes \
-the backend resources owned by that instance. Async context exit performs the \
-same close; direct construction, lazy initialization, and context-entry-only \
-initialization are not public paths. Once close begins the lifecycle remains \
-terminal; cancelling one close waiter does not cancel shared cleanup or reopen \
-the cache. Concurrent and later close callers observe the same successful or \
-typed terminal-failure outcome, and successful close is idempotent. The \
-persistent database path is made absolute during open without freezing symlink \
-targets, transient paths are rejected, completed commits persist across close \
-and reopen, and separate instances and processes retain independent lifecycles \
-even when they use the same path."""
+dedicated worker, connection, and schema are ready and binds those resources to \
+the event loop performing the open. While resources remain open, every cache \
+operation and `aclose()` must run on that loop; cross-loop use fails visibly. \
+Each single or bulk cache read or write is admitted as one whole operation while \
+open. The cache is a long-lived resource; no supported path opens and closes it \
+around one record operation. `aclose()` rejects new operations with a typed \
+closed error, waits for every admitted operation and its worker cleanup to \
+settle, and then closes the backend resources owned by that instance. Async \
+context exit performs the same close; direct construction, lazy initialization, \
+and context-entry-only initialization are not public paths. Once close begins \
+the lifecycle remains terminal; cancelling one close waiter does not cancel \
+shared cleanup or reopen the cache. Concurrent and later close callers observe \
+the same successful or typed terminal-failure outcome, and successful close is \
+idempotent. The persistent database path is made absolute during open without \
+freezing symlink targets, transient paths are rejected, completed commits \
+persist across close and reopen, and separate instances and processes retain \
+independent lifecycles even when they use the same path."""
 rationale = """
 Whole-operation admission prevents asynchronous shutdown from invalidating work \
 between binding and object-store steps. One shared terminal cleanup operation \

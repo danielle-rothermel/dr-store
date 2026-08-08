@@ -1,6 +1,7 @@
 # Async Shared Records and Artifact Bundles
 
-Status: agreed design plan for local refinement; implementation has not started.
+Status: agreed design plan with implementation selections frozen; implementation
+has not started.
 
 ## Planning sources and ownership
 
@@ -80,6 +81,9 @@ Memory, SQLite, and PostgreSQL implement the same backend semantics and shared
 conformance suite. Exact content verification remains at every record-storage
 trust boundary. Cancellation, cleanup, replay, first-writer behavior, and
 persistence scope are governed by the proposed replacement and new contracts.
+Schemas remain non-empty, keys may be empty, and both text domains reject NUL
+and unpaired surrogate code points through every backend and facade before
+storage work begins.
 
 This keeps async behavior at the capability boundary instead of making it a
 backend-specific variant, and avoids two public surfaces whose semantics could
@@ -89,26 +93,33 @@ drift.
 
 SQLite uses one connection-affine worker per long-lived backend, admits no more
 than one submitted or running worker operation, and gates other callers before
-submission. WAL `synchronous=NORMAL` matches the bounded persistence claim, and
-hash-leading object lookup prevents alternate-schema resolution from scanning
-the object table. Exact admission, cancellation, lifecycle, synchronization,
-and indexing guarantees live in the [updated contracts](update-contracts.toml);
-the corresponding managed-cache concept lives in the
-[updated terms](update-terms.toml).
+submission. Its resources are bound to the event loop that opens them, and
+cross-loop use fails visibly. Cancellation after admission waits for worker work
+and cleanup to settle before cancellation wins, retaining a worker failure as
+its cause. A raw `SqliteBackend` operation after close raises `RuntimeError`;
+there is no new public backend-closed exception. WAL `synchronous=NORMAL`
+matches the bounded persistence claim, and hash-leading object lookup prevents
+alternate-schema resolution from scanning the object table. Exact admission,
+cancellation, lifecycle, synchronization, and indexing guarantees live in the
+[updated contracts](update-contracts.toml); the corresponding managed-cache
+concept lives in the [updated terms](update-terms.toml).
 
 This topology favors explicit resource ownership, predictable cancellation and
 shutdown, and one state-synchronized lifecycle over executor-wide shared state.
 
 ### PostgreSQL adapter and installation
 
-PostgreSQL uses one required driver's concrete caller-owned async pool, an
-explicit absent-only installation into a fixed namespace, and deterministic
-exact-text identity independent of deployment defaults. The backend introduces
-no managed pool, connection-source Protocol, configurable namespace, or initial
-migration framework. Its hash-leading object key and set-based, chunked batch
-operations prevent hash-only scans, per-entry round trips, and repeated transfer
-of one canonical object for multiple bindings. The exact ownership,
-installation, credential, storage, and batch guarantees live in the
+PostgreSQL uses required `asyncpg>=0.31.0` and accepts one concrete caller-owned
+`asyncpg.Pool`. Public `install_postgres` performs absent-only installation into
+the fixed `dr_store` namespace, and public `PostgresBackend` supplies storage.
+The supported database boundary is PostgreSQL 16 through 18 with UTF-8 server
+encoding, and schema and key text use `pg_catalog.ucs_basic` for deterministic
+identity independent of deployment defaults. The backend introduces no optional
+import, managed pool, DSN ownership, connection-source Protocol, configurable
+namespace, or migration framework. Its hash-leading object key and set-based,
+chunked batch operations prevent hash-only scans, per-entry round trips, and
+repeated transfer of one canonical object for multiple bindings. The exact
+ownership, installation, credential, storage, and batch guarantees live in the
 [new contracts](plan-contracts.toml), and the capability definition lives in the
 [new terms](plan-terms.toml).
 
@@ -143,11 +154,13 @@ without adding speculative compatibility readers.
 Bundle publication stores complete caller-supplied artifact bytes and admits
 independent concurrent writers for distinct exact names. Each synchronous
 writer owns one file and incremental hash; the bundle owns thread-safe name and
-state coordination but schedules no tasks and multiplexes no bytes. Manifest
-publication fails without waiting until every admitted writer has finalized.
-Retention and truncation remain outside the capability. Exact writer,
-publication, and descriptor behavior lives in the
-[new contracts](plan-contracts.toml).
+state coordination but schedules no tasks and multiplexes no bytes. A publish
+call made with an active writer or invalid payload is a nonterminal precondition
+refusal. A failed admitted writer permanently prevents publication. The
+publication becomes terminal only when a valid publish call after all writers
+finalized successfully begins the manifest attempt. Retention and truncation
+remain outside the capability. Exact writer, publication, and descriptor
+behavior lives in the [new contracts](plan-contracts.toml).
 
 This supports concurrent stdout/stderr-shaped producers without turning bundle
 publication into a scheduling API.
@@ -158,8 +171,11 @@ Bundle reads validate and pin the manifest under caller-supplied bounds. An
 explicit integrity audit eagerly verifies every declared artifact. A separate
 synchronous verified-consumption operation delivers one selected artifact to a
 consumer callback through a package-owned facade while hashing and counting the
-same bytes; only EOF with matching hash and length is verified success. The
-public name of the consumption operation remains a PR 3 selection.
+same bytes; only EOF with matching hash and length is verified success. Public
+`ArtifactBundleReader(path, limits)` supplies `audit()` and
+`consume_and_verify_artifact(...)`; the latter gives the callback a
+`VerifyingArtifactReader` exposing only `read(...)`. `BundleReadLimits` owns the
+caller bounds.
 
 The exact read concepts live in the [new terms](plan-terms.toml), and their
 bounds, descriptor lifetime, EOF, and point-in-time guarantees live in the
@@ -194,6 +210,9 @@ boundaries live in the [new terms](plan-terms.toml) and
 
 Bundle allocation, terminal publication, incomplete reads, and artifact
 verification use one small typed hierarchy with structured recovery context.
+`BundlePublicationPhase` and `BundleVerificationReason` keep the already-agreed
+structured fields public and stable, while manifest replacement knowledge reuses
+the existing `ReplacementState`.
 The public failure concepts and symbol mappings live in the
 [new terms](plan-terms.toml); the exact hierarchy and exception-chaining behavior
 live in the [new contracts](plan-contracts.toml).
@@ -213,6 +232,8 @@ The PR lands one canonical name with no aliases or compatibility fields.
 ### PR 1: hard-cut the existing record stack to async
 
 - Replace the public record-stack operations with their awaited forms.
+- Add `pytest-asyncio` as a direct development dependency for asynchronous
+  tests.
 - Give SQLite its bounded dedicated-worker admission and explicit long-lived
   async lifecycle.
 - Use WAL `synchronous=NORMAL`, a hash-leading object key or index, and prove
@@ -227,11 +248,11 @@ remain pinned until their own async hard cutovers are planned.
 
 ### PR 2: add the PostgreSQL backend
 
-- Select and pin the concrete async driver and public pool type within the
-  agreed required-dependency boundary.
-- Add explicit fixed-namespace installation and the PostgreSQL backend.
-- Pin deterministic exact-text behavior and hash-leading object lookup in the
-  schema.
+- Add required `asyncpg>=0.31.0` and accept caller-owned `asyncpg.Pool` only.
+- Add public `install_postgres` and `PostgresBackend` for PostgreSQL 16 through
+  18 UTF-8 databases and the fixed `dr_store` namespace.
+- Pin `pg_catalog.ucs_basic` exact-text behavior and hash-leading object lookup
+  in the schema.
 - Implement set-based, bounded-chunk batch operations that fetch distinct
   objects separately and reconstruct binding results in Python.
 - Validate the shared backend contracts against password-authenticated
@@ -243,8 +264,11 @@ remain pinned until their own async hard cutovers are planned.
 
 ### PR 3: add artifact bundles
 
-- Add the closed versioned manifest models, concurrent distinct-name writers,
-  explicit eager audit, one-pass verified consumption, and public error
+- Add strict frozen `ArtifactDescriptor` and `BundleManifest` models;
+  `ArtifactBundlePublication.allocate/open_artifact/publish`;
+  `BundleArtifactWriter.write/finalize`; `ArtifactBundleReader(path, limits)`
+  with `audit` and `consume_and_verify_artifact`; `BundleReadLimits`; the
+  read-only `VerifyingArtifactReader` callback facade; and the public error
   hierarchy.
 - Publish through close and atomic manifest replacement without file or
   directory synchronization or a durability mode.
@@ -260,28 +284,19 @@ remain pinned until their own async hard cutovers are planned.
 Each PR must satisfy its own contracts; a later PR is never required to make an
 earlier PR truthful.
 
-## Remaining implementation selections
+## Frozen implementation selections
 
-The architecture has no remaining discussion question from this design pass.
-Three concrete selections are intentionally made inside their owning PR and must
-not change the decisions above:
+This design pass leaves no implementation selection unresolved. PR 1 adds
+`pytest-asyncio` directly to the development dependency group. PR 2 uses required
+`asyncpg>=0.31.0`, concrete caller-owned `asyncpg.Pool`, PostgreSQL 16 through 18
+with UTF-8 server encoding, `pg_catalog.ucs_basic`, public `PostgresBackend`, and
+public `install_postgres`. PR 3 uses the exact bundle symbols and methods listed
+above and in [plan-terms.toml](plan-terms.toml).
 
-1. PR 2 selects the exact async PostgreSQL driver, pool type, minimum version,
-   and lockfile entry. The result must remain one concrete required dependency
-   and one caller-owned pool boundary.
-2. PR 2 selects the exact PostgreSQL DDL expression that supplies deterministic
-   binary-like text comparison on the supported PostgreSQL versions. Tests must
-   pin exact case-sensitive and non-ASCII identity behavior rather than relying
-   on the deployment default.
-3. PR 3 selects the public name and callback/read-facade types for verified
-   artifact consumption. The operation remains synchronous, descriptor-pinned,
-   one-pass, and successful only after verified EOF.
-
-If either PostgreSQL selection cannot satisfy its boundary without expanding
-scope, PR 2 stops for design review rather than introducing an optional
-dependency, custom Protocol, configurable namespace, or byte-valued public
-identity. If the consumption API cannot preserve its fixed boundary, PR 3 stops
-instead of weakening EOF verification or adding an async twin.
+If one of these selections cannot satisfy its committed boundary without
+expanding scope, its owning PR stops for design review rather than introducing
+an optional dependency, Protocol, DSN ownership, configurable namespace,
+migration framework, compatibility path, or an async bundle twin.
 
 ## Validation and handoff
 

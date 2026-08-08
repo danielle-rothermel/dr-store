@@ -4,6 +4,34 @@
 #:schema ../../../.defs/terms.schema.json
 
 [[terms]]
+name = "schema"
+definition = """
+A non-empty caller-declared text label for the shape and meaning of a record. \
+It contains neither NUL nor unpaired surrogate code points, is otherwise opaque \
+to storage, and distinguishes references to the same content under different \
+declared shapes."""
+categories = ["content addressing", "object storage"]
+part_of = ["object reference"]
+
+[[terms]]
+name = "key"
+definition = """
+An opaque caller-owned text string naming one place in a binding table. It may \
+be empty but contains neither NUL nor unpaired surrogate code points; storage \
+does not otherwise parse it or assign it domain meaning."""
+categories = ["object storage"]
+part_of = ["binding"]
+
+[[terms]]
+name = "object reference"
+definition = """
+A validated content-addressed handle composed of a schema from the shared text \
+domain and the full content hash of one record."""
+exported_symbols = ["ObjectReference", "ReferenceValidationError"]
+categories = ["content addressing", "object storage"]
+part_of = ["binding"]
+
+[[terms]]
 name = "object store"
 definition = """
 The asynchronous append-only mapping from object references to immutable records \
