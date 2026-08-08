@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
 
 import asyncpg
 
@@ -18,7 +20,7 @@ from dr_store.storage_backends.contract import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Awaitable, Callable, Iterator
 
 __all__ = ["PostgresBackend", "install_postgres"]
 
@@ -154,6 +156,82 @@ def _validate_database(*, version_num: int, server_encoding: str) -> None:
         raise RuntimeError("PostgreSQL server encoding must be UTF-8")
 
 
+_NO_RESULT = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _Settled[T]:
+    result: T | object = _NO_RESULT
+    cancellation: asyncio.CancelledError | None = None
+    failure: BaseException | None = None
+
+
+async def _settle_task[T](
+    task: asyncio.Task[T],
+    *,
+    cancel_on_cancellation: bool,
+) -> _Settled[T]:
+    cancellation: asyncio.CancelledError | None = None
+    while True:
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            if cancellation is None:
+                cancellation = error
+                if cancel_on_cancellation and not task.done():
+                    task.cancel()
+            if task.done():
+                return _Settled(cancellation=cancellation)
+            continue
+        except BaseException as error:  # noqa: BLE001 - task boundary.
+            return _Settled(cancellation=cancellation, failure=error)
+        else:
+            return _Settled(result=result, cancellation=cancellation)
+
+
+async def _run_pool_operation[T](
+    pool: asyncpg.Pool,
+    operation: Callable[[asyncpg.Connection], Awaitable[T]],
+    *,
+    transactional: bool,
+) -> T:
+    connection = await pool.acquire()
+
+    async def run() -> T:
+        if transactional:
+            async with connection.transaction():
+                return await operation(connection)
+        return await operation(connection)
+
+    operation_settled = await _settle_task(
+        asyncio.create_task(run()),
+        cancel_on_cancellation=True,
+    )
+    release_settled = await _settle_task(
+        asyncio.create_task(pool.release(connection)),
+        cancel_on_cancellation=False,
+    )
+
+    cancellation = (
+        operation_settled.cancellation or release_settled.cancellation
+    )
+    operation_failure = operation_settled.failure
+    release_failure = release_settled.failure
+    if cancellation is not None:
+        cleanup_failure = release_failure or operation_failure
+        if cleanup_failure is not None:
+            raise cancellation from cleanup_failure
+        raise cancellation
+    if release_failure is not None:
+        if operation_failure is not None:
+            raise release_failure from operation_failure
+        raise release_failure
+    if operation_failure is not None:
+        raise operation_failure
+    assert operation_settled.result is not _NO_RESULT
+    return cast("T", operation_settled.result)
+
+
 async def install_postgres(pool: asyncpg.Pool) -> None:
     """Install the fixed ``dr_store`` schema into an empty namespace.
 
@@ -163,10 +241,7 @@ async def install_postgres(pool: asyncpg.Pool) -> None:
     if not isinstance(pool, asyncpg.Pool):
         raise TypeError("pool must be an asyncpg.Pool")
 
-    async with (
-        pool.acquire() as connection,
-        connection.transaction(),
-    ):
+    async def install(connection: asyncpg.Connection) -> None:
         requirements = await connection.fetchrow(_DATABASE_REQUIREMENTS_SQL)
         assert requirements is not None
         _validate_database(
@@ -174,6 +249,8 @@ async def install_postgres(pool: asyncpg.Pool) -> None:
             server_encoding=requirements["server_encoding"],
         )
         await connection.execute(_INSTALL_SQL)
+
+    await _run_pool_operation(pool, install, transactional=True)
 
 
 class PostgresBackend:
@@ -217,10 +294,8 @@ class PostgresBackend:
     ) -> PutOutcome:
         _validate_reference_schema(schema)
         _validate_content_hash(content_hash)
-        async with (
-            self._pool.acquire() as connection,
-            connection.transaction(),
-        ):
+
+        async def put(connection: asyncpg.Connection) -> PutOutcome:
             inserted = await self._fetchrow(
                 connection,
                 _INSERT_OBJECT_SQL,
@@ -247,6 +322,12 @@ class PostgresBackend:
                 stored_canonical=stored["canonical"],
             )
 
+        return await _run_pool_operation(
+            self._pool,
+            put,
+            transactional=True,
+        )
+
     async def get_object(
         self,
         *,
@@ -255,16 +336,25 @@ class PostgresBackend:
     ) -> tuple[str, str] | None:
         _validate_reference_schema(schema)
         _validate_content_hash(content_hash)
-        async with self._pool.acquire() as connection:
+
+        async def get(
+            connection: asyncpg.Connection,
+        ) -> tuple[str, str] | None:
             row = await self._fetchrow(
                 connection,
                 _GET_OBJECT_SQL,
                 content_hash,
                 schema,
             )
-        if row is None:
-            return None
-        return (row["schema"], row["canonical"])
+            if row is None:
+                return None
+            return (row["schema"], row["canonical"])
+
+        return await _run_pool_operation(
+            self._pool,
+            get,
+            transactional=False,
+        )
 
     async def bind(
         self,
@@ -276,10 +366,8 @@ class PostgresBackend:
         _validate_binding_key(key)
         _validate_reference_schema(schema)
         _validate_content_hash(content_hash)
-        async with (
-            self._pool.acquire() as connection,
-            connection.transaction(),
-        ):
+
+        async def bind(connection: asyncpg.Connection) -> BindOutcome:
             inserted = await self._fetchrow(
                 connection,
                 _INSERT_BINDING_SQL,
@@ -293,19 +381,34 @@ class PostgresBackend:
                 key,
             )
             assert row is not None
-        return BindOutcome(
-            bound=inserted is not None,
-            existing_schema=row["schema"],
-            existing_content_hash=row["content_hash"],
+            return BindOutcome(
+                bound=inserted is not None,
+                existing_schema=row["schema"],
+                existing_content_hash=row["content_hash"],
+            )
+
+        return await _run_pool_operation(
+            self._pool,
+            bind,
+            transactional=True,
         )
 
     async def get_binding(self, *, key: str) -> tuple[str, str] | None:
         _validate_binding_key(key)
-        async with self._pool.acquire() as connection:
+
+        async def get(
+            connection: asyncpg.Connection,
+        ) -> tuple[str, str] | None:
             row = await self._fetchrow(connection, _GET_BINDING_SQL, key)
-        if row is None:
-            return None
-        return (row["schema"], row["content_hash"])
+            if row is None:
+                return None
+            return (row["schema"], row["content_hash"])
+
+        return await _run_pool_operation(
+            self._pool,
+            get,
+            transactional=False,
+        )
 
     async def get_bound_objects(
         self,
@@ -320,7 +423,8 @@ class PostgresBackend:
 
         bindings: dict[str, tuple[str, str]] = {}
         objects: dict[tuple[str, str], str] = {}
-        async with self._pool.acquire() as connection:
+
+        async def get(connection: asyncpg.Connection) -> None:
             for chunk in _chunks(distinct_keys):
                 rows = await self._fetch(
                     connection,
@@ -345,6 +449,12 @@ class PostgresBackend:
                     objects[(row["schema"], row["content_hash"])] = row[
                         "canonical"
                     ]
+
+        await _run_pool_operation(
+            self._pool,
+            get,
+            transactional=False,
+        )
 
         results: dict[str, BoundObjectRow] = {}
         for key, (schema, content_hash) in bindings.items():
@@ -386,10 +496,8 @@ class PostgresBackend:
         inserted_keys: set[str] = set()
         stored_objects: dict[tuple[str, str], str] = {}
         stored_bindings: dict[str, tuple[str, str]] = {}
-        async with (
-            self._pool.acquire() as connection,
-            connection.transaction(),
-        ):
+
+        async def put(connection: asyncpg.Connection) -> None:
             for chunk in _chunks(references):
                 await self._execute(
                     connection,
@@ -438,6 +546,12 @@ class PostgresBackend:
                         row["schema"],
                         row["content_hash"],
                     )
+
+        await _run_pool_operation(
+            self._pool,
+            put,
+            transactional=True,
+        )
 
         assert stored_bindings.keys() == writes.keys()
         return {

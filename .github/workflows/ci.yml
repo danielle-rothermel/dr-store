@@ -27,7 +27,7 @@ jobs:
     runs-on: depot-ubuntu-24.04
     strategy:
       matrix:
-        postgres-version: ["16", "18"]
+        postgres-version: ["16", "17", "18"]
     services:
       postgres:
         image: postgres:${{ matrix.postgres-version }}

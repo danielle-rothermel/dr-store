@@ -198,6 +198,102 @@ async def test_cancelled_locked_write_releases_connection_for_pool_reuse(
     ).inserted
 
 
+async def test_cancellation_waits_for_connection_release_before_terminating(
+    postgres_pool: asyncpg.Pool,
+) -> None:
+    await install_postgres(postgres_pool)
+    release_started = asyncio.Event()
+    allow_release = asyncio.Event()
+    gate_enabled = False
+
+    async def gated_reset(_connection: asyncpg.Connection) -> None:
+        if gate_enabled:
+            release_started.set()
+            await allow_release.wait()
+
+    pool = await asyncpg.create_pool(
+        os.environ["DR_STORE_POSTGRES_DSN"],
+        min_size=1,
+        max_size=1,
+        reset=gated_reset,
+        server_settings={"search_path": "pg_catalog"},
+    )
+    try:
+        backend = PostgresBackend(pool)
+        gate_enabled = True
+        operation = asyncio.create_task(backend.get_binding(key="missing"))
+        await asyncio.wait_for(release_started.wait(), WATCHDOG_SECONDS)
+
+        operation.cancel()
+        cancellation_observed = asyncio.Event()
+        asyncio.get_running_loop().call_soon(cancellation_observed.set)
+        await cancellation_observed.wait()
+        assert not operation.done()
+
+        operation.cancel()
+        repeated_cancellation_observed = asyncio.Event()
+        asyncio.get_running_loop().call_soon(
+            repeated_cancellation_observed.set
+        )
+        await repeated_cancellation_observed.wait()
+        assert not operation.done()
+
+        allow_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(operation, WATCHDOG_SECONDS)
+        assert pool.get_idle_size() == 1
+        assert await backend.get_binding(key="missing") is None
+    finally:
+        allow_release.set()
+        await pool.close()
+
+
+async def test_release_failure_is_cause_of_postgresql_cancellation(
+    postgres_pool: asyncpg.Pool,
+) -> None:
+    await install_postgres(postgres_pool)
+    release_started = asyncio.Event()
+    allow_release = asyncio.Event()
+    reset_failure = RuntimeError("injected reset failure")
+    gate_enabled = False
+
+    async def failing_reset(_connection: asyncpg.Connection) -> None:
+        if gate_enabled:
+            release_started.set()
+            await allow_release.wait()
+            raise reset_failure
+
+    pool = await asyncpg.create_pool(
+        os.environ["DR_STORE_POSTGRES_DSN"],
+        min_size=1,
+        max_size=1,
+        reset=failing_reset,
+        server_settings={"search_path": "pg_catalog"},
+    )
+    try:
+        backend = PostgresBackend(pool)
+        gate_enabled = True
+        operation = asyncio.create_task(backend.get_binding(key="missing"))
+        await asyncio.wait_for(release_started.wait(), WATCHDOG_SECONDS)
+        operation.cancel()
+        cancellation_observed = asyncio.Event()
+        asyncio.get_running_loop().call_soon(cancellation_observed.set)
+        await cancellation_observed.wait()
+        assert not operation.done()
+
+        allow_release.set()
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await asyncio.wait_for(operation, WATCHDOG_SECONDS)
+        assert caught.value.__cause__ is reset_failure
+
+        gate_enabled = False
+        assert await backend.get_binding(key="missing") is None
+    finally:
+        gate_enabled = False
+        allow_release.set()
+        await pool.close()
+
+
 async def test_batch_statements_scale_with_chunks_and_distinct_objects(
     postgres_backend: PostgresBackend,
     monkeypatch: pytest.MonkeyPatch,

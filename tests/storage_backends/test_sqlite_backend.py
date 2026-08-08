@@ -28,6 +28,24 @@ async def _thread_event(event: threading.Event) -> None:
     )
 
 
+class _ObservedLock:
+    def __init__(
+        self,
+        lock: asyncio.Lock,
+        wait_observed: asyncio.Event,
+    ) -> None:
+        self._lock = lock
+        self._wait_observed = wait_observed
+
+    async def __aenter__(self) -> None:
+        if self._lock.locked():
+            self._wait_observed.set()
+        await self._lock.acquire()
+
+    async def __aexit__(self, *_args: object) -> None:
+        self._lock.release()
+
+
 def test_direct_construction_is_private(tmp_path: Path) -> None:
     with pytest.raises(TypeError, match=r"await SqliteBackend\.open"):
         SqliteBackend(tmp_path / "store.db")
@@ -150,6 +168,7 @@ async def test_admission_cancellation_submits_no_second_worker_operation(
     backend = await SqliteBackend.open(tmp_path / "store.db")
     started = threading.Event()
     release = threading.Event()
+    admission_wait_observed = asyncio.Event()
     calls: list[str] = []
 
     def gated_get(key: str) -> tuple[str, str] | None:
@@ -159,9 +178,15 @@ async def test_admission_cancellation_submits_no_second_worker_operation(
         return None
 
     monkeypatch.setattr(backend, "_get_binding", gated_get)
+    monkeypatch.setattr(
+        backend,
+        "_admission",
+        _ObservedLock(backend._admission, admission_wait_observed),
+    )
     admitted = asyncio.create_task(backend.get_binding(key="first"))
     await _thread_event(started)
     waiting = asyncio.create_task(backend.get_binding(key="second"))
+    await asyncio.wait_for(admission_wait_observed.wait(), WATCHDOG_SECONDS)
     waiting.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiting
@@ -248,10 +273,12 @@ def _process_bind(
     path: str,
     identity: int,
     release: Event,
+    ready: Queue[int],
     results: Queue[tuple[bool, str, str]],
 ) -> None:
     async def run() -> None:
         backend = await SqliteBackend.open(path)
+        ready.put(identity)
         assert release.wait(WATCHDOG_SECONDS)
         outcome = await backend.bind(
             key=KEY,
@@ -278,16 +305,22 @@ async def test_cross_process_contention_has_one_correlated_winner(
     await initialized.aclose()
     context = multiprocessing.get_context("spawn")
     release = context.Event()
+    ready = context.Queue()
     results = context.Queue()
     processes = [
         context.Process(
             target=_process_bind,
-            args=(str(path), identity, release, results),
+            args=(str(path), identity, release, ready, results),
         )
         for identity in range(4)
     ]
     for process in processes:
         process.start()
+    ready_identities = {
+        await asyncio.wait_for(asyncio.to_thread(ready.get), WATCHDOG_SECONDS)
+        for _ in processes
+    }
+    assert ready_identities == set(range(len(processes)))
     release.set()
     observed = [
         await asyncio.wait_for(
@@ -300,6 +333,8 @@ async def test_cross_process_contention_has_one_correlated_winner(
         assert not process.is_alive()
         assert process.exitcode == 0
         process.close()
+    ready.close()
+    ready.join_thread()
     results.close()
     results.join_thread()
     assert sum(bound for bound, _, _ in observed) == 1
