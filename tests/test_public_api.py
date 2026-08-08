@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import pkgutil
 import re
+from dataclasses import fields
 
 import dr_store
 
@@ -149,3 +150,24 @@ def test_sqlite_record_cache_public_surface_is_exact() -> None:
         inspect.iscoroutinefunction(getattr(SqliteRecordCache, name))
         for name in expected
     )
+
+
+def test_sidecar_hash_public_surface_is_exact() -> None:
+    from dr_store import DocumentDirectory, SidecarSummary
+
+    assert tuple(field.name for field in fields(SidecarSummary)) == (
+        "head_length",
+        "tail_length",
+        "produced",
+        "dropped",
+        "sidecar_hash",
+    )
+    assert list(
+        inspect.signature(DocumentDirectory.verify_sidecar).parameters
+    ) == [
+        "self",
+        "name",
+        "expected_sidecar_hash",
+        "expected_head_length",
+        "expected_tail_length",
+    ]

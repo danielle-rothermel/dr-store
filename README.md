@@ -450,7 +450,7 @@ class DocumentDirectory:
         self,
         name: str,
         *,
-        expected_digest: str,
+        expected_sidecar_hash: str,
         expected_head_length: int,
         expected_tail_length: int,
     ) -> None: ...
@@ -463,7 +463,7 @@ class SidecarSummary:
     tail_length: int
     produced: int
     dropped: int
-    digest: str
+    sidecar_hash: str
 
 class SidecarWriter:
     def write(self, chunk: bytes) -> None: ...
@@ -510,8 +510,9 @@ Outside the reserved publication namespace, name validation prevents lexical
 traversal syntax. Sidecar creation and writes follow existing final-component
 symlinks and therefore require trusted, caller-controlled directory contents.
 Sidecar writer coordination remains the caller's concern. Sidecar finalization
-flushes the Sidecar descriptor before returning its summary, but it does not
-flush the Sidecar's directory entry or impose ordering on document publication.
+flushes the Sidecar descriptor before returning its stored-byte accounting and
+sidecar hash, but it does not flush the Sidecar's directory entry or impose
+ordering on document publication.
 Sidecar verification also refuses final-component symlinks for both the
 Document Directory and named child, requires a regular direct child, and reads
 from the descriptor it inspected.

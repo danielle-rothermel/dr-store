@@ -1,6 +1,5 @@
-# Proposed complete replacements for existing .defs/terms.toml entries. These
-# entries become repository vocabulary only when their implementing hard cutover
-# lands.
+# Implemented replacement terms for the async and sidecar-hash hard cutovers.
+# These entries remain as plan provenance; `.defs/terms.toml` is authoritative.
 #:schema ../../../.defs/terms.schema.json
 
 [[terms]]

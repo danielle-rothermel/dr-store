@@ -45,7 +45,7 @@ elif sys.argv[2] == "published-sidecar":
         "state": "complete",
         "sidecars": [{{
             "name": SIDECAR_NAME,
-            "digest": summary.digest,
+            "sidecar_hash": summary.sidecar_hash,
             "head_length": summary.head_length,
             "tail_length": summary.tail_length,
         }}],
@@ -131,11 +131,11 @@ def test_published_sidecar_is_verifiable_from_manifest_after_death(
     sidecar = sidecars[0]
     assert isinstance(sidecar, dict)
     name = sidecar["name"]
-    digest = sidecar["digest"]
+    sidecar_hash = sidecar["sidecar_hash"]
     head_length = sidecar["head_length"]
     tail_length = sidecar["tail_length"]
     assert isinstance(name, str)
-    assert isinstance(digest, str)
+    assert isinstance(sidecar_hash, str)
     assert type(head_length) is int
     assert type(tail_length) is int
 
@@ -146,7 +146,7 @@ def test_published_sidecar_is_verifiable_from_manifest_after_death(
     )
     directory.verify_sidecar(
         name,
-        expected_digest=digest,
+        expected_sidecar_hash=sidecar_hash,
         expected_head_length=head_length,
         expected_tail_length=tail_length,
     )

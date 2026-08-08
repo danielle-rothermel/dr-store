@@ -37,7 +37,7 @@ def test_verify_sidecar_accepts_matching_bytes(tmp_path: Path) -> None:
 
     directory.verify_sidecar(
         SIDECAR_NAME,
-        expected_digest=hashlib.sha256(payload).hexdigest(),
+        expected_sidecar_hash=hashlib.sha256(payload).hexdigest(),
         expected_head_length=4,
         expected_tail_length=4,
     )
@@ -45,7 +45,7 @@ def test_verify_sidecar_accepts_matching_bytes(tmp_path: Path) -> None:
 
 def test_verify_sidecar_rejects_mutated_bytes(tmp_path: Path) -> None:
     payload = bytearray(b"headtail")
-    expected_digest = hashlib.sha256(payload).hexdigest()
+    expected_sidecar_hash = hashlib.sha256(payload).hexdigest()
     payload[2] ^= 0xFF
     directory = _allocate(tmp_path)
     (directory.path / SIDECAR_NAME).write_bytes(payload)
@@ -53,7 +53,7 @@ def test_verify_sidecar_rejects_mutated_bytes(tmp_path: Path) -> None:
     with pytest.raises(SidecarVerificationError):
         directory.verify_sidecar(
             SIDECAR_NAME,
-            expected_digest=expected_digest,
+            expected_sidecar_hash=expected_sidecar_hash,
             expected_head_length=4,
             expected_tail_length=4,
         )
@@ -76,7 +76,7 @@ def test_verify_sidecar_rejects_mismatched_length(
     with pytest.raises(SidecarVerificationError):
         directory.verify_sidecar(
             SIDECAR_NAME,
-            expected_digest=hashlib.sha256(b"headtail").hexdigest(),
+            expected_sidecar_hash=hashlib.sha256(b"headtail").hexdigest(),
             expected_head_length=expected_head_length,
             expected_tail_length=expected_tail_length,
         )
@@ -102,7 +102,7 @@ def test_verify_sidecar_rejects_negative_segment_length(
     with pytest.raises(SidecarVerificationError, match=role):
         directory.verify_sidecar(
             SIDECAR_NAME,
-            expected_digest=hashlib.sha256(payload).hexdigest(),
+            expected_sidecar_hash=hashlib.sha256(payload).hexdigest(),
             expected_head_length=expected_head_length,
             expected_tail_length=expected_tail_length,
         )
@@ -113,7 +113,7 @@ def test_verify_sidecar_missing_file_is_typed(tmp_path: Path) -> None:
     with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             "absent.bin",
-            expected_digest="0" * 64,
+            expected_sidecar_hash="0" * 64,
             expected_head_length=0,
             expected_tail_length=0,
         )
@@ -148,7 +148,7 @@ def test_verify_sidecar_rejects_unsafe_and_reserved_names_before_open(
     with pytest.raises(SidecarVerificationError):
         directory.verify_sidecar(
             name,
-            expected_digest=hashlib.sha256(b"").hexdigest(),
+            expected_sidecar_hash=hashlib.sha256(b"").hexdigest(),
             expected_head_length=0,
             expected_tail_length=0,
         )
@@ -173,7 +173,7 @@ def test_verify_sidecar_rejects_final_component_symlinks(
     with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             SIDECAR_NAME,
-            expected_digest=hashlib.sha256(payload).hexdigest(),
+            expected_sidecar_hash=hashlib.sha256(payload).hexdigest(),
             expected_head_length=len(payload),
             expected_tail_length=0,
         )
@@ -194,7 +194,7 @@ def test_verify_sidecar_rejects_a_symlinked_directory_authority(
     with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             SIDECAR_NAME,
-            expected_digest=hashlib.sha256(payload).hexdigest(),
+            expected_sidecar_hash=hashlib.sha256(payload).hexdigest(),
             expected_head_length=len(payload),
             expected_tail_length=0,
         )
@@ -208,7 +208,7 @@ def test_verify_sidecar_rejects_a_directory(tmp_path: Path) -> None:
     with pytest.raises(SidecarVerificationError):
         directory.verify_sidecar(
             SIDECAR_NAME,
-            expected_digest=hashlib.sha256(b"").hexdigest(),
+            expected_sidecar_hash=hashlib.sha256(b"").hexdigest(),
             expected_head_length=0,
             expected_tail_length=0,
         )
@@ -233,7 +233,7 @@ directory = DocumentDirectory(
 try:
     directory.verify_sidecar(
         {SIDECAR_NAME!r},
-        expected_digest=hashlib.sha256(b'').hexdigest(),
+        expected_sidecar_hash=hashlib.sha256(b'').hexdigest(),
         expected_head_length=0,
         expected_tail_length=0,
     )
@@ -306,7 +306,7 @@ def test_verify_sidecar_streams_bounded_reads_from_the_inspected_descriptor(
     monkeypatch.setattr(sidecar_module.os, "read", recording_read)
     directory.verify_sidecar(
         SIDECAR_NAME,
-        expected_digest=hashlib.sha256(payload).hexdigest(),
+        expected_sidecar_hash=hashlib.sha256(payload).hexdigest(),
         expected_head_length=len(payload),
         expected_tail_length=0,
     )
@@ -348,7 +348,7 @@ def test_verify_sidecar_unreadable_child_is_typed(
     with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             SIDECAR_NAME,
-            expected_digest=hashlib.sha256(b"stored").hexdigest(),
+            expected_sidecar_hash=hashlib.sha256(b"stored").hexdigest(),
             expected_head_length=6,
             expected_tail_length=0,
         )
@@ -366,7 +366,7 @@ def test_verify_sidecar_fails_closed_without_no_follow_support(
     with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             SIDECAR_NAME,
-            expected_digest=hashlib.sha256(b"stored").hexdigest(),
+            expected_sidecar_hash=hashlib.sha256(b"stored").hexdigest(),
             expected_head_length=6,
             expected_tail_length=0,
         )

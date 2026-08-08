@@ -1,6 +1,6 @@
-# Proposed replacements and additions for the async and sidecar-hash hard
-# cutovers. These contracts are not binding until implementation and their
-# evidence checks land.
+# Implemented replacements and additions for the async and sidecar-hash hard
+# cutovers. These entries remain as plan provenance; `.defs/contracts.toml` is
+# authoritative and contains the runnable evidence checks.
 
 [[contracts]]
 title = "Object references validate their declared parts"

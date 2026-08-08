@@ -244,7 +244,7 @@ categories = ["document artifacts"]
 part_of = ["document directory"]
 
 [[terms]]
-name = "sidecar digest"
+name = "sidecar hash"
 definition = """
 The full 64-character lowercase SHA-256 hash of a sidecar's stored bytes after \
 any truncation. Its input is raw bytes, so it is not a content hash."""

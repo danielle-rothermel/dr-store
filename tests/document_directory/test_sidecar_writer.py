@@ -55,7 +55,7 @@ def _expected_summary(
         tail_length=tail_length,
         produced=produced,
         dropped=produced - len(stored),
-        digest=hashlib.sha256(stored).hexdigest(),
+        sidecar_hash=hashlib.sha256(stored).hexdigest(),
     )
 
 
@@ -181,7 +181,7 @@ def test_empty_sidecar_summarizes_as_empty(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("chunk_size", [1, 7, 64, 97, 4096])
-def test_chunking_preserves_exact_bytes_summary_and_digest(
+def test_chunking_preserves_exact_bytes_summary_and_sidecar_hash(
     tmp_path: Path,
     chunk_size: int,
 ) -> None:

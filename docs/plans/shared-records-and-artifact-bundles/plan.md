@@ -1,8 +1,8 @@
 # Async Shared Records and Artifact Bundles
 
 Status: agreed design plan with implementation selections frozen; the PR 1
-async record stack and complete PR 2 PostgreSQL backend are present. PR 3
-remains staged.
+async record stack, complete PR 2 PostgreSQL backend, and sidecar-hash hard
+cutover are present. The artifact-bundle remainder of PR 3 remains staged.
 
 ## Planning sources and ownership
 
@@ -11,18 +11,20 @@ The repository vocabulary and standing behavioral rules remain authoritative:
 - [repository terms](../../../.defs/terms.toml)
 - [repository contracts](../../../.defs/contracts.toml)
 
-The following files are the authoritative proposals for this plan. They stage
-the vocabulary and contracts that will move into `.defs` with their implementing
-PRs:
+The following files retain the proposal and implementation sources for this
+plan. `.defs` contains the authoritative entries already implemented, while the
+remaining artifact-bundle entries stay staged until their implementing PR:
 
 - [plan-terms.toml](plan-terms.toml) contains new PostgreSQL and
   artifact-bundle terms.
-- [update-terms.toml](update-terms.toml) contains complete replacements for
-  existing terms changed by the async and sidecar-hash hard cutovers.
+- [update-terms.toml](update-terms.toml) records the complete replacements for
+  existing terms changed by the implemented async and sidecar-hash hard
+  cutovers.
 - [plan-contracts.toml](plan-contracts.toml) contains new PostgreSQL and
   artifact-bundle contracts.
-- [update-contracts.toml](update-contracts.toml) contains replacements and new
-  lifecycle contracts required by async storage and sidecar-hash behavior.
+- [update-contracts.toml](update-contracts.toml) records the implemented
+  replacements and lifecycle contracts required by async storage and
+  sidecar-hash behavior.
 
 Historical design provenance: the
 [performance and cross-plan audit](perf-and-plan-audit-review-doc.md) records
@@ -223,10 +225,15 @@ an exception type for every implementation step.
 
 ### Sidecar hash hard cutover
 
+Complete.
+
 Sidecar stored-byte verification uses sidecar hash consistently in public
 vocabulary and APIs. Bounded head/tail behavior remains governed by the
-[updated term](update-terms.toml) and [updated contracts](update-contracts.toml).
-The PR lands one canonical name with no aliases or compatibility fields.
+[repository term](../../../.defs/terms.toml) and
+[repository contracts](../../../.defs/contracts.toml). The implementation has
+one canonical name with no aliases or compatibility fields; the plan proposal
+entries remain in [update-terms.toml](update-terms.toml) and
+[update-contracts.toml](update-contracts.toml) as provenance.
 
 ## Three-PR delivery stack
 
@@ -281,10 +288,11 @@ harness, vocabulary, and binding contracts are present.
 - Add async-offload guidance and state the directory-format workload ceiling.
 - Add state-synchronized interrupted-publication, writer-concurrency, EOF, and
   single-read tests.
-- Apply the sidecar-hash hard cutover to fields, parameters, documentation, and
-  tests in the same PR.
 - Land the implemented artifact-bundle terms and contracts with public symbol
   mappings and evidence checks.
+
+The sidecar-hash hard cutover landed before this remaining artifact-bundle
+implementation.
 
 Each PR must satisfy its own contracts; a later PR is never required to make an
 earlier PR truthful.
