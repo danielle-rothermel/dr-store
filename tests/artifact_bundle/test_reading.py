@@ -336,6 +336,77 @@ def test_consumer_exception_is_preserved_as_cause(tmp_path: Path) -> None:
         captured[0].read()
 
 
+def test_nested_bundle_read_failure_is_translated_to_outer_bundle(
+    tmp_path: Path,
+) -> None:
+    publication = _publish(tmp_path)
+    nested_bundle = tmp_path / "nested-bundle"
+    nested_bundle.mkdir()
+    nested_failure: BundleReadError | None = None
+
+    def consume(_facade: VerifyingArtifactReader) -> None:
+        nonlocal nested_failure
+        try:
+            _reader(nested_bundle).audit()
+        except BundleReadError as exc:
+            nested_failure = exc
+            raise
+
+    with pytest.raises(BundleReadError) as caught:
+        _reader(publication.path).consume_and_verify_artifact(
+            "stdout.bin",
+            consume,
+        )
+    assert type(caught.value) is BundleReadError
+    assert caught.value.path == publication.path
+    assert caught.value.__cause__ is nested_failure
+    assert nested_failure is not None
+    assert nested_failure.path == nested_bundle
+
+
+def test_facade_read_failure_preserves_storage_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = _publish(tmp_path)
+    original_open = reading_module.os.open
+    original_read = reading_module.os.read
+    artifact_descriptor: int | None = None
+    read_failure = OSError(errno.EIO, "injected artifact read failure")
+
+    def recording_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal artifact_descriptor
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        if path == "stdout.bin":
+            artifact_descriptor = descriptor
+        return descriptor
+
+    def failing_read(descriptor: int, size: int) -> bytes:
+        if descriptor == artifact_descriptor:
+            raise read_failure
+        return original_read(descriptor, size)
+
+    def consume(reader: VerifyingArtifactReader) -> None:
+        reader.read()
+
+    monkeypatch.setattr(reading_module.os, "open", recording_open)
+    monkeypatch.setattr(reading_module.os, "read", failing_read)
+    with pytest.raises(BundleReadError) as caught:
+        _reader(publication.path).consume_and_verify_artifact(
+            "stdout.bin",
+            consume,
+        )
+    assert type(caught.value) is BundleReadError
+    assert caught.value.path == publication.path
+    assert caught.value.__cause__ is read_failure
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -396,6 +467,80 @@ def test_nonregular_manifest_is_incomplete(
     with pytest.raises(BundleIncompleteError) as caught:
         _reader(bundle).audit()
     assert isinstance(caught.value.__cause__, OSError)
+
+
+def test_manifest_read_io_failure_is_a_read_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = _publish(tmp_path)
+    original_open = reading_module.os.open
+    original_read = reading_module.os.read
+    manifest_descriptor: int | None = None
+    read_failure = OSError(errno.EIO, "injected manifest read failure")
+
+    def recording_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal manifest_descriptor
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        if path == "manifest.json":
+            manifest_descriptor = descriptor
+        return descriptor
+
+    def failing_read(descriptor: int, size: int) -> bytes:
+        if descriptor == manifest_descriptor:
+            raise read_failure
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(reading_module.os, "open", recording_open)
+    monkeypatch.setattr(reading_module.os, "read", failing_read)
+    with pytest.raises(BundleReadError) as caught:
+        _reader(publication.path).audit()
+    assert type(caught.value) is BundleReadError
+    assert caught.value.path == publication.path
+    assert caught.value.__cause__ is read_failure
+
+
+def test_manifest_close_io_failure_is_a_read_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = _publish(tmp_path)
+    original_open = reading_module.os.open
+    original_close = reading_module.os.close
+    manifest_descriptor: int | None = None
+    close_failure = OSError(errno.EIO, "injected manifest close failure")
+
+    def recording_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal manifest_descriptor
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        if path == "manifest.json":
+            manifest_descriptor = descriptor
+        return descriptor
+
+    def failing_close(descriptor: int) -> None:
+        original_close(descriptor)
+        if descriptor == manifest_descriptor:
+            raise close_failure
+
+    monkeypatch.setattr(reading_module.os, "open", recording_open)
+    monkeypatch.setattr(reading_module.os, "close", failing_close)
+    with pytest.raises(BundleReadError) as caught:
+        _reader(publication.path).audit()
+    assert type(caught.value) is BundleReadError
+    assert caught.value.path == publication.path
+    assert caught.value.__cause__ is close_failure
 
 
 def test_manifest_byte_and_depth_bounds_are_enforced(tmp_path: Path) -> None:

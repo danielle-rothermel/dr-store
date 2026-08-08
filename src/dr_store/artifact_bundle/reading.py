@@ -149,57 +149,89 @@ def _require_canonical_manifest(document: Jsonable, raw: bytes) -> None:
         raise ValueError("stored manifest is not in canonical form")
 
 
+def _incomplete_manifest_error(path: Path) -> BundleIncompleteError:
+    return BundleIncompleteError(
+        path,
+        detail="a valid terminal manifest is unavailable",
+    )
+
+
 def _load_manifest(
     path: Path,
     directory_descriptor: int,
     limits: BundleReadLimits,
 ) -> BundleManifest:
-    manifest_descriptor: int | None = None
-    failure: Exception | None = None
-    manifest: BundleManifest | None = None
     try:
         manifest_descriptor = os.open(
             MANIFEST_NAME,
             _child_flags(),
             dir_fd=directory_descriptor,
         )
-        metadata = os.fstat(manifest_descriptor)
-        _require_regular_manifest(metadata)
-        raw = _read_bounded(
-            manifest_descriptor,
-            limits.manifest_max_bytes,
-        )
-        document = decode_strict_json_bytes(
-            raw,
-            max_bytes=limits.manifest_max_bytes,
-            max_depth=limits.manifest_max_depth,
-        )
-        _require_canonical_manifest(document, raw)
-        manifest = BundleManifest.model_validate_json(raw)
-    except (
-        NotImplementedError,
-        OSError,
-        SerializationError,
-        TypeError,
-        ValidationError,
-        ValueError,
-    ) as exc:
-        failure = exc
-    finally:
-        if manifest_descriptor is not None:
-            try:
-                os.close(manifest_descriptor)
-            except OSError as exc:
-                if failure is None:
-                    failure = exc
-
-    if failure is not None:
-        raise BundleIncompleteError(
+    except (NotImplementedError, OSError, TypeError, ValueError) as exc:
+        if isinstance(exc, OSError) and exc.errno in {
+            errno.ENOENT,
+            errno.ELOOP,
+            errno.EMLINK,
+        }:
+            raise _incomplete_manifest_error(path) from exc
+        raise BundleReadError(
             path,
-            detail="a valid terminal manifest is unavailable",
-        ) from failure
-    assert manifest is not None
-    return manifest
+            detail="the terminal manifest could not be opened",
+        ) from exc
+
+    body_failed = True
+    try:
+        try:
+            metadata = os.fstat(manifest_descriptor)
+        except (NotImplementedError, OSError, TypeError, ValueError) as exc:
+            raise BundleReadError(
+                path,
+                detail="the terminal manifest could not be inspected",
+            ) from exc
+        try:
+            _require_regular_manifest(metadata)
+        except OSError as exc:
+            raise _incomplete_manifest_error(path) from exc
+
+        try:
+            raw = _read_bounded(
+                manifest_descriptor,
+                limits.manifest_max_bytes,
+            )
+        except ValueError as exc:
+            raise _incomplete_manifest_error(path) from exc
+        except (NotImplementedError, OSError, TypeError) as exc:
+            raise BundleReadError(
+                path,
+                detail="the terminal manifest could not be read",
+            ) from exc
+
+        try:
+            document = decode_strict_json_bytes(
+                raw,
+                max_bytes=limits.manifest_max_bytes,
+                max_depth=limits.manifest_max_depth,
+            )
+            _require_canonical_manifest(document, raw)
+            manifest = BundleManifest.model_validate_json(raw)
+        except (
+            SerializationError,
+            TypeError,
+            ValidationError,
+            ValueError,
+        ) as exc:
+            raise _incomplete_manifest_error(path) from exc
+        body_failed = False
+        return manifest
+    finally:
+        try:
+            os.close(manifest_descriptor)
+        except OSError as exc:
+            if not body_failed:
+                raise BundleReadError(
+                    path,
+                    detail="the terminal manifest could not be closed",
+                ) from exc
 
 
 def _bounds_error(
@@ -517,6 +549,9 @@ class VerifyingArtifactReader:
     def _invalidate(self) -> None:
         self._active = False
 
+    def _owns_failure(self, failure: BundleReadError) -> bool:
+        return self._failure is failure
+
     def _require_verified(self) -> None:
         if self._failure is not None:
             raise self._failure
@@ -565,8 +600,13 @@ def _consume_artifact(
     try:
         try:
             consumer(facade)
-        except BundleReadError:
-            raise
+        except BundleReadError as exc:
+            if facade._owns_failure(exc):
+                raise
+            raise BundleReadError(
+                path,
+                detail=f"artifact {descriptor.name!r} consumer failed",
+            ) from exc
         except Exception as exc:
             raise BundleReadError(
                 path,
