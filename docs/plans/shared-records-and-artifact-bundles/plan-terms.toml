@@ -6,25 +6,27 @@
 name = "PostgreSQL backend"
 definition = """
 A persistent shared backend that stores object and binding tables in a \
-caller-selected PostgreSQL database. Independently running clients observe the \
-same backend semantics without PostgreSQL-specific behavior entering the object \
-store or record cache surfaces."""
+caller-selected PostgreSQL database through a caller-owned asynchronous \
+connection source. Independently running clients observe the same asynchronous \
+backend semantics without PostgreSQL-specific behavior entering the object store \
+or record cache surfaces."""
 categories = ["object storage"]
 is_a = ["backend"]
 
 [[terms]]
 name = "artifact bundle"
 definition = """
-An immutable completed publication composed of one bundle manifest and exactly \
-the zero or more bundle artifacts described by it. A directory left before \
-final manifest publication is an incomplete publication, not an artifact \
-bundle."""
+A terminal completed publication composed of one bundle manifest and exactly \
+the zero or more bundle artifacts described by it. The supported bundle API \
+exposes no mutation after completion; a directory left before final manifest \
+publication is an incomplete publication, not an artifact bundle."""
+exported_symbols = ["ArtifactBundleError", "BundleAllocationError"]
 categories = ["document artifacts"]
 
 [[terms]]
 name = "bundle artifact"
 definition = """
-One immutable raw-byte regular file included as a direct child of an artifact \
+One complete raw-byte regular file included as a direct child of an artifact \
 bundle and identified by a safe relative name. Its domain meaning belongs to \
 the caller's manifest payload."""
 categories = ["document artifacts"]
@@ -38,14 +40,6 @@ stored bytes. Its input is raw bytes, so it is not a content hash."""
 categories = ["document artifacts"]
 is_a = ["hash"]
 part_of = ["artifact descriptor"]
-
-[[terms]]
-name = "sidecar hash"
-definition = """
-The full 64-character lowercase SHA-256 hash of a sidecar's stored bytes after \
-any truncation. Its input is raw bytes, so it is not a content hash."""
-categories = ["document artifacts"]
-is_a = ["hash"]
 
 [[terms]]
 name = "artifact descriptor"
@@ -73,4 +67,33 @@ The storage-owned operation that allocates a fresh location, finalizes its \
 bundle artifacts, and attempts bundle-manifest publication only as its final \
 transition. Once that attempt begins, the operation is terminal and exposes no \
 supported mutation, retry, or republishing path."""
+categories = ["document artifacts"]
+
+[[terms]]
+name = "artifact bundle read"
+definition = """
+A bounded operation that recognizes a completed artifact bundle only after its \
+bundle manifest and every declared bundle artifact have been eagerly verified. \
+Its successful result describes the bytes verified at read time and supplies \
+their local locations without claiming protection from later external \
+filesystem mutation."""
+exported_symbols = ["BundleReadError", "BundleIncompleteError"]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "artifact bundle publication failure"
+definition = """
+A typed failure of the terminal manifest attempt for one artifact bundle \
+publication. It preserves the publication phase, replacement knowledge, and \
+underlying cause needed to distinguish a known incomplete location from an \
+uncertain terminal manifest outcome."""
+exported_symbols = ["BundlePublishError"]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "artifact bundle verification failure"
+definition = """
+A typed artifact bundle read failure identifying one declared artifact and the \
+reason its recovered bytes do not match the bundle manifest."""
+exported_symbols = ["BundleVerificationError"]
 categories = ["document artifacts"]

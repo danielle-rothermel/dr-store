@@ -2,13 +2,14 @@
 # are not binding until implementation and their evidence checks land.
 
 [[contracts]]
-title = "PostgreSQL preserves the backend contract"
+title = "PostgreSQL preserves the asynchronous backend contract"
 statement = """
-The PostgreSQL backend supplies the existing point and batch object and binding \
+The PostgreSQL backend supplies the awaited point and batch object and binding \
 operations with the same typed outcomes as every other backend. Each non-empty \
-write batch uses one database transaction, rolls back the whole batch on \
-failure, and makes committed rows available to independently running clients \
-without exposing a PostgreSQL-specific object-store or record-cache API."""
+write batch uses one database transaction, preserves the backend cancellation \
+and exact-replay contract, and makes committed rows available to independently \
+running clients without exposing a PostgreSQL-specific object-store or \
+record-cache API."""
 rationale = """
 A shared deployment changes persistence scope and contention mechanism, not the \
 observable storage model. One conformance suite across every backend prevents \
@@ -18,29 +19,51 @@ date = "2026-08-08"
 [[contracts]]
 title = "PostgreSQL schema installation is explicit"
 statement = """
-PostgreSQL schema installation occurs only through an explicit operation. \
+PostgreSQL schema installation occurs only through an explicit asynchronous \
+transactional operation that requires the fixed `dr_store` namespace to be \
+absent and creates that namespace and all storage tables together. A repeated \
+installation fails visibly rather than adopting or verifying existing objects. \
 Backend construction and ordinary storage operations require the installed \
 tables and fail visibly when they are absent; they never create, alter, or \
 upgrade tables as a side effect. The initial storage contract defines no schema \
 version table, compatibility negotiation, or migration framework."""
 rationale = """
 Explicit installation keeps deployment privileges and failure recovery outside \
-arbitrary application startup. Migration machinery remains outside the initial \
-implementation until an actual schema evolution requires a separately reviewed \
-contract."""
+arbitrary application startup. One absent-only namespace gives installation a \
+deterministic ownership boundary without schema introspection or drift policy. \
+Migration machinery remains outside the initial implementation until an actual \
+schema evolution requires a separately reviewed contract."""
 date = "2026-08-08"
 
 [[contracts]]
-title = "PostgreSQL uses a caller-owned connection source"
+title = "PostgreSQL uses one concrete caller-owned async pool"
 statement = """
-The PostgreSQL backend is constructed with one caller-owned connection source. \
-It releases every connection it acquires for an operation but never closes the \
-source or governs resources owned by another backend instance or process. The \
-backend defines no second ownership mode or source-lifecycle API."""
+The PostgreSQL backend accepts the documented concrete async pool type from one \
+required driver dependency as its only connection source. It awaits release of \
+every connection it acquires for an operation but never closes the caller-owned \
+pool or governs resources owned by another backend instance or process. The \
+backend defines no custom connection-source Protocol, optional dependency path, \
+synchronous source, second ownership mode, or source-lifecycle API."""
 rationale = """
-A single caller-owned boundary supports dependency injection without adding \
-parallel construction, shutdown, and failure semantics for an optional managed \
-source."""
+A single concrete caller-owned boundary avoids freezing an adapter abstraction \
+before a second implementation exists and avoids parallel import, construction, \
+shutdown, and failure semantics for an optional or managed source."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "PostgreSQL preserves exact text identity"
+statement = """
+PostgreSQL stores opaque schemas and binding keys as text columns with an \
+explicit deterministic binary-like collation. Their equality and uniqueness \
+never inherit the database default collation and preserve exact case-sensitive \
+and non-ASCII string identity. Canonical JSON text is recovered without \
+normalization and compared exactly by the backend contract. Hash columns \
+separately accept only their declared full lowercase hexadecimal \
+representation."""
+rationale = """
+Storage identity must have the same meaning in every deployment. Pinning text \
+comparison prevents locale or database configuration from changing binding \
+winners while retaining natural string values and diagnostics."""
 date = "2026-08-08"
 
 [[contracts]]
@@ -58,18 +81,41 @@ without adding a fragile sanitizer for arbitrary third-party exception text."""
 date = "2026-08-08"
 
 [[contracts]]
+title = "The bundle manifest is a closed versioned format"
+statement = """
+Every artifact bundle uses the regular direct-child filename `manifest.json`. \
+Its canonical strict JSON value contains exactly the top-level keys `format`, \
+`artifacts`, and `payload`; `format` is exactly \
+`dr-store-artifact-bundle-v1`. Each artifact descriptor contains exactly \
+`name`, `sha256`, and `byte_length`, and descriptors are ordered by exact \
+artifact name. Writers emit no unknown fields, readers reject unknown fields or \
+unsupported format markers, and persisted wire literals are explicit constants \
+rather than values derived from model field names."""
+rationale = """
+A closed self-identifying envelope separates storage integrity from caller \
+meaning and fails closed on unsupported data. Explicit literals and golden tests \
+make every persisted-format change a visible contract change rather than an \
+incidental code rename."""
+date = "2026-08-08"
+
+[[contracts]]
 title = "Artifact bundle publication is manifest-committed"
 statement = """
 Artifact bundle publication owns one collision-safe fresh allocation, finalizes \
-every bundle artifact, and then makes one bundle-manifest publication attempt as \
-its final operation. The writer becomes terminal when that attempt begins and \
-exposes no retry, replacement, or append operation. A reader recognizes a \
-completed bundle only when it can read a valid bundle manifest."""
+every bundle artifact from exactly the complete bytes supplied by the caller, \
+and then makes one bundle-manifest publication attempt as its final operation. \
+It admits at most one active artifact writer, does not publish the manifest \
+until that writer is finalized, and supplies no truncation, retention, task, or \
+multi-writer coordination policy. The bundle writer becomes terminal when the \
+manifest attempt begins and exposes no retry, replacement, or append operation. \
+A reader recognizes a completed bundle only when it can read a valid bundle \
+manifest."""
 rationale = """
 One API-level terminal transition distinguishes interrupted work from a \
 completed publication without claiming a durable cross-process once-only lock. \
-It also prevents callers from coordinating incompatible last-write-wins \
-directory conventions."""
+One active artifact writer keeps publication deterministic, while exact-byte \
+storage leaves domain-specific retention and production coordination with the \
+caller."""
 date = "2026-08-08"
 
 [[contracts]]
@@ -105,18 +151,40 @@ date = "2026-08-08"
 [[contracts]]
 title = "Artifact bundle reads verify pinned bytes"
 statement = """
-A bundle read first validates and pins one canonical bundle manifest, then opens \
-each declared regular direct-child artifact with required no-follow, \
-directory-relative behavior and reads from the descriptor it inspected. It \
-accepts the bundle only when every declared file has the exact descriptor byte \
-length and hash; files outside the manifest are not inspected. Missing platform \
-support or any declared-file mismatch fails through a typed verification \
-error."""
+A bundle read enforces caller-supplied bounds for manifest bytes, manifest \
+nesting depth, artifact count, bytes per artifact, and total artifact bytes. It \
+first validates and pins one canonical bundle manifest, then opens each declared \
+regular direct-child artifact with required no-follow, directory-relative \
+behavior and streams from the descriptor it inspected. It returns verified \
+descriptor metadata and absolute artifact paths only after every declared file \
+has the exact descriptor byte length and hash; files outside the manifest are \
+not inspected. The result describes bytes verified at read time and does not \
+claim that external actors cannot later mutate a returned path. Missing platform \
+support, an exceeded bound, or any declared-file mismatch fails through a typed \
+read error."""
 rationale = """
 Descriptor-pinned reads prevent name replacement between inspection and use, \
-while declared-file verification ensures that the manifest is evidence of the \
-bytes actually recovered without claiming a snapshot of the surrounding \
-directory."""
+while eager bounded verification gives callers one accepted state without \
+loading whole artifacts into memory. Returning ordinary paths preserves simple \
+random access while keeping the point-in-time guarantee no stronger than the \
+bytes the reader actually recovered."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "Artifact bundle failures use one small typed hierarchy"
+statement = """
+`ArtifactBundleError` is the common base. `BundleAllocationError` reports fresh \
+allocation failure. `BundlePublishError` reports publication phase and \
+replacement state. `BundleReadError` reports manifest or filesystem read \
+failure; `BundleIncompleteError` and `BundleVerificationError` specialize it for \
+a missing valid terminal manifest and a declared-artifact mismatch. Verification \
+failures identify the artifact name and a structured reason. Translated document \
+and operating-system exceptions remain available as causes rather than becoming \
+the primary bundle error."""
+rationale = """
+These categories distinguish recovery-relevant publication, incompleteness, and \
+integrity outcomes without exposing implementation exceptions or freezing one \
+public type for every low-level failure step."""
 date = "2026-08-08"
 
 [[contracts]]
@@ -124,13 +192,14 @@ title = "Completed bundles make bounded durability claims"
 statement = """
 Successful publication flushes and closes every artifact before manifest \
 publication and completes the manifest's file and bundle-directory flush. A \
-completed bundle claims immutable process-visible publication under the \
-filesystem's documented operations but does not claim survival across power \
-loss or failure of the caller-owned root directory."""
+completed bundle is terminal through the supported bundle API under the \
+filesystem's documented operations. It does not claim protection from mutation \
+by external filesystem actors, survival across power loss, or survival of a \
+failure to flush the caller-owned root directory."""
 rationale = """
 Ordering and flush evidence support a truthful completion boundary without \
-turning a local directory primitive into an unverified crash-durable storage \
-guarantee."""
+turning a local directory primitive into filesystem containment or an \
+unverified crash-durable storage guarantee."""
 date = "2026-08-08"
 
 [[contracts]]

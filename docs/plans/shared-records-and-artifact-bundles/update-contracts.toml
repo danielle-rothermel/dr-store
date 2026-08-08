@@ -1,0 +1,127 @@
+# Proposed replacements and additions for the async and sidecar-hash hard
+# cutovers. These contracts are not binding until implementation and their
+# evidence checks land.
+
+[[contracts]]
+title = "Backends own atomicity and declare persistence scope"
+statement = """
+Every backend supplies awaited atomic insert-if-absent operations for object \
+rows and bindings, exact-key reads that return bindings with their referenced \
+object rows, and atomic write batches that store prepared objects and establish \
+each key's first-writer binding. An operation releases no transaction or shared \
+connection until driver cleanup makes that resource reusable. Cancellation is \
+an operational failure and does not prove whether a write committed; storage \
+performs no automatic retry, while exact immutable replay remains supported. The \
+in-memory backend is process-local. Each SQLite backend owns one dedicated \
+worker and one connection, serializes complete operations on that worker outside \
+the event-loop thread, chunks exact-key reads into joined queries without \
+promising one batch-wide snapshot, and uses one immediate transaction for each \
+non-empty write batch. A cancelled SQLite await does not abandon its worker \
+operation or publish cancellation before that operation and its cleanup settle. \
+SQLite requires a non-transient filesystem path, captures its lexical absolute \
+path at construction, retains committed rows across reopen, and supports \
+cross-process contention without claiming power-loss durability. Empty and \
+`:memory:` paths are rejected; the captured absolute path prevents later \
+working-directory redirection but does not freeze symlink targets."""
+rationale = """
+The object store owns hashing, verification, idempotency, and typed conflicts, \
+while each asynchronous backend owns the atomic storage and resource-cleanup \
+primitives those rules require. Keeping blocking SQLite work off the event loop \
+provides one awaited backend contract without pretending SQLite itself is \
+non-blocking. Unknown cancellation outcomes remain truthful and recoverable \
+through exact replay rather than hidden retries."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "SQLite backends own one asynchronous worker lifecycle"
+statement = """
+`SqliteBackend.open(...)` returns only after its dedicated worker, connection, \
+and schema are ready. The instance admits each point or batch request as one \
+whole serialized worker operation. `aclose()` rejects new work, waits for every \
+admitted operation and its cleanup to settle, closes the connection and worker, \
+and leaves the instance terminal; successful close is idempotent. Async context \
+exit performs the same close, while direct construction, lazy first-use \
+initialization, and context-entry-only initialization are not public paths."""
+rationale = """
+One connection-affine worker makes SQLite transaction and cancellation behavior \
+predictable without consuming the process-wide executor or inventing parallel \
+read machinery. Awaited opening and terminal close prevent callers from \
+observing a partially initialized or reopened backend."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "Record cache reads are best-effort and entries are never rebound"
+statement = """
+An awaited record-cache batch read deduplicates its input keys and returns \
+exactly one typed hit or miss for every distinct exact requested key. It \
+validates the requested schema before awaiting storage and parses and verifies \
+each returned bound object once. An unbound key, missing content, schema \
+mismatch, and unverifiable stored object or binding all report a per-key miss; \
+invalid requested schemas, cancellation, and operational backend failures \
+propagate. An awaited cache batch put validates, canonicalizes, and hashes every \
+proposed entry before one backend write batch, then returns the first binding \
+winner for each input key. Invalidation selects a new caller-owned key rather \
+than deleting or expiring an entry, and a batch read claims no single snapshot \
+across backend read chunks."""
+rationale = """
+Expected absence and unverifiable stored data do not prevent recomputation, \
+while caller errors, cancellation, and unavailable storage stay visible. \
+Preparing caller data before the first await prevents validation faults from \
+starting storage work. First-writer-wins and exact replay keep cache bindings \
+stable even when a cancelled write has an uncertain observed outcome."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "Managed SQLite record caches own their complete lifecycle"
+statement = """
+`SqliteRecordCache.open(...)` returns only after its owned SQLite backend, \
+dedicated worker, connection, and schema are ready. Each single or bulk cache \
+read or write is admitted as one whole operation while open. `aclose()` rejects \
+new operations with a typed closed error, waits for every admitted operation and \
+its worker cleanup to settle, and then closes the backend resources owned by \
+that instance. Async context exit performs the same close; direct construction, \
+lazy initialization, and context-entry-only initialization are not public \
+paths. Once close begins the lifecycle remains terminal; cancelling one close \
+waiter does not cancel shared cleanup or reopen the cache. Concurrent and later \
+close callers observe the same successful or typed terminal-failure outcome, \
+and successful close is idempotent. The persistent database path is made \
+absolute during open without freezing symlink targets, transient paths are \
+rejected, completed commits persist across close and reopen, and separate \
+instances and processes retain independent lifecycles even when they use the \
+same path."""
+rationale = """
+Whole-operation admission prevents asynchronous shutdown from invalidating work \
+between binding and object-store steps. One shared terminal cleanup operation \
+keeps cancellation from abandoning SQLite worker resources or creating a reopen \
+path, while persistence remains a property of committed rows rather than a \
+power-loss or process-global lifecycle guarantee."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "Sidecar finalization reports stored-byte accounting"
+statement = """
+A sidecar writer retains bytes under caller-supplied head and tail caps and, on \
+successful finalization, flushes and closes its file descriptor before returning \
+stored segment lengths, produced and dropped byte counts, and the SHA-256 hash \
+of exactly the stored bytes. Finalization does not flush the directory entry or \
+impose ordering on manifest publication."""
+rationale = """
+The summary makes truncation and the verified byte sequence explicit while \
+avoiding stronger persistence or publication-order claims. A caller abandons a \
+writer after a write failure because further use has no supported outcome."""
+date = "2026-08-08"
+
+[[contracts]]
+title = "Sidecar verification pins no-follow descriptors"
+statement = """
+Sidecar verification opens the named document directory and its regular direct \
+child with required no-follow, directory-relative flags, reads from the child \
+descriptor it inspected, and verifies the caller-supplied non-negative head and \
+tail lengths plus sidecar hash. It rejects final-component symlinks and fails \
+closed when the required platform support is unavailable."""
+rationale = """
+Pinned descriptors prevent a checked child name from being swapped to a \
+different final object before reading. This boundary does not claim containment \
+for ancestor path resolution, durability, or safety for sidecar creation, which \
+follows its documented path behavior."""
+date = "2026-08-08"
