@@ -205,6 +205,28 @@ async def test_every_key_path_rejects_invalid_text(
             await operation()
 
 
+@pytest.mark.parametrize(
+    "value",
+    ["not-a-hash", "A" * 64, "a" * 63, "g" * 64],
+)
+async def test_every_content_hash_path_rejects_malformed_values(
+    backend: Backend, value: str
+) -> None:
+    operations = (
+        lambda: backend.put_object(
+            schema=SCHEMA, content_hash=value, canonical=CANONICAL
+        ),
+        lambda: backend.get_object(schema=SCHEMA, content_hash=value),
+        lambda: backend.bind(key=KEY, schema=SCHEMA, content_hash=value),
+        lambda: backend.put_bound_objects(
+            entries=(BoundObjectWrite(KEY, SCHEMA, value, CANONICAL),)
+        ),
+    )
+    for operation in operations:
+        with pytest.raises(ReferenceValidationError):
+            await operation()
+
+
 async def test_empty_key_is_valid(backend: Backend) -> None:
     assert (
         await backend.bind(key="", schema=SCHEMA, content_hash=CONTENT_HASH)

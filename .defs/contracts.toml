@@ -18,8 +18,8 @@ statement = """
 An object reference contains a schema from the shared text domain and a \
 64-character lowercase hexadecimal content hash. Schemas are non-empty and \
 contain neither NUL nor unpaired surrogate code points. Construction and every \
-public backend or facade path that accepts schema text reject any other shape \
-before storage work begins."""
+public backend or facade path that accepts schema or content-hash text rejects \
+any other shape before storage work begins."""
 rationale = """
 One validation domain prevents direct backend use from bypassing the object \
 reference boundary while retaining every other schema character as opaque \
@@ -364,68 +364,110 @@ date = "2026-08-08"
 check = "uv run pytest -q tests/record_cache/test_sqlite_cache.py tests/storage_backends/test_sqlite_backend.py"
 
 [[contracts]]
+title = "PostgreSQL preserves the asynchronous backend contract"
+statement = """
+`PostgresBackend` supplies the awaited point and batch object and binding \
+operations with the same typed outcomes and shared schema and key text domains \
+as every other backend. Each non-empty write batch uses one database \
+transaction, preserves the backend cancellation and exact-replay contract, and \
+makes committed rows available to independently running clients without \
+exposing a PostgreSQL-specific object-store or record-cache API."""
+rationale = """
+A shared deployment changes persistence scope and contention mechanism, not the \
+observable storage model. One conformance suite across every backend prevents \
+database-specific semantics from leaking through the foundational boundary."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh"
+
+[[contracts]]
 title = "PostgreSQL schema installation is explicit"
 statement = """
 PostgreSQL schema installation occurs only through the public asynchronous \
 `install_postgres(pool)` operation against a caller-owned `asyncpg.Pool`. It \
 supports PostgreSQL 16 through 18 databases whose server encoding is UTF-8, \
 requires the fixed `dr_store` namespace to be absent, and creates that namespace \
-and its object and binding tables together in one transaction. A repeated or \
-concurrent losing installation fails visibly rather than adopting existing \
-objects. The namespace is not configurable, and installation defines no schema \
-version table, compatibility negotiation, or migration framework."""
+and all storage tables together in one transaction. A repeated installation \
+fails visibly rather than adopting or verifying existing objects. Backend \
+construction and ordinary storage operations require the installed tables and \
+fail visibly when they are absent; they never create, alter, or upgrade tables \
+as a side effect. The namespace is not configurable, and the initial storage \
+contract defines no schema version table, compatibility negotiation, or \
+migration framework."""
 rationale = """
 Explicit installation keeps deployment privileges and failure recovery outside \
 arbitrary application startup. One absent-only namespace gives installation a \
-deterministic ownership boundary without schema introspection or drift policy."""
+deterministic ownership boundary without schema introspection or drift policy. \
+Migration machinery remains outside the initial implementation until an actual \
+schema evolution requires a separately reviewed contract."""
 date = "2026-08-08"
-check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_install.py"
+check = "scripts/test-postgres.sh"
 
 [[contracts]]
-title = "PostgreSQL installation uses one concrete caller-owned async pool"
+title = "PostgreSQL uses one concrete caller-owned async pool"
 statement = """
-`asyncpg>=0.31.0` is a required runtime dependency. `install_postgres` accepts a \
-concrete caller-owned `asyncpg.Pool` as its only connection source. It releases \
-the connection acquired for installation but never closes the pool. The \
-installation API defines no custom connection-source Protocol, optional import \
-or dependency path, DSN acceptance or ownership, synchronous source, second \
-ownership mode, or source-lifecycle API."""
+`asyncpg>=0.31.0` is a required runtime dependency. `PostgresBackend` accepts a \
+concrete caller-owned `asyncpg.Pool` as its only connection source. It awaits \
+release of every connection it acquires for an operation but never closes the \
+caller-owned pool or governs resources owned by another backend instance or \
+process. The backend defines no custom connection-source Protocol, optional \
+import or dependency path, DSN acceptance or ownership, synchronous source, \
+second ownership mode, or source-lifecycle API."""
 rationale = """
 A single concrete caller-owned boundary avoids freezing an adapter abstraction \
 before a second implementation exists and avoids parallel import, construction, \
 shutdown, and failure semantics for an optional or managed source."""
 date = "2026-08-08"
-check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_install.py"
+check = "scripts/test-postgres.sh"
 
 [[contracts]]
-title = "PostgreSQL installation preserves exact text identity"
+title = "PostgreSQL preserves exact text identity"
 statement = """
-On supported UTF-8 PostgreSQL 16 through 18 databases, the installed object and \
-binding tables store schemas, binding keys, canonical JSON text, and hash text \
-using `pg_catalog.ucs_basic`. Their equality and uniqueness do not inherit the \
-database default collation and preserve exact case-sensitive and non-ASCII text. \
-The object key is `PRIMARY KEY (content_hash, schema)`, and both hash columns \
-accept only a full 64-character lowercase hexadecimal representation. The \
-binding table deliberately defines no foreign key."""
+On supported UTF-8 PostgreSQL 16 through 18 databases, PostgreSQL stores opaque \
+schemas and binding keys as text columns using `pg_catalog.ucs_basic`. Their \
+equality and uniqueness never inherit the database default collation and \
+preserve exact case-sensitive and non-ASCII string identity. Canonical JSON text \
+is recovered without normalization and compared exactly by the backend contract. \
+Hash columns separately accept only their declared full lowercase hexadecimal \
+representation."""
 rationale = """
 Storage identity must have the same meaning in every deployment. Pinning text \
-comparison prevents locale or database configuration from changing identity \
-while the hash-leading object key supports exact and alternate-schema lookup."""
+comparison prevents locale or database configuration from changing binding \
+winners while retaining natural string values and diagnostics."""
 date = "2026-08-08"
-check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_install.py"
+check = "scripts/test-postgres.sh"
 
 [[contracts]]
-title = "PostgreSQL installation keeps credentials at the connection boundary"
+title = "PostgreSQL object lookup and batches scale by bounded chunks"
 statement = """
-The PostgreSQL installation API accepts only the caller-owned pool and never \
-accepts, stringifies, or retains a DSN or other credential-bearing connection \
-value. It does not include one in representations, messages, logs, storage \
-identities, or metadata that dr-store constructs. Driver exceptions propagate \
-without recursive rewriting, and the connection path is exercised against \
-password-authenticated PostgreSQL."""
+The PostgreSQL objects table uses `PRIMARY KEY (content_hash, schema)`, or an \
+equivalent key plus an index whose leading column is `content_hash`. Point \
+methods may use point statements. Batch methods deduplicate identical object \
+references before sending canonical object data, chunk requests by explicit \
+driver and statement bounds, fetch bindings in set-based statements, fetch \
+distinct referenced objects separately in set-based statements, and reconstruct \
+binding results in Python. Database round trips grow with bounded chunks rather \
+than entries, one canonical record is not transferred once per referring key, \
+and each non-empty write batch uses one transaction."""
+rationale = """
+The semantic batch boundary must remain useful over a network database. \
+Hash-leading lookup avoids scans for alternate-schema resolution, while \
+set-based binding and distinct-object fetches prevent N-plus-one round trips and \
+payload multiplication when many keys refer to one object."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh"
+
+[[contracts]]
+title = "PostgreSQL credentials remain at the connection boundary"
+statement = """
+The PostgreSQL API accepts only the caller-owned pool and never accepts, \
+stringifies, or retains a DSN or other credential-bearing connection value. It \
+does not include one in representations, messages, logs, storage identities, or \
+metadata that dr-store constructs. Driver exceptions remain available as causes \
+rather than being recursively rewritten, and the connection path is exercised \
+against password-authenticated PostgreSQL."""
 rationale = """
 Shared deployments require secrets that local trust authentication can hide \
 from tests. Constraining dr-store-owned output prevents accidental disclosure \
 without adding a fragile sanitizer for arbitrary third-party exception text."""
 date = "2026-08-08"
-check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_install.py"
+check = "scripts/test-postgres.sh"

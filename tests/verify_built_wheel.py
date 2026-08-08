@@ -66,6 +66,9 @@ def main() -> None:
     for module_name in FUNCTIONAL_MODULES:
         importlib.import_module(module_name)
 
+    storage_backends = importlib.import_module("dr_store.storage_backends")
+    assert package.PostgresBackend is storage_backends.PostgresBackend
+
     typed_marker = importlib.resources.files("dr_store").joinpath("py.typed")
     assert typed_marker.is_file(), "dr_store/py.typed is absent from the wheel"
 

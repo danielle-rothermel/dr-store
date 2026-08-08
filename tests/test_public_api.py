@@ -57,7 +57,7 @@ def test_object_store_public_surface_is_exact() -> None:
 
 
 def test_backend_public_surfaces_are_exact() -> None:
-    from dr_store import Backend, MemoryBackend
+    from dr_store import Backend, MemoryBackend, PostgresBackend
 
     expected = {
         "bind",
@@ -67,7 +67,7 @@ def test_backend_public_surfaces_are_exact() -> None:
         "put_bound_objects",
         "put_object",
     }
-    for backend_type in (Backend, MemoryBackend):
+    for backend_type in (Backend, MemoryBackend, PostgresBackend):
         public = {
             name for name in dir(backend_type) if not name.startswith("_")
         }
@@ -78,8 +78,11 @@ def test_backend_public_surfaces_are_exact() -> None:
         )
 
 
-def test_postgresql_installer_public_surface_is_exact() -> None:
-    from dr_store import install_postgres
+def test_postgresql_public_surface_is_exact() -> None:
+    from dr_store import PostgresBackend, install_postgres
+    from dr_store.storage_backends import (
+        PostgresBackend as BackendType,
+    )
     from dr_store.storage_backends import (
         install_postgres as backend_install,
     )
@@ -88,9 +91,11 @@ def test_postgresql_installer_public_surface_is_exact() -> None:
     )
 
     assert backend_install is install_postgres
-    assert postgresql.__all__ == ["install_postgres"]
+    assert BackendType is PostgresBackend
+    assert postgresql.__all__ == ["PostgresBackend", "install_postgres"]
     assert inspect.iscoroutinefunction(install_postgres)
     assert list(inspect.signature(install_postgres).parameters) == ["pool"]
+    assert list(inspect.signature(PostgresBackend).parameters) == ["pool"]
 
 
 def test_record_cache_public_surface_is_exact() -> None:

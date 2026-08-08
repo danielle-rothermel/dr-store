@@ -53,6 +53,15 @@ def _validate_binding_key(key: object) -> str:
     return key
 
 
+def _validate_content_hash(content_hash: object) -> str:
+    if not isinstance(content_hash, str) or not is_content_hash(content_hash):
+        raise ReferenceValidationError(
+            "content hash must be a 64-character lowercase hex SHA-256 hash, "
+            f"got {content_hash!r}"
+        )
+    return content_hash
+
+
 def _validate_storage_text(value: str, *, name: str) -> None:
     if "\0" in value or any(
         "\ud800" <= character <= "\udfff" for character in value
@@ -82,13 +91,7 @@ class ObjectReference:
 
     def __post_init__(self) -> None:
         _validate_reference_schema(self.schema)
-        if not isinstance(self.content_hash, str) or not is_content_hash(
-            self.content_hash
-        ):
-            raise ReferenceValidationError(
-                "ObjectReference content_hash must be a 64-character "
-                f"lowercase hex SHA-256 hash, got {self.content_hash!r}"
-            )
+        _validate_content_hash(self.content_hash)
 
     @classmethod
     def for_record(cls, schema: str, record: Jsonable) -> ObjectReference:

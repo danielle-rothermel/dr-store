@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Self
 
 from dr_store.content_addressing import (
     _validate_binding_key,
+    _validate_content_hash,
     _validate_reference_schema,
 )
 from dr_store.core.errors import ObjectConflictError
@@ -198,6 +199,7 @@ class SqliteBackend:
     ) -> PutOutcome:
         self._check_operation()
         _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
         return await self._run(
             self._put_object,
             schema,
@@ -239,6 +241,7 @@ class SqliteBackend:
     ) -> tuple[str, str] | None:
         self._check_operation()
         _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
         return await self._run(self._get_object, schema, content_hash)
 
     def _get_object(
@@ -265,6 +268,7 @@ class SqliteBackend:
         self._check_operation()
         _validate_binding_key(key)
         _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
         return await self._run(self._bind, key, schema, content_hash)
 
     def _bind(
@@ -359,6 +363,7 @@ class SqliteBackend:
         for entry in entries:
             _validate_binding_key(entry.key)
             _validate_reference_schema(entry.schema)
+            _validate_content_hash(entry.content_hash)
         if not entries:
             return {}
         return await self._run(self._put_bound_objects, entries)

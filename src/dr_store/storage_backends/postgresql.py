@@ -1,11 +1,30 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import asyncpg
 
-__all__ = ["install_postgres"]
+from dr_store.content_addressing import (
+    _validate_binding_key,
+    _validate_content_hash,
+    _validate_reference_schema,
+)
+from dr_store.core.errors import ObjectConflictError
+from dr_store.storage_backends.contract import (
+    BindOutcome,
+    BoundObjectRow,
+    BoundObjectWrite,
+    PutOutcome,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+__all__ = ["PostgresBackend", "install_postgres"]
 
 _MINIMUM_POSTGRES_MAJOR = 16
 _MAXIMUM_POSTGRES_MAJOR = 18
+_BATCH_CHUNK_SIZE = 512
 
 _DATABASE_REQUIREMENTS_SQL = """
 SELECT
@@ -47,6 +66,85 @@ CREATE TABLE dr_store.bindings (
 );
 """
 
+_INSERT_OBJECT_SQL = """
+INSERT INTO dr_store.objects (content_hash, schema, canonical)
+VALUES ($1, $2, $3)
+ON CONFLICT (content_hash, schema) DO NOTHING
+RETURNING schema, canonical
+"""
+
+_GET_OBJECT_SQL = """
+SELECT schema, canonical
+FROM dr_store.objects
+WHERE content_hash = $1
+ORDER BY (schema = $2) DESC
+LIMIT 1
+"""
+
+_GET_EXACT_OBJECT_SQL = """
+SELECT schema, canonical
+FROM dr_store.objects
+WHERE content_hash = $1 AND schema = $2
+"""
+
+_INSERT_BINDING_SQL = """
+INSERT INTO dr_store.bindings (key, schema, content_hash)
+VALUES ($1, $2, $3)
+ON CONFLICT (key) DO NOTHING
+RETURNING key
+"""
+
+_GET_BINDING_SQL = """
+SELECT schema, content_hash
+FROM dr_store.bindings
+WHERE key = $1
+"""
+
+_INSERT_OBJECTS_SQL = """
+INSERT INTO dr_store.objects (content_hash, schema, canonical)
+SELECT proposed.content_hash, proposed.schema, proposed.canonical
+FROM ROWS FROM (
+    pg_catalog.unnest($1::pg_catalog.text[]),
+    pg_catalog.unnest($2::pg_catalog.text[]),
+    pg_catalog.unnest($3::pg_catalog.text[])
+) AS proposed(content_hash, schema, canonical)
+ON CONFLICT (content_hash, schema) DO NOTHING
+"""
+
+_FETCH_OBJECTS_SQL = """
+SELECT objects.content_hash, objects.schema, objects.canonical
+FROM dr_store.objects AS objects
+JOIN ROWS FROM (
+    pg_catalog.unnest($1::pg_catalog.text[]),
+    pg_catalog.unnest($2::pg_catalog.text[])
+) AS requested(content_hash, schema)
+    ON objects.content_hash = requested.content_hash
+    AND objects.schema = requested.schema
+"""
+
+_INSERT_BINDINGS_SQL = """
+INSERT INTO dr_store.bindings (key, schema, content_hash)
+SELECT proposed.key, proposed.schema, proposed.content_hash
+FROM ROWS FROM (
+    pg_catalog.unnest($1::pg_catalog.text[]),
+    pg_catalog.unnest($2::pg_catalog.text[]),
+    pg_catalog.unnest($3::pg_catalog.text[])
+) AS proposed(key, schema, content_hash)
+ON CONFLICT (key) DO NOTHING
+RETURNING key
+"""
+
+_FETCH_BINDINGS_SQL = """
+SELECT key, schema, content_hash
+FROM dr_store.bindings
+WHERE key = ANY($1::pg_catalog.text[])
+"""
+
+
+def _chunks[T](values: tuple[T, ...]) -> Iterator[tuple[T, ...]]:
+    for start in range(0, len(values), _BATCH_CHUNK_SIZE):
+        yield values[start : start + _BATCH_CHUNK_SIZE]
+
 
 def _validate_database(*, version_num: int, server_encoding: str) -> None:
     major = version_num // 10_000
@@ -76,3 +174,277 @@ async def install_postgres(pool: asyncpg.Pool) -> None:
             server_encoding=requirements["server_encoding"],
         )
         await connection.execute(_INSTALL_SQL)
+
+
+class PostgresBackend:
+    """Shared PostgreSQL storage through a caller-owned asynchronous pool."""
+
+    def __init__(self, pool: asyncpg.Pool) -> None:
+        if not isinstance(pool, asyncpg.Pool):
+            raise TypeError("pool must be an asyncpg.Pool")
+        self._pool = pool
+
+    async def _execute(
+        self,
+        connection: asyncpg.Connection,
+        query: str,
+        *args: object,
+    ) -> str:
+        return await connection.execute(query, *args)
+
+    async def _fetch(
+        self,
+        connection: asyncpg.Connection,
+        query: str,
+        *args: object,
+    ) -> list[asyncpg.Record]:
+        return await connection.fetch(query, *args)
+
+    async def _fetchrow(
+        self,
+        connection: asyncpg.Connection,
+        query: str,
+        *args: object,
+    ) -> asyncpg.Record | None:
+        return await connection.fetchrow(query, *args)
+
+    async def put_object(
+        self,
+        *,
+        schema: str,
+        content_hash: str,
+        canonical: str,
+    ) -> PutOutcome:
+        _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
+        async with (
+            self._pool.acquire() as connection,
+            connection.transaction(),
+        ):
+            inserted = await self._fetchrow(
+                connection,
+                _INSERT_OBJECT_SQL,
+                content_hash,
+                schema,
+                canonical,
+            )
+            if inserted is not None:
+                return PutOutcome(
+                    inserted=True,
+                    stored_schema=inserted["schema"],
+                    stored_canonical=inserted["canonical"],
+                )
+            stored = await self._fetchrow(
+                connection,
+                _GET_EXACT_OBJECT_SQL,
+                content_hash,
+                schema,
+            )
+            assert stored is not None
+            return PutOutcome(
+                inserted=False,
+                stored_schema=stored["schema"],
+                stored_canonical=stored["canonical"],
+            )
+
+    async def get_object(
+        self,
+        *,
+        schema: str,
+        content_hash: str,
+    ) -> tuple[str, str] | None:
+        _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
+        async with self._pool.acquire() as connection:
+            row = await self._fetchrow(
+                connection,
+                _GET_OBJECT_SQL,
+                content_hash,
+                schema,
+            )
+        if row is None:
+            return None
+        return (row["schema"], row["canonical"])
+
+    async def bind(
+        self,
+        *,
+        key: str,
+        schema: str,
+        content_hash: str,
+    ) -> BindOutcome:
+        _validate_binding_key(key)
+        _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
+        async with (
+            self._pool.acquire() as connection,
+            connection.transaction(),
+        ):
+            inserted = await self._fetchrow(
+                connection,
+                _INSERT_BINDING_SQL,
+                key,
+                schema,
+                content_hash,
+            )
+            row = await self._fetchrow(
+                connection,
+                _GET_BINDING_SQL,
+                key,
+            )
+            assert row is not None
+        return BindOutcome(
+            bound=inserted is not None,
+            existing_schema=row["schema"],
+            existing_content_hash=row["content_hash"],
+        )
+
+    async def get_binding(self, *, key: str) -> tuple[str, str] | None:
+        _validate_binding_key(key)
+        async with self._pool.acquire() as connection:
+            row = await self._fetchrow(connection, _GET_BINDING_SQL, key)
+        if row is None:
+            return None
+        return (row["schema"], row["content_hash"])
+
+    async def get_bound_objects(
+        self,
+        *,
+        keys: tuple[str, ...],
+    ) -> dict[str, BoundObjectRow]:
+        for key in keys:
+            _validate_binding_key(key)
+        distinct_keys = tuple(dict.fromkeys(keys))
+        if not distinct_keys:
+            return {}
+
+        bindings: dict[str, tuple[str, str]] = {}
+        objects: dict[tuple[str, str], str] = {}
+        async with self._pool.acquire() as connection:
+            for chunk in _chunks(distinct_keys):
+                rows = await self._fetch(
+                    connection,
+                    _FETCH_BINDINGS_SQL,
+                    list(chunk),
+                )
+                for row in rows:
+                    bindings[row["key"]] = (
+                        row["schema"],
+                        row["content_hash"],
+                    )
+
+            references = tuple(dict.fromkeys(bindings.values()))
+            for chunk in _chunks(references):
+                rows = await self._fetch(
+                    connection,
+                    _FETCH_OBJECTS_SQL,
+                    [reference[1] for reference in chunk],
+                    [reference[0] for reference in chunk],
+                )
+                for row in rows:
+                    objects[(row["schema"], row["content_hash"])] = row[
+                        "canonical"
+                    ]
+
+        results: dict[str, BoundObjectRow] = {}
+        for key, (schema, content_hash) in bindings.items():
+            canonical = objects.get((schema, content_hash))
+            results[key] = BoundObjectRow(
+                binding_schema=schema,
+                binding_content_hash=content_hash,
+                object_schema=schema if canonical is not None else None,
+                canonical=canonical,
+            )
+        return results
+
+    async def put_bound_objects(
+        self,
+        *,
+        entries: tuple[BoundObjectWrite, ...],
+    ) -> dict[str, BindOutcome]:
+        for entry in entries:
+            _validate_binding_key(entry.key)
+            _validate_reference_schema(entry.schema)
+            _validate_content_hash(entry.content_hash)
+        if not entries:
+            return {}
+
+        objects: dict[tuple[str, str], str] = {}
+        writes: dict[str, BoundObjectWrite] = {}
+        for entry in entries:
+            reference = (entry.schema, entry.content_hash)
+            proposed = objects.setdefault(reference, entry.canonical)
+            if proposed != entry.canonical:
+                raise ObjectConflictError(
+                    schema=entry.schema,
+                    content_hash=entry.content_hash,
+                )
+            writes.setdefault(entry.key, entry)
+
+        references = tuple(objects)
+        distinct_writes = tuple(writes.values())
+        inserted_keys: set[str] = set()
+        stored_objects: dict[tuple[str, str], str] = {}
+        stored_bindings: dict[str, tuple[str, str]] = {}
+        async with (
+            self._pool.acquire() as connection,
+            connection.transaction(),
+        ):
+            for chunk in _chunks(references):
+                await self._execute(
+                    connection,
+                    _INSERT_OBJECTS_SQL,
+                    [reference[1] for reference in chunk],
+                    [reference[0] for reference in chunk],
+                    [objects[reference] for reference in chunk],
+                )
+            for chunk in _chunks(references):
+                rows = await self._fetch(
+                    connection,
+                    _FETCH_OBJECTS_SQL,
+                    [reference[1] for reference in chunk],
+                    [reference[0] for reference in chunk],
+                )
+                for row in rows:
+                    stored_objects[(row["schema"], row["content_hash"])] = row[
+                        "canonical"
+                    ]
+
+            for reference, canonical in objects.items():
+                assert reference in stored_objects
+                if stored_objects[reference] != canonical:
+                    raise ObjectConflictError(
+                        schema=reference[0],
+                        content_hash=reference[1],
+                    )
+
+            for chunk in _chunks(distinct_writes):
+                rows = await self._fetch(
+                    connection,
+                    _INSERT_BINDINGS_SQL,
+                    [entry.key for entry in chunk],
+                    [entry.schema for entry in chunk],
+                    [entry.content_hash for entry in chunk],
+                )
+                inserted_keys.update(row["key"] for row in rows)
+            for chunk in _chunks(tuple(writes)):
+                rows = await self._fetch(
+                    connection,
+                    _FETCH_BINDINGS_SQL,
+                    list(chunk),
+                )
+                for row in rows:
+                    stored_bindings[row["key"]] = (
+                        row["schema"],
+                        row["content_hash"],
+                    )
+
+        assert stored_bindings.keys() == writes.keys()
+        return {
+            key: BindOutcome(
+                bound=key in inserted_keys,
+                existing_schema=stored_bindings[key][0],
+                existing_content_hash=stored_bindings[key][1],
+            )
+            for key in writes
+        }

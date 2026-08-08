@@ -21,7 +21,8 @@ document artifacts:
 - **[Storage backends](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/storage_backends)**
   supply the Object Store's atomic, append-only point and batch operations.
   `MemoryBackend` is process-local; `SqliteBackend` persists committed data for
-  cross-process use.
+  cross-process use; `PostgresBackend` shares committed data through a
+  caller-owned asynchronous PostgreSQL pool.
 - **[Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)**
   memoizes records under opaque caller-owned keys. Reads return typed hits;
   absent, missing, or unverifiable stored values are misses, while invalid
@@ -55,13 +56,18 @@ import os
 
 import asyncpg
 
-from dr_store import install_postgres
+from dr_store import ObjectStore, PostgresBackend, install_postgres
 
 
 async def main() -> None:
     pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
     try:
         await install_postgres(pool)
+        store = ObjectStore(PostgresBackend(pool))
+        reference, _ = await store.put(
+            "example.note.v1", {"title": "hello"}
+        )
+        assert await store.get(reference) == {"title": "hello"}
     finally:
         await pool.close()
 
@@ -69,10 +75,11 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`install_postgres` creates the fixed `dr_store` namespace and its tables in one
-transaction on a UTF-8 database. Repeating installation is an error. The
-current PostgreSQL public surface is installation only; ordinary PostgreSQL
-object and binding operations are not exposed by this release.
+`install_postgres` is a one-time deployment operation that creates the fixed
+`dr_store` namespace and its tables in one transaction on a UTF-8 database.
+Repeating installation is an error. `PostgresBackend(pool)` uses that installed
+namespace for the same awaited point and batch operations as the other
+backends; it acquires and releases connections without closing the pool.
 
 ## Usage
 
@@ -260,6 +267,9 @@ class Backend(Protocol):
     ) -> dict[str, BindOutcome]: ...
 
 class MemoryBackend: ...
+class PostgresBackend:
+    def __init__(self, pool: asyncpg.Pool) -> None: ...
+
 class SqliteBackend:
     @classmethod
     async def open(cls, path: str | Path) -> SqliteBackend: ...
@@ -271,6 +281,12 @@ joined binding/object queries and does not promise one snapshot across the
 chunks. Every non-empty SQLite write batch uses one immediate transaction; a
 failure rolls back that transaction. Committed rows persist across reopen, but
 the backend does not promise power-loss durability.
+
+PostgreSQL batches deduplicate objects and keys, use bounded set-based
+statements, and fetch bindings separately from distinct referenced objects.
+Every non-empty PostgreSQL write batch uses one transaction. The backend owns
+neither installation nor pool lifecycle and uses the fixed `dr_store`
+namespace regardless of the connection's search path.
 
 ## Record Cache
 

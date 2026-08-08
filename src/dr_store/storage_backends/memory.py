@@ -4,6 +4,7 @@ import threading
 
 from dr_store.content_addressing import (
     _validate_binding_key,
+    _validate_content_hash,
     _validate_reference_schema,
 )
 from dr_store.core.errors import ObjectConflictError
@@ -31,6 +32,7 @@ class MemoryBackend:
         canonical: str,
     ) -> PutOutcome:
         _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
         with self._lock:
             existing = self._objects.get((schema, content_hash))
             if existing is None:
@@ -53,6 +55,7 @@ class MemoryBackend:
         content_hash: str,
     ) -> tuple[str, str] | None:
         _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
         with self._lock:
             # Alternate schemas distinguish mismatch from missing content.
             exact = self._objects.get((schema, content_hash))
@@ -72,6 +75,7 @@ class MemoryBackend:
     ) -> BindOutcome:
         _validate_binding_key(key)
         _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
         with self._lock:
             existing = self._bindings.get(key)
             if existing is None:
@@ -124,6 +128,7 @@ class MemoryBackend:
         for entry in entries:
             _validate_binding_key(entry.key)
             _validate_reference_schema(entry.schema)
+            _validate_content_hash(entry.content_hash)
         with self._lock:
             proposed_objects: dict[tuple[str, str], str] = {}
             for entry in entries:

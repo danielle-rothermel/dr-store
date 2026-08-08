@@ -89,7 +89,7 @@ async def test_batch_reports_distinct_hits_misses_and_corruption(
     }
 
 
-async def test_missing_object_and_corrupt_binding_are_misses(
+async def test_missing_object_is_a_miss(
     backend: Backend,
     cache: RecordCache,
 ) -> None:
@@ -101,9 +101,24 @@ async def test_missing_object_and_corrupt_binding_are_misses(
     )
     assert await cache.get(KEY, schema=SCHEMA) is None
 
-    await backend.bind(
-        key="bad-binding", schema=SCHEMA, content_hash="not-a-hash"
-    )
+
+class CorruptBindingBackend(MemoryBackend):
+    async def get_bound_objects(
+        self, *, keys: tuple[str, ...]
+    ) -> dict[str, BoundObjectRow]:
+        assert keys == ("bad-binding",)
+        return {
+            "bad-binding": BoundObjectRow(
+                binding_schema=SCHEMA,
+                binding_content_hash="not-a-hash",
+                object_schema=None,
+                canonical=None,
+            )
+        }
+
+
+async def test_controlled_corrupt_binding_is_a_cache_miss() -> None:
+    cache = RecordCache(ObjectStore(CorruptBindingBackend()))
     assert await cache.get("bad-binding", schema=SCHEMA) is None
 
 

@@ -151,9 +151,12 @@ export DR_STORE_REQUIRE_POSTGRES=1
 
 cd -- "${repository_root}"
 if [[ "$#" -eq 0 ]]; then
-    set -- tests/storage_backends/test_postgresql_install.py
+    set -- \
+        tests/storage_backends/test_postgresql_install.py \
+        tests/storage_backends/test_postgresql_backend.py \
+        tests/storage_backends/test_postgresql_contract.py
 fi
 uv run pytest -q "$@"
 
 printf '%s\n' \
-    'password-authenticated PostgreSQL installer integration passed'
+    'password-authenticated PostgreSQL backend integration passed'

@@ -165,10 +165,10 @@ name = "PostgreSQL backend"
 definition = """
 A persistent shared storage capability whose fixed `dr_store` schema is created \
 explicitly in a caller-selected PostgreSQL database through one concrete \
-caller-owned asynchronous pool. The public installation boundary prepares the \
-object and binding tables without taking ownership of the pool or accepting a \
-connection string."""
-exported_symbols = ["install_postgres"]
+caller-owned asynchronous pool. Independently running clients observe the same \
+asynchronous backend semantics without PostgreSQL-specific behavior entering \
+the object store or record cache surfaces."""
+exported_symbols = ["PostgresBackend", "install_postgres"]
 categories = ["object storage"]
 is_a = ["backend"]
 
