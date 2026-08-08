@@ -292,17 +292,18 @@ part_of = ["record cache"]
 name = "artifact bundle"
 definition = """
 A terminal completed publication composed of one bundle manifest and exactly \
-the zero or more bundle artifacts described by it. The publication API exposes \
+the zero or more bundle artifacts described by it. The supported API exposes \
 no mutation after completion; a directory left before final manifest \
-publication is incomplete. Its directory format is intended for one task, run, \
-or result publication rather than a high-volume event record."""
+publication is incomplete rather than an artifact bundle. Its directory format \
+is intended for one task, run, or result publication rather than a high-volume \
+event record."""
 exported_symbols = ["ArtifactBundleError", "BundleAllocationError"]
 categories = ["document artifacts"]
 
 [[terms]]
 name = "bundle artifact"
 definition = """
-One complete raw-byte regular file published as a direct child of an artifact \
+One complete raw-byte regular file included as a direct child of an artifact \
 bundle and identified by a safe exact relative name. Its domain meaning belongs \
 to the caller's manifest payload."""
 exported_symbols = ["BundleArtifactWriter"]
@@ -332,7 +333,7 @@ part_of = ["bundle manifest"]
 name = "bundle manifest"
 definition = """
 A canonical JSON value stored as the final artifact-bundle child. It enumerates \
-the publication's exact artifact descriptors and carries an opaque strict JSON \
+the bundle's exact artifact descriptors and carries an opaque strict JSON \
 payload whose domain schema belongs to the caller."""
 exported_symbols = ["BundleManifest"]
 categories = ["document artifacts"]
@@ -350,6 +351,41 @@ exported_symbols = ["ArtifactBundlePublication"]
 categories = ["document artifacts"]
 
 [[terms]]
+name = "artifact bundle read"
+definition = """
+A bounded operation that pins and validates one completed bundle manifest \
+before either auditing every declared bundle artifact or verified-consuming \
+one selected artifact."""
+exported_symbols = [
+  "ArtifactBundleReader",
+  "BundleReadLimits",
+  "BundleReadError",
+  "BundleIncompleteError",
+]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "artifact bundle integrity audit"
+definition = """
+An artifact bundle read that eagerly verifies the complete bytes of every \
+declared bundle artifact. Its successful result describes the bytes verified at \
+audit time without claiming protection from later external filesystem \
+mutation."""
+categories = ["document artifacts"]
+is_a = ["artifact bundle read"]
+
+[[terms]]
+name = "verified artifact consumption"
+definition = """
+An artifact bundle read that delivers one selected bundle artifact from its \
+pinned descriptor while computing its artifact hash and byte length. It \
+succeeds only after the consumer reaches end of file and both values match the \
+artifact descriptor."""
+exported_symbols = ["VerifyingArtifactReader"]
+categories = ["document artifacts"]
+is_a = ["artifact bundle read"]
+
+[[terms]]
 name = "artifact bundle publication failure"
 definition = """
 A typed refusal or failure to publish the terminal manifest for one artifact \
@@ -358,6 +394,18 @@ knowledge, and underlying cause needed to distinguish an unmet writer \
 precondition, a known incomplete location, and an uncertain terminal manifest \
 outcome."""
 exported_symbols = ["BundlePublishError", "BundlePublicationPhase"]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "artifact bundle verification failure"
+definition = """
+A typed artifact bundle read failure identifying one selected or declared \
+artifact and the reason its recovered or consumed bytes did not complete \
+verified agreement with the bundle manifest."""
+exported_symbols = [
+  "BundleVerificationError",
+  "BundleVerificationReason",
+]
 categories = ["document artifacts"]
 
 [[terms]]

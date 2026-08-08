@@ -166,7 +166,12 @@ only after every admitted writer finalizes:
 ```python
 from pathlib import Path
 
-from dr_store import ArtifactBundlePublication
+from dr_store import (
+    ArtifactBundlePublication,
+    ArtifactBundleReader,
+    BundleReadLimits,
+    VerifyingArtifactReader,
+)
 
 root = Path("results")
 root.mkdir(exist_ok=True)
@@ -183,14 +188,39 @@ bundle.publish(
     }
 )
 assert (bundle.path / "manifest.json").is_file()
+
+reader = ArtifactBundleReader(
+    bundle.path,
+    limits=BundleReadLimits(
+        manifest_max_bytes=1 << 20,
+        manifest_max_depth=64,
+        max_artifacts=16,
+        max_bytes_per_artifact=1 << 30,
+        max_total_artifact_bytes=4 << 30,
+    ),
+)
+manifest = reader.audit()
+assert manifest.payload["kind"] == "example.result.v1"
+
+captured_stdout = bytearray()
+
+def consume_stdout(stream: VerifyingArtifactReader) -> None:
+    while chunk := stream.read(1 << 16):
+        captured_stdout.extend(chunk)
+
+
+verified = reader.consume_and_verify_artifact("stdout.bin", consume_stdout)
+assert verified.sha256 == descriptor.sha256
+assert captured_stdout == b"complete output\n"
 ```
 
 The bundle API is synchronous. Async applications offload a complete writer or
-publication operation rather than running its hashing and filesystem I/O on an
-event-loop thread. One bundle is a task, run, or result publication—not a
-per-event record or packed execution-record backend. Callers own partitioned
-allocation roots and retention; sustained creation near 100,000 bundles per
-hour is outside the directory format's intended envelope.
+publication, audit, or verified-consumption operation rather than running its
+hashing and filesystem I/O on an event-loop thread. One bundle is a task, run,
+or result publication—not a per-event record or packed execution-record
+backend. Callers own partitioned allocation roots and retention; sustained
+creation near 100,000 bundles per hour is outside the directory format's
+intended envelope.
 
 Use the lower-level `await SqliteBackend.open(path)` when assembling an
 `ObjectStore` directly whose objects and bindings must persist across processes.
@@ -537,6 +567,28 @@ class BundleManifest(BaseModel):
     format: Literal["dr-store-artifact-bundle-v1"]
     artifacts: tuple[ArtifactDescriptor, ...]
     payload: Jsonable
+
+@dataclass(frozen=True, slots=True)
+class BundleReadLimits:
+    manifest_max_bytes: int
+    manifest_max_depth: int
+    max_artifacts: int
+    max_bytes_per_artifact: int
+    max_total_artifact_bytes: int
+
+class ArtifactBundleReader:
+    def __init__(
+        self, path: str | Path, *, limits: BundleReadLimits
+    ) -> None: ...
+    def audit(self) -> BundleManifest: ...
+    def consume_and_verify_artifact(
+        self,
+        name: str,
+        consumer: Callable[[VerifyingArtifactReader], None],
+    ) -> ArtifactDescriptor: ...
+
+class VerifyingArtifactReader:
+    def read(self, size: int = -1) -> bytes: ...
 ```
 
 Artifact names are exact identities consisting of one non-empty relative path
@@ -547,6 +599,22 @@ before admission does not poison the publication; a create, write, or finalize
 failure after admission does. Active writers and invalid payloads refuse
 publication without making it terminal. The first valid manifest attempt after
 all writers finalize makes it terminal whether replacement succeeds or fails.
+`audit()` validates the strict canonical manifest under all declared limits and
+streams every declared artifact before returning that `BundleManifest`.
+`consume_and_verify_artifact()` instead opens one selected artifact once and
+delivers it through the package-owned read-only facade. Success requires the
+callback to observe an actual empty operating-system read: `read(0)` and reading
+exactly the declared length without one later empty read do not prove EOF. The
+facade is invalid after the synchronous callback returns, and success returns
+the verified `ArtifactDescriptor`, not a path whose later contents are claimed
+to remain verified.
+
+`BundleReadError` covers manifest, filesystem, and consumer failures;
+`BundleIncompleteError` identifies a missing or invalid terminal manifest.
+`BundleVerificationError` exposes the selected or declared `artifact_name` and
+a `BundleVerificationReason` of `missing`, `not_regular`, `mismatch`,
+`bounds_exceeded`, or `incomplete_consumption`. Translated operating-system,
+decoding, model-validation, and consumer failures remain available as causes.
 
 ## Filesystem and failure semantics
 
@@ -602,6 +670,17 @@ atomically replaces `manifest.json`. It performs no `F_FULLFSYNC`, `fsync`, or
 directory flush and exposes no durability mode. Success is process-visible and
 terminal through this API, not a claim of crash, machine, filesystem, or
 power-loss durability.
+
+Every artifact-bundle audit or verified-consumption operation opens the named
+bundle directory with required directory and no-follow behavior and holds that
+descriptor while validating the direct-child `manifest.json` and opening
+declared artifacts relative to it. Manifest reads are strict, canonical, and
+bounded. Artifact reads require inspected regular no-follow direct children and
+enforce count, per-artifact, and total byte bounds while streaming. Directory
+or child replacement after open cannot redirect those descriptor-owned reads,
+but the result is a point-in-time verification: it does not prevent later
+external mutation and does not claim containment for ancestor path resolution.
+Platforms without the required flags or `os.open(dir_fd=...)` fail closed.
 
 A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
 open and its accounting state advanced. The writer is unusable by contract and

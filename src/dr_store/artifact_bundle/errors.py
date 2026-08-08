@@ -22,8 +22,23 @@ class BundlePublicationPhase(StrEnum):
     REPLACE_MANIFEST = "replace_manifest"
 
 
+@verify(UNIQUE)
+class BundleVerificationReason(StrEnum):
+    """Why one declared artifact did not verify.
+
+    Members describe reporting outcomes. Verification behavior must never be
+    constructed by iterating this enum.
+    """
+
+    MISSING = "missing"
+    NOT_REGULAR = "not_regular"
+    MISMATCH = "mismatch"
+    BOUNDS_EXCEEDED = "bounds_exceeded"
+    INCOMPLETE_CONSUMPTION = "incomplete_consumption"
+
+
 class ArtifactBundleError(Exception):
-    """Base for artifact-bundle publication failures."""
+    """Base for artifact-bundle failures."""
 
 
 class BundleAllocationError(ArtifactBundleError):
@@ -47,4 +62,40 @@ class BundlePublishError(ArtifactBundleError):
         super().__init__(
             f"could not publish artifact bundle {str(path)!r} at "
             f"{phase.value!r}: {detail}"
+        )
+
+
+class BundleReadError(ArtifactBundleError):
+    """A manifest, filesystem, or consumer failure during a bundle read."""
+
+    def __init__(self, path: Path, *, detail: str) -> None:
+        self.path = path
+        super().__init__(
+            f"could not read artifact bundle {str(path)!r}: {detail}"
+        )
+
+
+class BundleIncompleteError(BundleReadError):
+    """The bundle has no valid terminal manifest under the read limits."""
+
+
+class BundleVerificationError(BundleReadError):
+    """One selected or declared artifact did not verify."""
+
+    def __init__(
+        self,
+        path: Path,
+        artifact_name: str,
+        reason: BundleVerificationReason,
+        *,
+        detail: str,
+    ) -> None:
+        self.artifact_name = artifact_name
+        self.reason = reason
+        super().__init__(
+            path,
+            detail=(
+                f"artifact {artifact_name!r} failed "
+                f"{reason.value!r} verification: {detail}"
+            ),
         )

@@ -1,5 +1,5 @@
-# Proposed additions to .defs/terms.toml for plan review. These terms do not
-# become repository vocabulary until the corresponding implementation lands.
+# Source terms retained as plan provenance. The implemented vocabulary in
+# .defs/terms.toml is authoritative.
 #:schema ../../../.defs/terms.schema.json
 
 [[terms]]

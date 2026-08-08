@@ -1,5 +1,5 @@
-# Proposed additions to .defs/contracts.toml for plan review. These contracts
-# are not binding until implementation and their evidence checks land.
+# Source contracts retained as plan provenance. The implemented contracts and
+# runnable evidence checks in .defs/contracts.toml are authoritative.
 
 [[contracts]]
 title = "PostgreSQL preserves the asynchronous backend contract"
@@ -184,9 +184,10 @@ date = "2026-08-08"
 [[contracts]]
 title = "Artifact bundle integrity audits verify every declared file"
 statement = """
-`ArtifactBundleReader(path, limits)` accepts public `BundleReadLimits` for \
-manifest bytes, manifest nesting depth, artifact count, bytes per artifact, and \
-total artifact bytes. Its explicit `audit()` operation first validates and pins \
+`ArtifactBundleReader(path, *, limits)` accepts public `BundleReadLimits` with \
+`manifest_max_bytes`, `manifest_max_depth`, `max_artifacts`, \
+`max_bytes_per_artifact`, and `max_total_artifact_bytes`. Its explicit \
+`audit()` operation first validates and pins \
 one canonical bundle manifest, then opens each declared regular direct-child \
 artifact with required no-follow, directory-relative behavior and streams from \
 the descriptor it inspected. It returns verified descriptor metadata only after \

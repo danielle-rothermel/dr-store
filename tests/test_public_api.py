@@ -5,6 +5,8 @@ import pkgutil
 import re
 from dataclasses import fields
 
+import pytest
+
 import dr_store
 
 # Naming is only a heuristic for observable vocabulary, not domain neutrality.
@@ -178,22 +180,36 @@ def test_artifact_bundle_public_surfaces_are_exact() -> None:
 
     from dr_store import (
         ArtifactBundlePublication,
+        ArtifactBundleReader,
         ArtifactDescriptor,
         BundleArtifactWriter,
+        BundleIncompleteError,
         BundleManifest,
         BundlePublishError,
+        BundleReadError,
+        BundleReadLimits,
+        BundleVerificationError,
+        BundleVerificationReason,
+        VerifyingArtifactReader,
     )
     from dr_store.artifact_bundle import __all__ as bundle_exports
 
     assert bundle_exports == [
         "ArtifactBundleError",
         "ArtifactBundlePublication",
+        "ArtifactBundleReader",
         "ArtifactDescriptor",
         "BundleAllocationError",
         "BundleArtifactWriter",
+        "BundleIncompleteError",
         "BundleManifest",
         "BundlePublicationPhase",
         "BundlePublishError",
+        "BundleReadError",
+        "BundleReadLimits",
+        "BundleVerificationError",
+        "BundleVerificationReason",
+        "VerifyingArtifactReader",
     ]
     assert issubclass(ArtifactDescriptor, BaseModel)
     assert issubclass(BundleManifest, BaseModel)
@@ -209,9 +225,46 @@ def test_artifact_bundle_public_surfaces_are_exact() -> None:
     assert {
         name for name in dir(BundleArtifactWriter) if not name.startswith("_")
     } == {"finalize", "write"}
+    assert {
+        name for name in dir(ArtifactBundleReader) if not name.startswith("_")
+    } == {"audit", "consume_and_verify_artifact"}
+    assert {
+        name
+        for name in dir(VerifyingArtifactReader)
+        if not name.startswith("_")
+    } == {"read"}
+    assert tuple(field.name for field in fields(BundleReadLimits)) == (
+        "manifest_max_bytes",
+        "manifest_max_depth",
+        "max_artifacts",
+        "max_bytes_per_artifact",
+        "max_total_artifact_bytes",
+    )
+    assert issubclass(BundleIncompleteError, BundleReadError)
+    assert issubclass(BundleVerificationError, BundleReadError)
+    assert [reason.value for reason in BundleVerificationReason] == [
+        "missing",
+        "not_regular",
+        "mismatch",
+        "bounds_exceeded",
+        "incomplete_consumption",
+    ]
     assert list(inspect.signature(BundlePublishError).parameters) == [
         "path",
         "phase",
         "replacement_state",
+        "detail",
+    ]
+    assert list(inspect.signature(ArtifactBundleReader).parameters) == [
+        "path",
+        "limits",
+    ]
+    assert list(inspect.signature(VerifyingArtifactReader).parameters) == []
+    with pytest.raises(TypeError, match="provided only during"):
+        VerifyingArtifactReader()
+    assert list(inspect.signature(BundleVerificationError).parameters) == [
+        "path",
+        "artifact_name",
+        "reason",
         "detail",
     ]
