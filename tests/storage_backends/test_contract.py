@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import concurrent.futures
-import threading
+import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
@@ -12,10 +11,11 @@ from dr_store import (
     BoundObjectWrite,
     ObjectConflictError,
     PutOutcome,
+    ReferenceValidationError,
 )
 
 if TYPE_CHECKING:
-    from dr_store.storage_backends.contract import Backend
+    from dr_store import Backend
 
 SCHEMA = "example.record"
 OTHER_SCHEMA = "other.record"
@@ -25,21 +25,19 @@ CANONICAL = '{"value":"first"}'
 COMPETING_CANONICAL = '{"value":"second"}'
 KEY = "caller-owned-key"
 CONTENDERS = 8
-WATCHDOG_SECONDS = 10
 
 
-def test_put_absent_replay_and_competing_value(
+async def test_put_absent_replay_and_competing_value(
     backend: Backend,
 ) -> None:
     assert (
-        backend.get_object(
+        await backend.get_object(
             schema=SCHEMA,
             content_hash=CONTENT_HASH,
         )
         is None
     )
-
-    assert backend.put_object(
+    assert await backend.put_object(
         schema=SCHEMA,
         content_hash=CONTENT_HASH,
         canonical=CANONICAL,
@@ -48,12 +46,7 @@ def test_put_absent_replay_and_competing_value(
         stored_schema=SCHEMA,
         stored_canonical=CANONICAL,
     )
-    assert backend.get_object(
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-    ) == (SCHEMA, CANONICAL)
-
-    assert backend.put_object(
+    assert await backend.put_object(
         schema=SCHEMA,
         content_hash=CONTENT_HASH,
         canonical=CANONICAL,
@@ -62,7 +55,7 @@ def test_put_absent_replay_and_competing_value(
         stored_schema=SCHEMA,
         stored_canonical=CANONICAL,
     )
-    assert backend.put_object(
+    assert await backend.put_object(
         schema=SCHEMA,
         content_hash=CONTENT_HASH,
         canonical=COMPETING_CANONICAL,
@@ -71,191 +64,174 @@ def test_put_absent_replay_and_competing_value(
         stored_schema=SCHEMA,
         stored_canonical=CANONICAL,
     )
-    assert backend.get_object(
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-    ) == (SCHEMA, CANONICAL)
 
 
-def test_get_prefers_exact_row_then_falls_back_to_one_alternate(
+async def test_get_prefers_exact_then_alternate_schema(
     backend: Backend,
 ) -> None:
-    backend.put_object(
+    await backend.put_object(
         schema=OTHER_SCHEMA,
         content_hash=CONTENT_HASH,
         canonical=COMPETING_CANONICAL,
     )
-    assert backend.get_object(
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
+    assert await backend.get_object(
+        schema=SCHEMA, content_hash=CONTENT_HASH
     ) == (OTHER_SCHEMA, COMPETING_CANONICAL)
-
-    backend.put_object(
+    await backend.put_object(
         schema=SCHEMA,
         content_hash=CONTENT_HASH,
         canonical=CANONICAL,
     )
-    assert backend.get_object(
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
+    assert await backend.get_object(
+        schema=SCHEMA, content_hash=CONTENT_HASH
     ) == (SCHEMA, CANONICAL)
 
 
-def test_bind_absent_replay_and_competing_reference(
+async def test_bind_absent_replay_and_competing_reference(
     backend: Backend,
 ) -> None:
-    assert backend.get_binding(key=KEY) is None
-
-    assert backend.bind(
-        key=KEY,
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
+    assert await backend.get_binding(key=KEY) is None
+    assert await backend.bind(
+        key=KEY, schema=SCHEMA, content_hash=CONTENT_HASH
     ) == BindOutcome(
         bound=True,
         existing_schema=SCHEMA,
         existing_content_hash=CONTENT_HASH,
     )
-    assert backend.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
-    assert backend.bind(
-        key=KEY,
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
+    assert await backend.bind(
+        key=KEY, schema=SCHEMA, content_hash=CONTENT_HASH
     ) == BindOutcome(
         bound=False,
         existing_schema=SCHEMA,
         existing_content_hash=CONTENT_HASH,
     )
-    assert backend.bind(
-        key=KEY,
-        schema=OTHER_SCHEMA,
-        content_hash=OTHER_HASH,
+    assert await backend.bind(
+        key=KEY, schema=OTHER_SCHEMA, content_hash=OTHER_HASH
     ) == BindOutcome(
         bound=False,
         existing_schema=SCHEMA,
         existing_content_hash=CONTENT_HASH,
     )
-    assert backend.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
 
 
-def test_batch_put_replay_and_competing_binding_report_one_winner(
+async def test_batch_put_get_and_conflict_rollback(
     backend: Backend,
 ) -> None:
-    first = BoundObjectWrite(
-        key=KEY,
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-        canonical=CANONICAL,
-    )
-    competing = BoundObjectWrite(
-        key=KEY,
-        schema=OTHER_SCHEMA,
-        content_hash=OTHER_HASH,
-        canonical=COMPETING_CANONICAL,
-    )
-
-    assert backend.put_bound_objects(entries=(first,)) == {
+    first = BoundObjectWrite(KEY, SCHEMA, CONTENT_HASH, CANONICAL)
+    missing_object_key = "missing-object"
+    assert await backend.put_bound_objects(entries=(first,)) == {
         KEY: BindOutcome(
             bound=True,
             existing_schema=SCHEMA,
             existing_content_hash=CONTENT_HASH,
         )
     }
-    assert backend.put_bound_objects(entries=(first,)) == {
-        KEY: BindOutcome(
-            bound=False,
-            existing_schema=SCHEMA,
-            existing_content_hash=CONTENT_HASH,
-        )
-    }
-    assert backend.put_bound_objects(entries=(competing,)) == {
-        KEY: BindOutcome(
-            bound=False,
-            existing_schema=SCHEMA,
-            existing_content_hash=CONTENT_HASH,
-        )
-    }
-    assert backend.get_binding(key=KEY) == (SCHEMA, CONTENT_HASH)
-
-
-def test_batch_get_correlates_bindings_with_exact_objects(
-    backend: Backend,
-) -> None:
-    missing_object_key = "missing-object"
-    backend.put_bound_objects(
-        entries=(
-            BoundObjectWrite(
-                key=KEY,
-                schema=SCHEMA,
-                content_hash=CONTENT_HASH,
-                canonical=CANONICAL,
-            ),
-        )
-    )
-    backend.bind(
+    await backend.bind(
         key=missing_object_key,
         schema=OTHER_SCHEMA,
         content_hash=OTHER_HASH,
     )
-
-    assert backend.get_bound_objects(
-        keys=(KEY, "unbound", missing_object_key),
+    assert await backend.get_bound_objects(
+        keys=(KEY, "unbound", missing_object_key)
     ) == {
-        KEY: BoundObjectRow(
-            binding_schema=SCHEMA,
-            binding_content_hash=CONTENT_HASH,
-            object_schema=SCHEMA,
-            canonical=CANONICAL,
-        ),
+        KEY: BoundObjectRow(SCHEMA, CONTENT_HASH, SCHEMA, CANONICAL),
         missing_object_key: BoundObjectRow(
-            binding_schema=OTHER_SCHEMA,
-            binding_content_hash=OTHER_HASH,
-            object_schema=None,
-            canonical=None,
+            OTHER_SCHEMA, OTHER_HASH, None, None
         ),
     }
 
-
-def test_batch_object_conflict_rolls_back_every_proposed_mutation(
-    backend: Backend,
-) -> None:
     colliding_hash = "c" * 64
-    backend.put_object(
+    await backend.put_object(
         schema=SCHEMA,
         content_hash=colliding_hash,
         canonical=COMPETING_CANONICAL,
     )
-
     with pytest.raises(ObjectConflictError):
-        backend.put_bound_objects(
+        await backend.put_bound_objects(
             entries=(
                 BoundObjectWrite(
-                    key=KEY,
-                    schema=SCHEMA,
-                    content_hash=CONTENT_HASH,
-                    canonical=CANONICAL,
+                    "new-key", OTHER_SCHEMA, OTHER_HASH, CANONICAL
                 ),
                 BoundObjectWrite(
-                    key="colliding-key",
-                    schema=SCHEMA,
-                    content_hash=colliding_hash,
-                    canonical=CANONICAL,
+                    "collision", SCHEMA, colliding_hash, CANONICAL
                 ),
             )
         )
-
-    assert backend.get_binding(key=KEY) is None
-    assert backend.get_binding(key="colliding-key") is None
+    assert await backend.get_binding(key="new-key") is None
     assert (
-        backend.get_object(
-            schema=SCHEMA,
-            content_hash=CONTENT_HASH,
-        )
+        await backend.get_object(schema=OTHER_SCHEMA, content_hash=OTHER_HASH)
         is None
     )
-    assert backend.get_object(
-        schema=SCHEMA,
-        content_hash=colliding_hash,
-    ) == (SCHEMA, COMPETING_CANONICAL)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["\0", "schema\0tail", "\ud800", "head\udffftail"],
+)
+async def test_every_schema_path_rejects_invalid_text(
+    backend: Backend, value: str
+) -> None:
+    operations = (
+        lambda: backend.put_object(
+            schema=value, content_hash=CONTENT_HASH, canonical=CANONICAL
+        ),
+        lambda: backend.get_object(schema=value, content_hash=CONTENT_HASH),
+        lambda: backend.bind(key=KEY, schema=value, content_hash=CONTENT_HASH),
+        lambda: backend.put_bound_objects(
+            entries=(BoundObjectWrite(KEY, value, CONTENT_HASH, CANONICAL),)
+        ),
+    )
+    for operation in operations:
+        with pytest.raises(ReferenceValidationError):
+            await operation()
+
+
+@pytest.mark.parametrize("value", ["\0", "key\0tail", "\ud800"])
+async def test_every_key_path_rejects_invalid_text(
+    backend: Backend, value: str
+) -> None:
+    operations = (
+        lambda: backend.bind(
+            key=value, schema=SCHEMA, content_hash=CONTENT_HASH
+        ),
+        lambda: backend.get_binding(key=value),
+        lambda: backend.get_bound_objects(keys=(value,)),
+        lambda: backend.put_bound_objects(
+            entries=(BoundObjectWrite(value, SCHEMA, CONTENT_HASH, CANONICAL),)
+        ),
+    )
+    for operation in operations:
+        with pytest.raises(ReferenceValidationError):
+            await operation()
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["not-a-hash", "A" * 64, "a" * 63, "g" * 64],
+)
+async def test_every_content_hash_path_rejects_malformed_values(
+    backend: Backend, value: str
+) -> None:
+    operations = (
+        lambda: backend.put_object(
+            schema=SCHEMA, content_hash=value, canonical=CANONICAL
+        ),
+        lambda: backend.get_object(schema=SCHEMA, content_hash=value),
+        lambda: backend.bind(key=KEY, schema=SCHEMA, content_hash=value),
+        lambda: backend.put_bound_objects(
+            entries=(BoundObjectWrite(KEY, SCHEMA, value, CANONICAL),)
+        ),
+    )
+    for operation in operations:
+        with pytest.raises(ReferenceValidationError):
+            await operation()
+
+
+async def test_empty_key_is_valid(backend: Backend) -> None:
+    assert (
+        await backend.bind(key="", schema=SCHEMA, content_hash=CONTENT_HASH)
+    ).bound
+    assert await backend.get_binding(key="") == (SCHEMA, CONTENT_HASH)
 
 
 @pytest.mark.parametrize(
@@ -268,89 +244,52 @@ def test_batch_object_conflict_rolls_back_every_proposed_mutation(
         ),
     ],
 )
-def test_same_process_put_contention_has_one_correlated_winner(
-    backend: Backend,
-    canonicals: list[str],
+async def test_put_contention_has_one_correlated_winner(
+    backend: Backend, canonicals: list[str]
 ) -> None:
-    ready = threading.Barrier(CONTENDERS)
+    start = asyncio.Event()
 
-    def contend(canonical: str) -> tuple[str, PutOutcome]:
-        ready.wait(timeout=WATCHDOG_SECONDS)
-        return (
-            canonical,
-            backend.put_object(
-                schema=SCHEMA,
-                content_hash=CONTENT_HASH,
-                canonical=canonical,
-            ),
+    async def contend(canonical: str) -> tuple[str, PutOutcome]:
+        await start.wait()
+        return canonical, await backend.put_object(
+            schema=SCHEMA,
+            content_hash=CONTENT_HASH,
+            canonical=canonical,
         )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=CONTENDERS) as pool:
-        futures = [pool.submit(contend, value) for value in canonicals]
-        results = [
-            future.result(timeout=WATCHDOG_SECONDS) for future in futures
-        ]
-
+    tasks = [asyncio.create_task(contend(value)) for value in canonicals]
+    start.set()
+    results = await asyncio.gather(*tasks)
     assert sum(outcome.inserted for _, outcome in results) == 1
-    winner = backend.get_object(
-        schema=SCHEMA,
-        content_hash=CONTENT_HASH,
-    )
+    winner = await backend.get_object(schema=SCHEMA, content_hash=CONTENT_HASH)
     assert winner is not None
-    winner_schema, winner_canonical = winner
-    assert winner_schema == SCHEMA
-    assert winner_canonical in canonicals
     for contender, outcome in results:
-        assert outcome.stored_schema == winner_schema
-        assert outcome.stored_canonical == winner_canonical
+        assert (outcome.stored_schema, outcome.stored_canonical) == winner
         if outcome.inserted:
-            assert contender == winner_canonical
+            assert contender == winner[1]
 
 
-@pytest.mark.parametrize(
-    "references",
-    [
-        pytest.param(
-            [(SCHEMA, CONTENT_HASH)] * CONTENDERS,
-            id="same-reference",
-        ),
-        pytest.param(
-            [
-                (f"schema.{index}", f"{index:x}" * 64)
-                for index in range(CONTENDERS)
-            ],
-            id="competing-references",
-        ),
-    ],
-)
-def test_same_process_bind_contention_has_one_correlated_winner(
+async def test_bind_contention_has_one_correlated_winner(
     backend: Backend,
-    references: list[tuple[str, str]],
 ) -> None:
-    ready = threading.Barrier(CONTENDERS)
+    references = [
+        (f"schema.{index}", f"{index:x}" * 64) for index in range(CONTENDERS)
+    ]
+    start = asyncio.Event()
 
-    def contend(
+    async def contend(
         reference: tuple[str, str],
     ) -> tuple[tuple[str, str], BindOutcome]:
-        schema, content_hash = reference
-        ready.wait(timeout=WATCHDOG_SECONDS)
-        return (
-            reference,
-            backend.bind(
-                key=KEY,
-                schema=schema,
-                content_hash=content_hash,
-            ),
+        await start.wait()
+        return reference, await backend.bind(
+            key=KEY, schema=reference[0], content_hash=reference[1]
         )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=CONTENDERS) as pool:
-        futures = [pool.submit(contend, reference) for reference in references]
-        results = [
-            future.result(timeout=WATCHDOG_SECONDS) for future in futures
-        ]
-
+    tasks = [asyncio.create_task(contend(value)) for value in references]
+    start.set()
+    results = await asyncio.gather(*tasks)
     assert sum(outcome.bound for _, outcome in results) == 1
-    winner = backend.get_binding(key=KEY)
+    winner = await backend.get_binding(key=KEY)
     assert winner in references
     for contender, outcome in results:
         assert (

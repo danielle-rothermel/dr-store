@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import threading
 
+from dr_store.content_addressing import (
+    _validate_binding_key,
+    _validate_content_hash,
+    _validate_reference_schema,
+)
 from dr_store.core.errors import ObjectConflictError
 from dr_store.storage_backends.contract import (
     BindOutcome,
@@ -19,13 +24,15 @@ class MemoryBackend:
         self._objects: dict[tuple[str, str], str] = {}
         self._bindings: dict[str, tuple[str, str]] = {}
 
-    def put_object(
+    async def put_object(
         self,
         *,
         schema: str,
         content_hash: str,
         canonical: str,
     ) -> PutOutcome:
+        _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
         with self._lock:
             existing = self._objects.get((schema, content_hash))
             if existing is None:
@@ -41,12 +48,14 @@ class MemoryBackend:
                 stored_canonical=existing,
             )
 
-    def get_object(
+    async def get_object(
         self,
         *,
         schema: str,
         content_hash: str,
     ) -> tuple[str, str] | None:
+        _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
         with self._lock:
             # Alternate schemas distinguish mismatch from missing content.
             exact = self._objects.get((schema, content_hash))
@@ -57,13 +66,16 @@ class MemoryBackend:
                     return (row_schema, canonical)
             return None
 
-    def bind(
+    async def bind(
         self,
         *,
         key: str,
         schema: str,
         content_hash: str,
     ) -> BindOutcome:
+        _validate_binding_key(key)
+        _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
         with self._lock:
             existing = self._bindings.get(key)
             if existing is None:
@@ -80,15 +92,18 @@ class MemoryBackend:
                 existing_content_hash=existing_hash,
             )
 
-    def get_binding(self, *, key: str) -> tuple[str, str] | None:
+    async def get_binding(self, *, key: str) -> tuple[str, str] | None:
+        _validate_binding_key(key)
         with self._lock:
             return self._bindings.get(key)
 
-    def get_bound_objects(
+    async def get_bound_objects(
         self,
         *,
         keys: tuple[str, ...],
     ) -> dict[str, BoundObjectRow]:
+        for key in keys:
+            _validate_binding_key(key)
         with self._lock:
             rows: dict[str, BoundObjectRow] = {}
             for key in keys:
@@ -105,11 +120,15 @@ class MemoryBackend:
                 )
             return rows
 
-    def put_bound_objects(
+    async def put_bound_objects(
         self,
         *,
         entries: tuple[BoundObjectWrite, ...],
     ) -> dict[str, BindOutcome]:
+        for entry in entries:
+            _validate_binding_key(entry.key)
+            _validate_reference_schema(entry.schema)
+            _validate_content_hash(entry.content_hash)
         with self._lock:
             proposed_objects: dict[tuple[str, str], str] = {}
             for entry in entries:

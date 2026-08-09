@@ -6,6 +6,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-08
+
+### Added
+
+- Added explicit PostgreSQL 16 through 18 installation and a shared
+  asynchronous backend over a caller-owned `asyncpg.Pool`. Installation pins
+  exact text identity and one `dr-store-postgresql-v1` schema-format marker;
+  `await PostgresBackend.open(pool)` validates that marker before returning.
+- Added terminal artifact-bundle publication with independently finalized raw
+  artifact writers, a closed canonical manifest format, and typed publication
+  failures.
+- Added bounded artifact-bundle audits and single-pass verified artifact
+  consumption through descriptor-pinned no-follow reads.
+
+### Changed
+
+- Hard-cut the backend, Object Store, and Record Cache operations to awaited
+  interfaces. SQLite now owns one loop-affine dedicated worker and connection,
+  uses WAL with `synchronous=NORMAL`, and settles admitted work and resource
+  cleanup before cancellation returns.
+- Renamed Sidecar digest terminology and fields to Sidecar hash terminology as
+  a hard public cutover.
+
+### Fixed
+
+- Failed artifact writes now best-effort close their writer-owned descriptor
+  while preserving the original write failure and poisoning publication.
+- PostgreSQL operations settle transaction and pool-release cleanup under
+  cancellation, and bundle reads preserve operational and consumer error
+  ownership through their typed surfaces.
+
 ## [0.1.5] - 2026-08-06
 
 ### Added

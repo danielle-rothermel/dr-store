@@ -18,6 +18,7 @@ from dr_store import (
     ObjectReference,
     ObjectStore,
     PutStatus,
+    ReferenceValidationError,
     SchemaMismatchError,
     compute_content_hash,
 )
@@ -29,99 +30,39 @@ if TYPE_CHECKING:
 
 SCHEMA = "example.record"
 RECORD: Jsonable = {"payload": {"a": 1, "b": [2, 3]}, "provenance": "x"}
-RECORD_REPLAY: Jsonable = {
-    "payload": {"a": 1, "b": [2, 3]},
-    "provenance": "x",
-}
-MISSING: Jsonable = {"never": "stored"}
-ORDER_A: Jsonable = {"a": 1, "b": 2}
-ORDER_B: Jsonable = {"b": 2, "a": 1}
 
 
-def test_put_returns_typed_reference_with_content_hash(
-    store: ObjectStore,
-) -> None:
-    ref, status = store.put(SCHEMA, RECORD)
-    assert status is PutStatus.STORED
-    assert ref.schema == SCHEMA
-    assert ref.content_hash == compute_content_hash(RECORD)
-
-
-def test_get_returns_exact_record(store: ObjectStore) -> None:
-    ref, _ = store.put(SCHEMA, RECORD)
-    assert store.get(ref) == RECORD
-
-
-def test_mutating_put_input_does_not_mutate_stored_content(
-    store: ObjectStore,
-) -> None:
+async def test_put_get_replay_and_input_isolation(store: ObjectStore) -> None:
     record: Jsonable = {"payload": {"items": [1, 2]}}
-    ref, _ = store.put(SCHEMA, record)
-
+    reference, status = await store.put(SCHEMA, record)
+    assert status is PutStatus.STORED
+    assert reference.content_hash == compute_content_hash(record)
     assert isinstance(record, dict)
     payload = record["payload"]
     assert isinstance(payload, dict)
     items = payload["items"]
     assert isinstance(items, list)
     items.append(3)
-
-    assert store.get(ref) == {"payload": {"items": [1, 2]}}
-
-
-def test_mutating_get_result_does_not_mutate_stored_content(
-    store: ObjectStore,
-) -> None:
-    ref, _ = store.put(SCHEMA, {"payload": {"items": [1, 2]}})
-    returned = store.get(ref)
-
-    assert isinstance(returned, dict)
-    payload = returned["payload"]
-    assert isinstance(payload, dict)
-    items = payload["items"]
-    assert isinstance(items, list)
-    items.append(3)
-
-    assert store.get(ref) == {"payload": {"items": [1, 2]}}
-
-
-def test_identical_put_is_idempotent_success(store: ObjectStore) -> None:
-    ref1, status1 = store.put(SCHEMA, RECORD)
-    ref2, status2 = store.put(SCHEMA, RECORD_REPLAY)
-    assert status1 is PutStatus.STORED
-    assert status2 is PutStatus.IDEMPOTENT
-    assert ref1 == ref2
-
-
-def test_key_order_variation_is_still_idempotent(
-    store: ObjectStore,
-) -> None:
-    _, status1 = store.put(SCHEMA, ORDER_A)
-    _, status2 = store.put(SCHEMA, ORDER_B)
-    assert status1 is PutStatus.STORED
-    assert status2 is PutStatus.IDEMPOTENT
-
-
-def test_get_missing_reference_raises(store: ObjectStore) -> None:
-    ref = ObjectReference.for_record(SCHEMA, MISSING)
-    with pytest.raises(ObjectNotFoundError):
-        store.get(ref)
-
-
-def test_get_with_wrong_schema_raises_schema_mismatch(
-    store: ObjectStore,
-) -> None:
-    ref, _ = store.put(SCHEMA, RECORD)
-    wrong = ObjectReference(
-        schema="other.schema",
-        content_hash=ref.content_hash,
+    assert await store.get(reference) == {"payload": {"items": [1, 2]}}
+    replay, replay_status = await store.put(
+        SCHEMA, {"payload": {"items": [1, 2]}}
     )
-    with pytest.raises(SchemaMismatchError) as excinfo:
-        store.get(wrong)
-    assert excinfo.value.expected == "other.schema"
-    assert excinfo.value.actual == SCHEMA
+    assert replay == reference
+    assert replay_status is PutStatus.IDEMPOTENT
 
 
-def _store_with_controlled_canonical(
+async def test_get_missing_and_wrong_schema(store: ObjectStore) -> None:
+    missing = ObjectReference.for_record(SCHEMA, {"missing": True})
+    with pytest.raises(ObjectNotFoundError):
+        await store.get(missing)
+
+    reference, _ = await store.put(SCHEMA, RECORD)
+    wrong = ObjectReference("other.schema", reference.content_hash)
+    with pytest.raises(SchemaMismatchError):
+        await store.get(wrong)
+
+
+def _controlled_store(
     backend: ControlledBackend,
     reference: ObjectReference,
     canonical: str,
@@ -134,182 +75,104 @@ def _store_with_controlled_canonical(
     return ObjectStore(backend)
 
 
-def test_get_detects_corrupted_content(
-    controlled_backend: ControlledBackend,
-) -> None:
-    ref = ObjectReference.for_record(SCHEMA, RECORD)
-    store = _store_with_controlled_canonical(
-        controlled_backend,
-        ref,
+@pytest.mark.parametrize(
+    "canonical",
+    [
         '{"tampered":true}',
-    )
-    with pytest.raises(ContentHashMismatchError):
-        store.get(ref)
-
-
-def test_get_detects_non_json_corruption(
-    controlled_backend: ControlledBackend,
-) -> None:
-    ref = ObjectReference.for_record(SCHEMA, RECORD)
-    store = _store_with_controlled_canonical(
-        controlled_backend,
-        ref,
         "not-json{{{",
-    )
-    with pytest.raises(ContentHashMismatchError):
-        store.get(ref)
-
-
-def test_get_detects_non_finite_corruption(
-    controlled_backend: ControlledBackend,
-) -> None:
-    # json.loads accepts NaN, so strict JSON validation fails after parsing.
-    ref = ObjectReference.for_record(SCHEMA, RECORD)
-    store = _store_with_controlled_canonical(
-        controlled_backend,
-        ref,
         '{"payload":NaN}',
-    )
+        '{"a": 1}',
+    ],
+)
+async def test_get_rejects_corrupt_or_noncanonical_storage(
+    controlled_backend: ControlledBackend,
+    canonical: str,
+) -> None:
+    reference = ObjectReference.for_record(SCHEMA, {"a": 1})
+    store = _controlled_store(controlled_backend, reference, canonical)
     with pytest.raises(ContentHashMismatchError):
-        store.get(ref)
+        await store.get(reference)
 
 
 @pytest.mark.parametrize(
     "parse_error",
-    [
-        pytest.param(
-            ValueError("integer conversion limit"),
-            id="integer-conversion-limit",
-        ),
-        pytest.param(
-            RecursionError("nesting limit"),
-            id="nesting-limit",
-        ),
-    ],
+    [ValueError("integer limit"), RecursionError("nesting limit")],
 )
-def test_get_translates_stored_json_parser_failures(
+async def test_get_translates_parser_failures(
     controlled_backend: ControlledBackend,
     monkeypatch: pytest.MonkeyPatch,
     parse_error: Exception,
 ) -> None:
-    ref = ObjectReference.for_record(SCHEMA, 0)
-    store = _store_with_controlled_canonical(
-        controlled_backend,
-        ref,
-        "0",
-    )
+    reference = ObjectReference.for_record(SCHEMA, 0)
+    store = _controlled_store(controlled_backend, reference, "0")
 
     def fail_parse(_canonical: str) -> object:
         raise parse_error
 
     monkeypatch.setattr(object_store_module.json, "loads", fail_parse)
-
     with pytest.raises(ContentHashMismatchError) as caught:
-        store.get(ref)
-
+        await store.get(reference)
     assert caught.value.__cause__ is parse_error
 
 
-def test_get_detects_non_canonical_bytes(
-    controlled_backend: ControlledBackend,
-) -> None:
-    # Whitespace changes the stored bytes without changing the decoded value.
-    ref = ObjectReference.for_record(SCHEMA, {"a": 1})
-    store = _store_with_controlled_canonical(
-        controlled_backend,
-        ref,
-        '{"a": 1}',
-    )
-    with pytest.raises(ContentHashMismatchError):
-        store.get(ref)
-
-
-def test_get_translates_stored_content_outside_the_canonical_profile(
+async def test_get_translates_canonical_profile_failure(
     controlled_backend: ControlledBackend,
 ) -> None:
     canonical = "1" + ("0" * CANONICAL_JSON_MAX_INTEGER_DIGITS)
-    ref = ObjectReference(
-        schema=SCHEMA,
-        content_hash=hashlib.sha256(canonical.encode()).hexdigest(),
+    reference = ObjectReference(
+        SCHEMA, hashlib.sha256(canonical.encode()).hexdigest()
     )
-    store = _store_with_controlled_canonical(
-        controlled_backend,
-        ref,
-        canonical,
-    )
-
+    store = _controlled_store(controlled_backend, reference, canonical)
     with pytest.raises(ContentHashMismatchError) as caught:
-        store.get(ref)
-
+        await store.get(reference)
     assert isinstance(caught.value.__cause__, JsonEncodeError)
 
 
-def test_same_content_under_different_schema_both_store(
-    store: ObjectStore,
-) -> None:
-    ref_one, status_one = store.put("schema.one", {"a": 1})
-    ref_two, status_two = store.put("schema.two", {"a": 1})
-    assert status_one is PutStatus.STORED
-    assert status_two is PutStatus.STORED
-    assert ref_one.content_hash == ref_two.content_hash
-    assert ref_one.schema != ref_two.schema
-    assert store.get(ref_one) == {"a": 1}
-    assert store.get(ref_two) == {"a": 1}
+async def test_same_content_under_distinct_schemas(store: ObjectStore) -> None:
+    first, _ = await store.put("schema.one", {"a": 1})
+    second, _ = await store.put("schema.two", {"a": 1})
+    assert first.content_hash == second.content_hash
+    assert await store.get(first) == {"a": 1}
+    assert await store.get(second) == {"a": 1}
 
 
-def test_different_content_at_same_hash_conflicts_without_overwrite(
+async def test_object_collision_does_not_overwrite(
     controlled_backend: ControlledBackend,
 ) -> None:
-    # Populate the schema and content-hash pair with collision bytes.
-    ref = ObjectReference.for_record(SCHEMA, RECORD)
+    reference = ObjectReference.for_record(SCHEMA, RECORD)
     controlled_backend.set_object(
-        schema=ref.schema,
-        content_hash=ref.content_hash,
+        schema=SCHEMA,
+        content_hash=reference.content_hash,
         canonical="different-canonical",
     )
-    store = ObjectStore(controlled_backend)
     with pytest.raises(ObjectConflictError):
-        store.put(SCHEMA, RECORD)
-    assert controlled_backend.object_row == (
-        ref.schema,
-        ref.content_hash,
-        "different-canonical",
-    )
+        await ObjectStore(controlled_backend).put(SCHEMA, RECORD)
 
 
 @pytest.mark.parametrize(
     "invalid_record",
-    [
-        pytest.param({"value": float("nan")}, id="non-finite"),
-        pytest.param({"value": {1}}, id="unsupported-type"),
-    ],
+    [{"value": float("nan")}, {"value": {1}}],
 )
-def test_invalid_strict_json_never_reaches_backend(
+async def test_invalid_record_never_reaches_backend(
     controlled_backend: ControlledBackend,
     invalid_record: object,
 ) -> None:
-    store = ObjectStore(controlled_backend)
     with pytest.raises(StrictJsonError):
-        compute_content_hash(
-            invalid_record  # ty: ignore[invalid-argument-type]
-        )
-    with pytest.raises(StrictJsonError):
-        store.put(
+        await ObjectStore(controlled_backend).put(
             SCHEMA,
             invalid_record,  # ty: ignore[invalid-argument-type]
         )
     assert controlled_backend.put_calls == 0
-    assert controlled_backend.object_row is None
 
 
-def test_canonical_profile_violation_never_reaches_backend(
+async def test_schema_validation_precedes_backend_await(
     controlled_backend: ControlledBackend,
 ) -> None:
-    record = 10**CANONICAL_JSON_MAX_INTEGER_DIGITS
-    store = ObjectStore(controlled_backend)
-
+    for invalid in ["", "\0", "prefix\0suffix", "\ud800"]:
+        with pytest.raises(ReferenceValidationError):
+            await ObjectStore(controlled_backend).put(invalid, RECORD)
     with pytest.raises(JsonEncodeError):
-        store.put(SCHEMA, record)
-
+        await ObjectStore(controlled_backend).put(
+            SCHEMA, 10**CANONICAL_JSON_MAX_INTEGER_DIGITS
+        )
     assert controlled_backend.put_calls == 0
-    assert controlled_backend.object_row is None

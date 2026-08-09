@@ -171,7 +171,7 @@ class DocumentDirectory:
         self,
         name: str,
         *,
-        expected_digest: str,
+        expected_sidecar_hash: str,
         expected_head_length: int,
         expected_tail_length: int,
     ) -> None:
@@ -180,7 +180,7 @@ class DocumentDirectory:
         _verify_sidecar(
             self._path,
             name,
-            expected_digest=expected_digest,
+            expected_sidecar_hash=expected_sidecar_hash,
             expected_head_length=expected_head_length,
             expected_tail_length=expected_tail_length,
         )

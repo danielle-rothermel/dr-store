@@ -15,15 +15,18 @@ check = "uv run pytest -q tests/content_addressing/test_content_addressing.py"
 [[contracts]]
 title = "Object references validate their declared parts"
 statement = """
-An object reference contains a non-empty string schema and a 64-character \
-lowercase hexadecimal content hash; construction rejects any other shape \
-before the reference reaches storage."""
+An object reference contains a schema from the shared text domain and a \
+64-character lowercase hexadecimal content hash. Schemas are non-empty and \
+contain neither NUL nor unpaired surrogate code points. Construction and every \
+public backend or facade path that accepts schema or content-hash text rejects \
+any other shape before storage work begins."""
 rationale = """
-Validating the schema and digest shape at the reference boundary prevents \
-malformed handles from entering object or binding operations. This validation \
-does not claim that referenced content already exists."""
-date = "2026-08-05"
-check = "uv run pytest -q tests/content_addressing/test_content_addressing.py"
+One validation domain prevents direct backend use from bypassing the object \
+reference boundary while retaining every other schema character as opaque \
+caller-owned text. This validation does not claim that referenced content \
+already exists."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/content_addressing/test_content_addressing.py tests/object_store tests/storage_backends/test_contract.py tests/record_cache/test_cache.py"
 
 [[contracts]]
 title = "Object puts are immutable"
@@ -35,7 +38,7 @@ stored row."""
 rationale = """
 Insert-if-absent semantics make a reference stable after its first successful \
 write. The conflict path remains explicit even though a differing value at the \
-same full digest should be exceptional."""
+same full content hash should be exceptional."""
 date = "2026-08-05"
 check = "uv run pytest -q tests/object_store/test_put_get.py"
 
@@ -57,52 +60,112 @@ title = "Bindings are single-assignment"
 statement = """
 Binding an unbound caller-owned key stores one object reference atomically; \
 replaying the same reference is idempotent, and requesting a different \
-reference raises a typed conflict that preserves the existing winner. The \
-object-store surface exposes no clear, overwrite, or rebind operation."""
+reference raises a typed conflict that preserves the existing winner. Binding \
+keys may be empty and contain any text except NUL or unpaired surrogate code \
+points. Every public backend and facade binding path validates that domain \
+before storage work begins, and the object-store surface exposes no clear, \
+overwrite, or rebind operation."""
 rationale = """
 Single assignment makes a successful key resolution stable while allowing \
-concurrent contenders to observe one correlated winner."""
-date = "2026-08-05"
-check = "uv run pytest -q tests/object_store/test_binding.py"
+concurrent contenders to observe one correlated winner. One shared permissive \
+text domain preserves opaque caller-owned keys without letting backend-specific \
+string constraints select different winners."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/object_store/test_binding.py tests/storage_backends/test_contract.py tests/record_cache/test_cache.py"
 
 [[contracts]]
 title = "Backends own atomicity and declare persistence scope"
 statement = """
-Every backend supplies atomic insert-if-absent operations for object rows and \
-bindings, exact-key reads that return bindings with their referenced object \
-rows, and atomic write batches that store prepared objects and establish each \
-key's first-writer binding. The in-memory backend is process-local. The SQLite \
-backend chunks exact-key reads into joined queries without promising one \
-batch-wide read snapshot; each non-empty write batch uses one immediate \
-transaction and rolls that transaction back when the batch fails. SQLite \
-requires a non-transient filesystem path, captures its lexical absolute path at \
-construction, retains committed rows across reopen, and supports cross-process \
-contention without claiming power-loss durability. Empty and `:memory:` paths \
-are rejected. Capturing an absolute path prevents later working-directory \
-changes from redirecting it but does not freeze symlink targets."""
+Every backend supplies awaited atomic insert-if-absent operations for object \
+rows and bindings, exact-key reads that return bindings with their referenced \
+object rows, and atomic write batches that store prepared objects and establish \
+each key's first-writer binding. An operation releases no transaction or shared \
+connection until driver cleanup makes that resource reusable. Cancellation is \
+an operational failure and does not prove whether a write committed; storage \
+performs no automatic retry, while exact immutable replay remains supported. The \
+in-memory backend is process-local. Each SQLite backend owns one dedicated \
+worker and one connection and admits at most one submitted or running worker \
+operation. Other callers await an async admission gate before work is submitted. \
+The worker executes complete operations outside the event-loop thread, chunks \
+exact-key reads into joined queries without promising one batch-wide snapshot, \
+and uses one immediate transaction for each non-empty write batch. Cancellation \
+while awaiting admission starts no SQLite work. A cancelled admitted operation \
+does not abandon its worker work: the caller waits until the operation and its \
+cleanup settle, then cancellation wins. If that worker path also fails, its \
+failure remains the cause of the cancellation. SQLite requires a non-transient \
+filesystem path, captures its lexical absolute path during open, retains \
+committed rows across reopen, and supports cross-process contention without \
+claiming power-loss durability. Empty and `:memory:` paths are rejected; the \
+captured absolute path prevents later working-directory redirection but does not \
+freeze symlink targets."""
 rationale = """
 The object store owns hashing, verification, idempotency, and typed conflicts, \
-while the backend owns the atomic storage primitives those rules require. \
-Joined reads avoid per-key binding and object round trips, while transaction-\
-scoped writes prevent a failed batch from leaving a partially committed set. \
-Persistence is stated per implementation rather than generalized into an \
-unsupported snapshot or durability guarantee."""
-date = "2026-08-05"
+while each asynchronous backend owns the atomic storage and resource-cleanup \
+primitives those rules require. Keeping blocking SQLite work off the event loop \
+provides one awaited backend contract without pretending SQLite itself is \
+non-blocking. Unknown cancellation outcomes remain truthful and recoverable \
+through exact replay rather than hidden retries."""
+date = "2026-08-08"
 check = "uv run pytest -q tests/storage_backends/test_contract.py tests/storage_backends/test_sqlite_backend.py"
+
+[[contracts]]
+title = "SQLite backends own one asynchronous worker lifecycle"
+statement = """
+`SqliteBackend.open(...)` returns only after its dedicated worker, connection, \
+and schema are ready and binds those resources to the event loop performing the \
+open. While resources remain open, every backend operation and `aclose()` must \
+run on that loop; cross-loop use fails visibly. The instance admits each point \
+or batch request as one whole serialized worker operation. The backend is a \
+long-lived resource; no supported path opens and closes it around one record \
+operation. `aclose()` rejects new work, waits for every admitted operation and \
+its cleanup to settle, closes the connection and worker, and leaves the instance \
+terminal; successful close is idempotent. A raw backend storage operation after \
+close raises `RuntimeError`; no new public backend-closed exception is defined. \
+Async context exit performs the same close, while direct construction, lazy \
+first-use initialization, and context-entry-only initialization are not public \
+paths."""
+rationale = """
+One connection-affine worker makes SQLite transaction and cancellation behavior \
+predictable without consuming the process-wide executor or inventing parallel \
+read machinery. Awaited opening and terminal close prevent callers from \
+observing a partially initialized or reopened backend."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/storage_backends/test_sqlite_backend.py tests/test_public_api.py"
+
+[[contracts]]
+title = "SQLite indexing and synchronization match its persistence claim"
+statement = """
+The async SQLite backend uses WAL with `synchronous=NORMAL` and defines no \
+public durability mode. The objects table uses `PRIMARY KEY (content_hash, \
+schema)`, or an equivalent key plus an index whose leading column is \
+`content_hash`, so exact and alternate-schema lookups are indexed. A missing or \
+wrong-schema lookup must not scan the object table. Completed commits persist \
+across ordinary close and reopen and the database recovers validly after process \
+failure, without promising survival of the last acknowledged transaction across \
+power loss."""
+rationale = """
+Hash-leading lookup prevents the required schema-mismatch distinction from \
+becoming linear in stored object count. WAL NORMAL avoids a durable synchronization \
+barrier for every small commit while matching the deliberately bounded \
+persistence claim."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/storage_backends/test_sqlite_backend.py"
 
 [[contracts]]
 title = "Callers own domain meaning"
 statement = """
-Schemas and binding keys are opaque strings, and manifest payload fields are \
-opaque strict JSON. Callers own their meaning, identity selection, lifecycle, \
-retention, cache scheduling, dirty tracking, key enumeration and prefix-query \
-policy, and configured byte, depth, and sidecar cap policy; storage does not \
-infer those domain rules or supply those cache policies."""
+Schemas and binding keys are opaque within their shared validated text domains, \
+and manifest payload fields are opaque strict JSON. Callers own their meaning, \
+identity selection, lifecycle, retention, cache scheduling, dirty tracking, key \
+enumeration and prefix-query policy, and configured byte, depth, and sidecar cap \
+policy; storage does not infer those domain rules or supply those cache policies."""
 rationale = """
 Keeping domain policy outside the foundational storage boundary lets the same \
-primitives serve unrelated consumers without silently redefining their data."""
-date = "2026-08-05"
-check = "uv run pytest -q tests/object_store/test_binding.py::test_binding_key_is_opaque_arbitrary_string tests/document_directory/test_manifest.py::test_publish_writes_canonical_bytes_without_temp_residue"
+primitives serve unrelated consumers without silently redefining their data. \
+The minimal shared text validation is a storage interoperability boundary, not \
+domain interpretation."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/object_store/test_binding.py tests/record_cache/test_cache.py tests/document_directory/test_manifest.py"
 
 [[contracts]]
 title = "Document Directory allocation never reuses a collision"
@@ -221,13 +284,13 @@ statement = """
 A sidecar writer retains bytes under caller-supplied head and tail caps and, \
 on successful finalization, flushes and closes its file descriptor before \
 returning stored segment lengths, produced and dropped byte counts, and the \
-SHA-256 digest of exactly the stored bytes. Finalization does not flush the \
+SHA-256 hash of exactly the stored bytes. Finalization does not flush the \
 directory entry or impose ordering on manifest publication."""
 rationale = """
 The summary makes truncation and the verified byte sequence explicit while \
 avoiding stronger persistence or publication-order claims. A caller abandons \
 a writer after a write failure because further use has no supported outcome."""
-date = "2026-08-05"
+date = "2026-08-08"
 check = "uv run pytest -q tests/document_directory/test_sidecar_writer.py"
 
 [[contracts]]
@@ -236,75 +299,393 @@ statement = """
 Sidecar verification opens the named document directory and its regular direct \
 child with required no-follow, directory-relative flags, reads from the child \
 descriptor it inspected, and verifies the caller-supplied non-negative head and \
-tail lengths plus digest. It rejects final-component symlinks and fails closed \
-when the \
-required platform support is unavailable."""
+tail lengths plus sidecar hash. It rejects final-component symlinks and fails \
+closed when the required platform support is unavailable."""
 rationale = """
 Pinned descriptors prevent a checked child name from being swapped to a \
 different final object before reading. This boundary does not claim containment \
 for ancestor path resolution, durability, or safety for sidecar creation, which \
 follows its documented path behavior."""
-date = "2026-08-05"
+date = "2026-08-08"
 check = "uv run pytest -q tests/document_directory/test_sidecar_verification.py"
 
 [[contracts]]
 title = "Record cache reads are best-effort and entries are never rebound"
 statement = """
-A record cache batch read deduplicates its input keys and returns exactly one \
-typed hit or miss for every distinct exact requested key. It validates the \
-requested schema before storage access and parses and verifies each returned \
-bound object once. An unbound key, missing content, schema mismatch, and \
-unverifiable stored object or binding all report a per-key miss; operational \
-backend failures propagate. A cache batch put validates, canonicalizes, and \
-hashes each proposed entry once before one backend write batch, then returns \
-the first binding winner for every input key. Invalidation happens by choosing \
-a new caller-owned key rather than by deleting or expiring an entry. A batch \
-read does not promise a single snapshot across backend read chunks."""
+An awaited record-cache batch read deduplicates its input keys and returns \
+exactly one typed hit or miss for every distinct exact requested key. It \
+validates the requested schema before awaiting storage and parses and verifies \
+each returned bound object once. An unbound key, missing content, schema \
+mismatch, and unverifiable stored object or binding all report a per-key miss; \
+invalid requested schemas, cancellation, and operational backend failures \
+propagate. An awaited cache batch put validates, canonicalizes, and hashes every \
+proposed entry before one backend write batch, then returns the first binding \
+winner for each input key. Invalidation selects a new caller-owned key rather \
+than deleting or expiring an entry, and a batch read claims no single snapshot \
+across backend read chunks."""
 rationale = """
 Expected absence and unverifiable stored data do not prevent recomputation, \
-while invalid requested schemas, caller record-validation faults, and \
-unavailable storage stay visible. A typed hit preserves strict JSON null as a \
-record distinct from a miss. Preparing before the backend call prevents \
-caller-data validation failures from starting a storage batch, and one \
-verification pass keeps each key's outcome independent. First-writer-wins keeps \
-a deterministic key stable when the caller's producer is not. Opaque keys \
-preserve the general Object Store contract, while the canonical derivation \
-helper gives callers a versioned, content-derived scheme without making that \
-scheme mandatory."""
-date = "2026-08-06"
+while caller errors, cancellation, and unavailable storage stay visible. \
+Preparing caller data before the first await prevents validation faults from \
+starting storage work. First-writer-wins and exact replay keep cache bindings \
+stable even when a cancelled write has an uncertain observed outcome."""
+date = "2026-08-08"
 check = "uv run pytest -q tests/record_cache/test_cache.py"
 
 [[contracts]]
 title = "Managed SQLite record caches own their complete lifecycle"
 statement = """
-A managed SQLite record cache initializes its database schema before \
-construction returns and admits each single or bulk cache read or write as one \
-whole operation while open. Closing rejects new operations with a typed closed \
-error before input validation, waits for every admitted operation to finish, \
-and then closes every operational connection tracked by that instance in the \
-current process. Normal and exceptional context-manager exits both perform \
-close. When cleanup succeeds, a body exception is not suppressed; cleanup \
-failure instead raises a typed close error and leaves the lifecycle terminal. \
-The elected caller receives its original process-level interruption after the \
-terminal failure is published; every later close caller receives a typed close \
-error exposing that failure, and cache operations remain closed. If the elected \
-closer is interrupted before connection cleanup begins, the lifecycle returns \
-to open and wakes other callers. Successful close is idempotent for repeated \
-and concurrent callers. The persistent database path is made absolute \
-at construction without freezing symlink targets, and transient paths are \
-rejected. Completed commits persist across close and reopen, while separate \
-instances and processes retain independent lifecycles even when they use the \
-same database path. A new database path is initialized by one constructor \
-before concurrent constructors use it."""
+`SqliteRecordCache.open(...)` returns only after its owned SQLite backend, \
+dedicated worker, connection, and schema are ready and binds those resources to \
+the event loop performing the open. While resources remain open, every cache \
+operation and `aclose()` must run on that loop; cross-loop use fails visibly. \
+Each single or bulk cache read or write is admitted as one whole operation while \
+open. The cache is a long-lived resource; no supported path opens and closes it \
+around one record operation. `aclose()` rejects new operations with a typed \
+closed error, waits for every admitted operation and its worker cleanup to \
+settle, and then closes the backend resources owned by that instance. Async \
+context exit performs the same close; direct construction, lazy initialization, \
+and context-entry-only initialization are not public paths. Once close begins \
+the lifecycle remains terminal; cancelling one close waiter does not cancel \
+shared cleanup or reopen the cache. Concurrent and later close callers observe \
+the same successful or typed terminal-failure outcome, and successful close is \
+idempotent. The persistent database path is made absolute during open without \
+freezing symlink targets, transient paths are rejected, completed commits \
+persist across close and reopen, and separate instances and processes retain \
+independent lifecycles even when they use the same path."""
 rationale = """
-Whole-operation admission prevents shutdown from invalidating a cache \
-operation between its binding and object-store steps. Rejecting new work \
-before draining admitted work gives closure one stable resource boundary, and \
-terminal typed failures keep incomplete cleanup visible. Persistence describes \
-committed SQLite rows across reopen; it does not promise power-loss durability \
-or let one cache instance govern resources owned by another instance or \
-process. Coordinating the first constructor keeps SQLite journal-mode setup out \
-of concurrent first-use contention without claiming an initialization protocol \
-that the backend does not provide."""
-date = "2026-08-06"
+Whole-operation admission prevents asynchronous shutdown from invalidating work \
+between binding and object-store steps. One shared terminal cleanup operation \
+keeps cancellation from abandoning SQLite worker resources or creating a reopen \
+path, while persistence remains a property of committed rows rather than a \
+power-loss or process-global lifecycle guarantee."""
+date = "2026-08-08"
 check = "uv run pytest -q tests/record_cache/test_sqlite_cache.py tests/storage_backends/test_sqlite_backend.py"
+
+[[contracts]]
+title = "PostgreSQL preserves the asynchronous backend contract"
+statement = """
+`PostgresBackend.open(pool)` validates the installed schema format before \
+returning a backend that supplies the awaited point and batch object and \
+binding operations with the same typed outcomes and shared schema and key text \
+domains as every other backend. Each non-empty write batch uses one database \
+transaction, preserves the backend cancellation and exact-replay contract, and \
+makes committed rows available to independently running clients without \
+exposing a PostgreSQL-specific object-store or record-cache API."""
+rationale = """
+A shared deployment changes persistence scope and contention mechanism, not the \
+observable storage model. One conformance suite across every backend prevents \
+database-specific semantics from leaking through the foundational boundary."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh"
+
+[[contracts]]
+title = "The bundle manifest is a closed versioned format"
+statement = """
+Every artifact bundle uses the regular direct-child filename \
+`manifest.json`. Its canonical strict JSON value contains exactly the top-level \
+keys `format`, `artifacts`, and `payload`; `format` is exactly \
+`dr-store-artifact-bundle-v1`. Each artifact descriptor contains exactly \
+`name`, `sha256`, and `byte_length`, and descriptors are ordered by exact \
+artifact name. Public `ArtifactDescriptor` and `BundleManifest` are strict \
+frozen `BaseModel` boundary models. Writers emit no unknown fields; readers \
+reject duplicate keys, unknown fields, unsupported format markers, unsorted or \
+duplicate descriptors, non-strict JSON, and non-canonical bytes. Persisted wire \
+literals are explicit constants rather than values derived from model field \
+names."""
+rationale = """
+A closed self-identifying envelope separates storage integrity from caller \
+meaning. Explicit literals and golden tests make every persisted-format change \
+a visible contract change rather than an incidental code rename."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_reading.py::test_invalid_terminal_manifest_is_incomplete"
+
+[[contracts]]
+title = "Artifact bundle publication is manifest-committed"
+statement = """
+`ArtifactBundlePublication.allocate(...)` owns one collision-safe fresh \
+allocation. `open_artifact(...)` admits multiple active synchronous \
+`BundleArtifactWriter` instances only for distinct exact names; each writer's \
+`write(...)` accepts caller-supplied bytes incrementally, and `finalize()` \
+completes its descriptor. Name reservation and writer-state changes are \
+thread-safe; each writer owns one file and incremental SHA-256 state, while the \
+publication schedules no tasks and multiplexes no bytes. A duplicate rejection \
+before admission does not poison the publication, while any admitted create, \
+write, or finalize failure permanently prevents publication. `publish(payload)` \
+is non-waiting: an active writer, a failed writer, or an invalid payload \
+produces a visible precondition refusal before any manifest operation. Refusal \
+for an active writer or invalid payload is nonterminal. Only a valid publish \
+call after every admitted writer finalized successfully begins the one \
+deterministic manifest attempt and makes the publication terminal. That attempt \
+orders descriptors by exact name and exposes no retry, replacement, append, \
+truncation, retention, or later mutation operation."""
+rationale = """
+One API-level terminal transition distinguishes interrupted work from a \
+completed publication without claiming a durable cross-process once-only lock. \
+Independent distinct-name writers support concurrent producers without making \
+the bundle a scheduler."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_failures.py"
+
+[[contracts]]
+title = "Bundle descriptors define verified contents"
+statement = """
+The bundle manifest contains exactly one artifact descriptor for every bundle \
+artifact and no duplicate exact artifact name. Each descriptor pins the \
+artifact's relative name, full lowercase SHA-256 hash, and non-negative byte \
+length. Files not named by the manifest are outside the bundle, are ignored by \
+bundle verification, and are never returned as bundle artifacts."""
+rationale = """
+The manifest remains authoritative for every byte the bundle claims without \
+requiring a coherent snapshot or lock over unrelated directory entries. Hash \
+and length distinguish modification from truncation without assigning domain \
+meaning to raw bytes."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_models.py tests/artifact_bundle/test_reading.py::test_audit_verifies_every_declared_artifact_and_ignores_other_files"
+
+[[contracts]]
+title = "Bundle artifact names are safe exact direct children"
+statement = """
+Every artifact name is one non-empty relative path segment. Publication and \
+reading reject absolute paths, dot segments, separators, `manifest.json`, and \
+the reserved bundle temporary namespace. Descriptor names are unique by exact \
+string, and artifact creation is exclusive and never replaces an existing \
+child. The format defines no cross-platform case-folding or Unicode-normalization \
+profile."""
+rationale = """
+Restricting artifacts to exclusively created direct children prevents lexical \
+traversal and replacement without introducing a portable-filename subsystem \
+merely to predict every filesystem's aliasing rules."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_reading.py"
+
+[[contracts]]
+title = "Artifact bundle integrity audits verify every declared file"
+statement = """
+`ArtifactBundleReader(path, *, limits)` accepts frozen public \
+`BundleReadLimits` with `manifest_max_bytes`, `manifest_max_depth`, \
+`max_artifacts`, `max_bytes_per_artifact`, and \
+`max_total_artifact_bytes`. Each `audit()` opens and pins the \
+named bundle directory, validates one regular direct-child canonical manifest, \
+checks all declared bounds before artifact work, then opens and streams every \
+declared regular direct-child artifact with required no-follow, \
+directory-relative behavior. It returns the verified `BundleManifest` only \
+after every declared file has the exact descriptor byte length and SHA-256. \
+Files outside the manifest are not inspected. The result describes bytes \
+verified at audit time and does not claim that external actors cannot later \
+mutate a path. Missing platform support, an exceeded bound, or any declared-file \
+mismatch fails through a typed read error."""
+rationale = """
+Descriptor-pinned reads prevent name replacement between inspection and use, \
+while eager bounded verification gives integrity-audit callers one accepted \
+state without loading whole artifacts into memory. The point-in-time guarantee \
+remains no stronger than the bytes the auditor actually recovered and does not \
+claim ancestor-path containment."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_reading.py"
+
+[[contracts]]
+title = "Verified artifact consumption reads selected content once"
+statement = """
+`ArtifactBundleReader.consume_and_verify_artifact(...)` opens and pins the \
+bundle directory, validates one canonical manifest under its limits, opens one \
+selected declared regular direct-child artifact once, and invokes one \
+synchronous consumer callback with a package-owned `VerifyingArtifactReader`. \
+That facade exposes only `read(...)` while hashing and counting the exact bytes \
+delivered from the inspected descriptor. `read(0)` is not EOF, and consuming \
+exactly the declared length without a later empty operating-system read is \
+incomplete. The operation succeeds only after observed EOF and exact descriptor \
+hash and byte-length agreement, returns the verified `ArtifactDescriptor`, and \
+invalidates the facade before the descriptor is closed. It makes no claim about \
+a later path read."""
+rationale = """
+Consumption-coupled verification avoids the mandatory verify-then-read double \
+pass for large artifacts while retaining descriptor lifetime and terminal \
+integrity checks inside one storage-owned operation."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_reading.py::test_verified_consumption_reads_selected_content_once tests/artifact_bundle/test_reading.py::test_verified_consumption_requires_observed_os_eof tests/artifact_bundle/test_reading.py::test_consumer_is_called_once_and_facade_is_invalid_after_callback"
+
+[[contracts]]
+title = "Artifact bundle failures use one small typed hierarchy"
+statement = """
+`ArtifactBundleError` is the common base. `BundleAllocationError` reports fresh \
+allocation and artifact-writer admission failures. `BundlePublishError` reports \
+a publication precondition or terminal-manifest phase through public \
+`phase: BundlePublicationPhase` and \
+`replacement_state: ReplacementState | None` fields. Replacement state is \
+absent for a precondition refusal and uses the existing public \
+`ReplacementState` for a terminal manifest attempt. `BundleReadError` reports \
+manifest, filesystem, or consumer failure; `BundleIncompleteError` and \
+`BundleVerificationError` specialize it for a missing valid terminal manifest \
+and a selected or declared artifact mismatch or incomplete consumption. \
+Verification failures expose public `artifact_name: str` and \
+`reason: BundleVerificationReason` fields. Translated serialization, model, \
+consumer, and operating-system exceptions remain available as causes."""
+rationale = """
+These categories distinguish recovery-relevant allocation, refusal, and \
+terminal-manifest outcomes without freezing one public exception type for every \
+low-level writer step."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_failures.py tests/artifact_bundle/test_reading.py tests/test_public_api.py::test_artifact_bundle_public_surfaces_are_exact"
+
+[[contracts]]
+title = "Completed bundles claim visibility without crash durability"
+statement = """
+Each artifact writer hashes the exact supplied bytes, flushes userspace buffers, \
+and closes its descriptor. Manifest publication writes and closes one \
+same-directory temporary manifest and atomically replaces `manifest.json`. The \
+path does not call `F_FULLFSYNC`, `fsync`, or a directory flush and defines no \
+configurable durability mode. Successful publication is terminal and \
+process-visible, without claiming protection from external filesystem mutation \
+or survival across process, machine, filesystem, or power failure."""
+rationale = """
+Close and same-directory replacement support the intended process-visible \
+terminal boundary. A future crash-durable publication requires its own design \
+rather than an option on this capability."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_failures.py::test_publication_never_uses_file_or_directory_sync tests/artifact_bundle/test_failures.py::test_manifest_replacement_is_same_directory tests/artifact_bundle/test_reading.py::test_directory_descriptor_stays_pinned_across_path_replacement"
+
+[[contracts]]
+title = "Artifact bundle operations remain synchronous and offloadable"
+statement = """
+Artifact writer, manifest publication, integrity-audit, and verified-consumption \
+operations are synchronous, and the package owns no event loop, executor, \
+scheduler, or async filesystem twin. An async caller offloads one complete \
+bundle operation rather than running package hashing or filesystem I/O on its \
+event-loop thread or splitting one operation across independently scheduled \
+per-chunk calls."""
+rationale = """
+Keeping file ownership and the terminal transition inside synchronous operations \
+makes the boundary deterministic while leaving executor policy with async \
+applications."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_reading.py tests/test_public_api.py::test_artifact_bundle_public_surfaces_are_exact"
+
+[[contracts]]
+title = "The directory bundle format has an explicit workload ceiling"
+statement = """
+One artifact bundle represents one task, run, or result publication and is never \
+a per-event record or packed execution-record backend. Callers own partitioned \
+allocation roots and retention. Sustained creation near 100,000 bundles per hour \
+is outside the intended directory-format envelope and requires aggregation or a \
+separately designed blob-storage capability."""
+rationale = """
+Each bundle consumes a directory, manifest, and artifact filesystem entries. An \
+explicit granularity and rate ceiling prevents a local terminal-publication \
+primitive from being mistaken for a high-volume record or retention system."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_publication.py::test_allocate_creates_one_fresh_prefixed_directory"
+
+[[contracts]]
+title = "Artifact bundles do not own domain meaning"
+statement = """
+The bundle format owns artifact names, byte lengths, hashes, completeness, \
+verification, and terminal publication. The bundle manifest carries a separate \
+opaque strict JSON payload; \
+evaluation, provider, corpus, experiment, and other caller packages own that \
+payload's schema and all interpretation of the described artifacts."""
+rationale = """
+Separating a general integrity envelope from caller-owned metadata lets one \
+publication primitive serve unrelated domains without making dr-store an owner \
+of their evidence, identity, or analysis models."""
+date = "2026-08-08"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_publication.py::test_publish_orders_descriptors_and_writes_pinned_manifest tests/artifact_bundle/test_reading.py"
+
+[[contracts]]
+title = "PostgreSQL schema installation is explicit"
+statement = """
+PostgreSQL schema installation occurs only through the public asynchronous \
+`install_postgres(pool)` operation against a caller-owned `asyncpg.Pool`. It \
+supports PostgreSQL 16 through 18 databases whose server encoding is UTF-8, \
+requires the fixed `dr_store` namespace to be absent, and creates that namespace \
+and all storage tables together with exactly one schema-format marker row in \
+one transaction. The marker is exactly `dr-store-postgresql-v1`, and its \
+persisted literal is pinned by a golden contract test. A repeated installation \
+fails visibly rather than adopting or verifying existing objects. Direct \
+`PostgresBackend(...)` construction is unsupported; \
+`await PostgresBackend.open(pool)` returns only after reading and exactly \
+validating the marker. A missing, malformed, or unsupported marker fails before \
+the backend can perform ordinary storage work. Opening and ordinary operations \
+never create, alter, adopt, or upgrade storage. The namespace is not \
+configurable, and the storage contract defines no schema inspection framework, \
+compatibility negotiation, migration, or upgrade path."""
+rationale = """
+Explicit installation keeps deployment privileges and failure recovery outside \
+arbitrary application startup. One absent-only namespace gives installation a \
+deterministic ownership boundary, while one exact persisted marker prevents an \
+incompatible schema from being used silently. Migration machinery remains \
+outside this capability until an actual schema evolution requires a separately \
+reviewed contract."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh"
+
+[[contracts]]
+title = "PostgreSQL uses one concrete caller-owned async pool"
+statement = """
+`asyncpg>=0.31.0` is a required runtime dependency. `PostgresBackend` accepts a \
+concrete caller-owned `asyncpg.Pool` only through its awaited `open` operation \
+as its sole connection source. It awaits release of every connection it \
+acquires during opening or an ordinary operation but never closes the \
+caller-owned pool or governs resources owned by another backend instance or \
+process. The backend defines no custom connection-source Protocol, optional \
+import or dependency path, DSN acceptance or ownership, synchronous source, \
+second ownership mode, or source-lifecycle API."""
+rationale = """
+A single concrete caller-owned boundary avoids freezing an adapter abstraction \
+before a second implementation exists and avoids parallel import, construction, \
+shutdown, and failure semantics for an optional or managed source."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh"
+
+[[contracts]]
+title = "PostgreSQL preserves exact text identity"
+statement = """
+On supported UTF-8 PostgreSQL 16 through 18 databases, PostgreSQL stores opaque \
+schemas and binding keys as text columns using `pg_catalog.ucs_basic`. Their \
+equality and uniqueness never inherit the database default collation and \
+preserve exact case-sensitive and non-ASCII string identity. Canonical JSON text \
+is recovered without normalization and compared exactly by the backend contract. \
+Hash columns separately accept only their declared full lowercase hexadecimal \
+representation."""
+rationale = """
+Storage identity must have the same meaning in every deployment. Pinning text \
+comparison prevents locale or database configuration from changing binding \
+winners while retaining natural string values and diagnostics."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh"
+
+[[contracts]]
+title = "PostgreSQL object lookup and batches scale by bounded chunks"
+statement = """
+The PostgreSQL objects table uses `PRIMARY KEY (content_hash, schema)`, or an \
+equivalent key plus an index whose leading column is `content_hash`. Point \
+methods may use point statements. Batch methods deduplicate identical object \
+references before sending canonical object data, chunk requests by explicit \
+driver and statement bounds, fetch bindings in set-based statements, fetch \
+distinct referenced objects separately in set-based statements, and reconstruct \
+binding results in Python. Database round trips grow with bounded chunks rather \
+than entries, one canonical record is not transferred once per referring key, \
+and each non-empty write batch uses one transaction."""
+rationale = """
+The semantic batch boundary must remain useful over a network database. \
+Hash-leading lookup avoids scans for alternate-schema resolution, while \
+set-based binding and distinct-object fetches prevent N-plus-one round trips and \
+payload multiplication when many keys refer to one object."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh"
+
+[[contracts]]
+title = "PostgreSQL credentials remain at the connection boundary"
+statement = """
+The PostgreSQL API accepts only the caller-owned pool and never accepts, \
+stringifies, or retains a DSN or other credential-bearing connection value. It \
+does not include one in representations, messages, logs, storage identities, or \
+metadata that dr-store constructs. Driver exceptions remain available as causes \
+rather than being recursively rewritten, and the connection path is exercised \
+against password-authenticated PostgreSQL."""
+rationale = """
+Shared deployments require secrets that local trust authentication can hide \
+from tests. Constraining dr-store-owned output prevents accidental disclosure \
+without adding a fragile sanitizer for arbitrary third-party exception text."""
+date = "2026-08-08"
+check = "scripts/test-postgres.sh"

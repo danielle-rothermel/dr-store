@@ -10,9 +10,10 @@ categories = ["content addressing", "object storage"]
 [[terms]]
 name = "schema"
 definition = """
-A caller-declared label for the shape and meaning of a record. The label is \
-opaque to storage and distinguishes references to the same content under \
-different declared shapes."""
+A non-empty caller-declared text label for the shape and meaning of a record. \
+It contains neither NUL nor unpaired surrogate code points, is otherwise opaque \
+to storage, and distinguishes references to the same content under different \
+declared shapes."""
 categories = ["content addressing", "object storage"]
 part_of = ["object reference"]
 
@@ -35,8 +36,9 @@ categories = ["content addressing", "document artifacts"]
 [[terms]]
 name = "key"
 definition = """
-An opaque caller-owned string naming one place in a binding table. Storage \
-does not parse the string or assign it domain meaning."""
+An opaque caller-owned text string naming one place in a binding table. It may \
+be empty but contains neither NUL nor unpaired surrogate code points; storage \
+does not otherwise parse it or assign it domain meaning."""
 categories = ["object storage"]
 part_of = ["binding"]
 
@@ -95,8 +97,8 @@ part_of = ["object reference"]
 [[terms]]
 name = "object reference"
 definition = """
-A validated content-addressed handle composed of a declared schema and the \
-full content hash of one record."""
+A validated content-addressed handle composed of a schema from the shared text \
+domain and the full content hash of one record."""
 exported_symbols = ["ObjectReference", "ReferenceValidationError"]
 categories = ["content addressing", "object storage"]
 part_of = ["binding"]
@@ -104,8 +106,9 @@ part_of = ["binding"]
 [[terms]]
 name = "object store"
 definition = """
-The append-only mapping from object references to immutable records together \
-with the single-assignment mapping from caller-owned keys to those references."""
+The asynchronous append-only mapping from object references to immutable records \
+together with the single-assignment mapping from caller-owned keys to those \
+references."""
 exported_symbols = ["ObjectStore", "StoreError"]
 categories = ["object storage"]
 
@@ -144,9 +147,10 @@ is_a = ["compare-and-set"]
 [[terms]]
 name = "backend"
 definition = """
-The storage boundary that supplies atomic insert-if-absent operations and \
-point and batch operations for object and binding tables. Persistence scope \
-belongs to each backend implementation."""
+The asynchronous storage boundary that supplies atomic insert-if-absent \
+operations and point and batch operations for object and binding tables. Each \
+implementation owns its persistence scope and completes transaction and resource \
+cleanup before an awaited operation terminates."""
 exported_symbols = [
   "Backend",
   "MemoryBackend",
@@ -157,10 +161,23 @@ exported_symbols = [
 categories = ["object storage"]
 
 [[terms]]
+name = "PostgreSQL backend"
+definition = """
+A persistent shared storage capability whose fixed `dr_store` schema and exact \
+schema-format marker are installed explicitly in a caller-selected PostgreSQL \
+database through one concrete caller-owned asynchronous pool. Awaited opening \
+validates that marker before independently running clients observe the same \
+asynchronous backend semantics, without PostgreSQL-specific behavior entering \
+the object store or record cache surfaces."""
+exported_symbols = ["PostgresBackend", "install_postgres"]
+categories = ["object storage"]
+is_a = ["backend"]
+
+[[terms]]
 name = "bound object batch"
 definition = """
-A backend operation over caller-supplied exact keys that either reads each \
-available binding together with its referenced object row or atomically stores \
+An awaited backend operation over caller-supplied exact keys that either reads \
+each available binding together with its referenced object row or atomically stores \
 prepared objects and establishes their first-writer bindings."""
 exported_symbols = ["BoundObjectRow", "BoundObjectWrite"]
 categories = ["object storage", "record caching"]
@@ -198,8 +215,9 @@ categories = ["document artifacts"]
 [[terms]]
 name = "document directory"
 definition = """
-One document artifact grouping one canonical JSON manifest with zero or more \
-sidecars. The caller owns their meaning, coordination, and retention."""
+One mutable work-in-progress document artifact grouping one canonical JSON \
+manifest with zero or more sidecars. The caller owns their meaning, publication \
+coordination, completion policy, and retention."""
 exported_symbols = [
   "DocumentDirectory",
   "AllocationError",
@@ -228,7 +246,7 @@ categories = ["document artifacts"]
 part_of = ["document directory"]
 
 [[terms]]
-name = "sidecar digest"
+name = "sidecar hash"
 definition = """
 The full 64-character lowercase SHA-256 hash of a sidecar's stored bytes after \
 any truncation. Its input is raw bytes, so it is not a content hash."""
@@ -239,18 +257,19 @@ is_a = ["hash"]
 [[terms]]
 name = "record cache"
 definition = """
-The memoization facade that binds cache keys to object references over an \
-object store and returns a typed hit or miss for each exact requested key. It \
-adds no delete, expiry, eviction, size-cap, enumeration, prefix-query, dirty-\
-tracking, or scheduling path."""
+The asynchronous memoization facade that binds cache keys to object references \
+over an object store and returns a typed hit or miss for each exact requested \
+key. It adds no delete, expiry, eviction, size-cap, enumeration, prefix-query, \
+dirty-tracking, or scheduling path."""
 exported_symbols = ["RecordCache", "CacheHit"]
 categories = ["record caching"]
 
 [[terms]]
 name = "managed SQLite record cache"
 definition = """
-A persistent record cache that owns the current-process resource lifecycle for \
-one cache instance."""
+A long-lived asynchronous persistent record cache that owns the current-process \
+SQLite backend, dedicated worker, connection, and resource lifecycle for one \
+cache instance."""
 exported_symbols = [
   "SqliteRecordCache",
   "SqliteRecordCacheCloseError",
@@ -272,6 +291,126 @@ is_a = ["key"]
 part_of = ["record cache"]
 
 [[terms]]
+name = "artifact bundle"
+definition = """
+A terminal completed publication composed of one bundle manifest and exactly \
+the zero or more bundle artifacts described by it. The supported API exposes \
+no mutation after completion; a directory left before final manifest \
+publication is incomplete rather than an artifact bundle. Its directory format \
+is intended for one task, run, or result publication rather than a high-volume \
+event record."""
+exported_symbols = ["ArtifactBundleError", "BundleAllocationError"]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "bundle artifact"
+definition = """
+One complete raw-byte regular file included as a direct child of an artifact \
+bundle and identified by a safe exact relative name. Its domain meaning belongs \
+to the caller's manifest payload."""
+exported_symbols = ["BundleArtifactWriter"]
+categories = ["document artifacts"]
+part_of = ["artifact bundle"]
+
+[[terms]]
+name = "artifact hash"
+definition = """
+The full 64-character lowercase SHA-256 hash of one bundle artifact's complete \
+stored bytes. Its input is raw bytes, so it is not a content hash."""
+categories = ["document artifacts"]
+is_a = ["hash"]
+part_of = ["artifact descriptor"]
+
+[[terms]]
+name = "artifact descriptor"
+definition = """
+A storage-owned manifest entry containing one bundle artifact's exact relative \
+name, artifact hash, and byte length. It describes integrity and extent, not \
+the artifact's domain-specific meaning."""
+exported_symbols = ["ArtifactDescriptor"]
+categories = ["document artifacts"]
+part_of = ["bundle manifest"]
+
+[[terms]]
+name = "bundle manifest"
+definition = """
+A canonical JSON value stored as the final artifact-bundle child. It enumerates \
+the bundle's exact artifact descriptors and carries an opaque strict JSON \
+payload whose domain schema belongs to the caller."""
+exported_symbols = ["BundleManifest"]
+categories = ["document artifacts"]
+part_of = ["artifact bundle"]
+
+[[terms]]
+name = "artifact bundle publication"
+definition = """
+The storage-owned operation that allocates a fresh location, admits independent \
+writers for distinct artifact names, and begins terminal bundle-manifest \
+publication only with a valid payload after every admitted writer has finalized \
+successfully. Once that attempt begins, the operation exposes no supported \
+mutation, retry, or republishing path."""
+exported_symbols = ["ArtifactBundlePublication"]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "artifact bundle read"
+definition = """
+A bounded operation that pins and validates one completed bundle manifest \
+before either auditing every declared bundle artifact or verified-consuming \
+one selected artifact."""
+exported_symbols = [
+  "ArtifactBundleReader",
+  "BundleReadLimits",
+  "BundleReadError",
+  "BundleIncompleteError",
+]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "artifact bundle integrity audit"
+definition = """
+An artifact bundle read that eagerly verifies the complete bytes of every \
+declared bundle artifact. Its successful result describes the bytes verified at \
+audit time without claiming protection from later external filesystem \
+mutation."""
+categories = ["document artifacts"]
+is_a = ["artifact bundle read"]
+
+[[terms]]
+name = "verified artifact consumption"
+definition = """
+An artifact bundle read that delivers one selected bundle artifact from its \
+pinned descriptor while computing its artifact hash and byte length. It \
+succeeds only after the consumer reaches end of file and both values match the \
+artifact descriptor."""
+exported_symbols = ["VerifyingArtifactReader"]
+categories = ["document artifacts"]
+is_a = ["artifact bundle read"]
+
+[[terms]]
+name = "artifact bundle publication failure"
+definition = """
+A typed refusal or failure to publish the terminal manifest for one artifact \
+bundle publication. It preserves the publication phase, available replacement \
+knowledge, and underlying cause needed to distinguish an unmet writer \
+precondition, a known incomplete location, and an uncertain terminal manifest \
+outcome."""
+exported_symbols = ["BundlePublishError", "BundlePublicationPhase"]
+categories = ["document artifacts"]
+
+[[terms]]
+name = "artifact bundle verification failure"
+definition = """
+A typed artifact bundle read failure identifying one selected or declared \
+artifact and the reason its recovered or consumed bytes did not complete \
+verified agreement with the bundle manifest."""
+exported_symbols = [
+  "BundleVerificationError",
+  "BundleVerificationReason",
+]
+categories = ["document artifacts"]
+
+[[terms]]
 name = "cache entry"
 definition = """
 One caller-proposed schema-qualified record associated with an exact cache key \
@@ -283,8 +422,9 @@ part_of = ["record cache"]
 [[terms]]
 name = "record cache read"
 definition = """
-A read that reports one hit or miss for every distinct exact requested key. An \
-absent, missing, wrong-schema, or unverifiable stored value is a miss; invalid \
-requested schemas and operational backend faults are still raised."""
+An awaited read that reports one hit or miss for every distinct exact requested \
+key. An absent, missing, wrong-schema, or unverifiable stored value is a miss; \
+invalid requested schemas, cancellation, and operational backend faults remain \
+visible."""
 categories = ["record caching"]
 part_of = ["record cache"]

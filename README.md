@@ -21,7 +21,8 @@ document artifacts:
 - **[Storage backends](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/storage_backends)**
   supply the Object Store's atomic, append-only point and batch operations.
   `MemoryBackend` is process-local; `SqliteBackend` persists committed data for
-  cross-process use.
+  cross-process use; `PostgresBackend` shares committed data through a
+  caller-owned asynchronous PostgreSQL pool.
 - **[Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)**
   memoizes records under opaque caller-owned keys. Reads return typed hits;
   absent, missing, or unverifiable stored values are misses, while invalid
@@ -29,10 +30,13 @@ document artifacts:
   rebound, so callers invalidate by selecting a new key; `derive_cache_key`
   provides a canonical scheme using a versioned namespace and payload.
   Single and bulk methods share these per-key semantics;
-  `SqliteRecordCache(path)` is the managed persistent lifecycle.
+  `await SqliteRecordCache.open(path)` is the managed persistent lifecycle.
 - **[Canonical JSON document files](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)**
   publish and read one standalone, bounded canonical document in an existing
   directory through descriptor-pinned filesystem operations.
+- **[Artifact bundles](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/artifact_bundle)**
+  publish one terminal task, run, or result directory containing complete raw
+  artifacts and a closed canonical manifest with caller-owned metadata.
 - **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
   delegates one bounded canonical Manifest to that file capability beside
   streamed binary Sidecars.
@@ -45,45 +49,99 @@ dr-store requires Python 3.12 or newer.
 python -m pip install dr-store
 ```
 
+PostgreSQL 16 through 18 installations use required `asyncpg` and an explicit,
+absent-only schema installation step. The caller creates and owns the pool;
+dr-store neither accepts a DSN nor closes the pool:
+
+```python
+import asyncio
+import os
+
+import asyncpg
+
+from dr_store import ObjectStore, PostgresBackend, install_postgres
+
+
+async def main() -> None:
+    pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
+    try:
+        await install_postgres(pool)
+        backend = await PostgresBackend.open(pool)
+        store = ObjectStore(backend)
+        reference, _ = await store.put(
+            "example.note.v1", {"title": "hello"}
+        )
+        assert await store.get(reference) == {"title": "hello"}
+    finally:
+        await pool.close()
+
+
+asyncio.run(main())
+```
+
+`install_postgres` is a one-time deployment operation that creates the fixed
+`dr_store` namespace, its tables, and the exact
+`dr-store-postgresql-v1` schema-format marker in one transaction on a UTF-8
+database. Repeating installation is an error.
+`await PostgresBackend.open(pool)` validates that marker before returning a
+backend for the same awaited point and batch operations as the other backends;
+it acquires and releases connections without closing the pool. Opening never
+installs, alters, adopts, or upgrades storage.
+
 ## Usage
 
 ```python
+import asyncio
+
 from dr_store import MemoryBackend, ObjectStore
 
-store = ObjectStore(MemoryBackend())
-reference, _ = store.put("example.note.v1", {"title": "hello"})
-store.bind("notes/latest", reference)
 
-assert store.resolve("notes/latest") == reference
-assert store.get(reference) == {"title": "hello"}
+async def main() -> None:
+    store = ObjectStore(MemoryBackend())
+    reference, _ = await store.put("example.note.v1", {"title": "hello"})
+    await store.bind("notes/latest", reference)
+
+    assert await store.resolve("notes/latest") == reference
+    assert await store.get(reference) == {"title": "hello"}
+
+
+asyncio.run(main())
 ```
 
-`SqliteRecordCache(path)` is the paved persistent Record Cache. It initializes
-its database before returning and closes its current-process resources on
-normal or exceptional context exit. When cleanup succeeds, an exception from
-the context body is not suppressed; cleanup failure raises
+`await SqliteRecordCache.open(path)` is the paved persistent Record Cache. It
+returns only after its dedicated worker, connection, and schema are ready and
+closes those resources on normal or exceptional async context exit. When
+cleanup succeeds, an exception from the context body is not suppressed;
+cleanup failure raises
 `SqliteRecordCacheCloseError`:
 
 ```python
+import asyncio
+
 from dr_store import CacheEntry, CacheHit, SqliteRecordCache, derive_cache_key
 
-key = derive_cache_key("example.summary.v1", {"document": "note-42"})
-with SqliteRecordCache("records.sqlite3") as cache:
-    winners = cache.put_many(
-        {
-            key: CacheEntry(
-                schema="example.summary.v1",
-                record={"summary": "hello"},
-            )
+
+async def main() -> None:
+    key = derive_cache_key("example.summary.v1", {"document": "note-42"})
+    async with await SqliteRecordCache.open("records.sqlite3") as cache:
+        winners = await cache.put_many(
+            {
+                key: CacheEntry(
+                    schema="example.summary.v1",
+                    record={"summary": "hello"},
+                )
+            }
+        )
+        assert winners[key].schema == "example.summary.v1"
+        assert await cache.get_many(
+            [key, "missing"], schema="example.summary.v1"
+        ) == {
+            key: CacheHit(record={"summary": "hello"}),
+            "missing": None,
         }
-    )
-    assert winners[key].schema == "example.summary.v1"
-    assert cache.get_many(
-        [key, "missing"], schema="example.summary.v1"
-    ) == {
-        key: CacheHit(record={"summary": "hello"}),
-        "missing": None,
-    }
+
+
+asyncio.run(main())
 ```
 
 `CanonicalJsonFile` publishes one standalone document in an existing directory.
@@ -105,8 +163,72 @@ metadata.publish({"state": "complete"})
 assert metadata.read() == {"state": "complete"}
 ```
 
-Use the lower-level `SqliteBackend(path)` when assembling an `ObjectStore`
-directly whose objects and bindings must persist across processes. The rendered
+`ArtifactBundlePublication` allocates one fresh terminal publication. Distinct
+artifact writers may run concurrently; the non-waiting `publish` call succeeds
+only after every admitted writer finalizes:
+
+```python
+from pathlib import Path
+
+from dr_store import (
+    ArtifactBundlePublication,
+    ArtifactBundleReader,
+    BundleReadLimits,
+    VerifyingArtifactReader,
+)
+
+root = Path("results")
+root.mkdir(exist_ok=True)
+bundle = ArtifactBundlePublication.allocate(root, prefix="task-42")
+
+stdout = bundle.open_artifact("stdout.bin")
+stdout.write(b"complete output\n")
+descriptor = stdout.finalize()
+
+bundle.publish(
+    {
+        "kind": "example.result.v1",
+        "stdout_sha256": descriptor.sha256,
+    }
+)
+assert (bundle.path / "manifest.json").is_file()
+
+reader = ArtifactBundleReader(
+    bundle.path,
+    limits=BundleReadLimits(
+        manifest_max_bytes=1 << 20,
+        manifest_max_depth=64,
+        max_artifacts=16,
+        max_bytes_per_artifact=1 << 30,
+        max_total_artifact_bytes=4 << 30,
+    ),
+)
+manifest = reader.audit()
+assert manifest.payload["kind"] == "example.result.v1"
+
+captured_stdout = bytearray()
+
+def consume_stdout(stream: VerifyingArtifactReader) -> None:
+    while chunk := stream.read(1 << 16):
+        captured_stdout.extend(chunk)
+
+
+verified = reader.consume_and_verify_artifact("stdout.bin", consume_stdout)
+assert verified.sha256 == descriptor.sha256
+assert captured_stdout == b"complete output\n"
+```
+
+The bundle API is synchronous. Async applications offload a complete writer or
+publication, audit, or verified-consumption operation rather than running its
+hashing and filesystem I/O on an event-loop thread. One bundle is a task, run,
+or result publication—not a per-event record or packed execution-record
+backend. Callers own partitioned allocation roots and retention; sustained
+creation near 100,000 bundles per hour is outside the directory format's
+intended envelope.
+
+Use the lower-level `await SqliteBackend.open(path)` when assembling an
+`ObjectStore` directly whose objects and bindings must persist across processes.
+Close it with `await backend.aclose()` or an async context. The rendered
 [definitions](https://danielle-rothermel.github.io/dr-store/), authoritative
 [terms](https://github.com/danielle-rothermel/dr-store/blob/main/.defs/terms.toml),
 and binding
@@ -150,14 +272,14 @@ class BindStatus(Enum):
 
 class ObjectStore:
     def __init__(self, backend: Backend) -> None: ...
-    def put(
+    async def put(
         self, schema: str, record: Jsonable
     ) -> tuple[ObjectReference, PutStatus]: ...
-    def get(self, reference: ObjectReference) -> Jsonable: ...
-    def bind(
+    async def get(self, reference: ObjectReference) -> Jsonable: ...
+    async def bind(
         self, key: str, reference: ObjectReference
     ) -> BindStatus: ...
-    def resolve(self, key: str) -> ObjectReference | None: ...
+    async def resolve(self, key: str) -> ObjectReference | None: ...
 ```
 
 ## Storage backends
@@ -197,26 +319,32 @@ class BoundObjectRow:
 
 ```python
 class Backend(Protocol):
-    def put_object(
+    async def put_object(
         self, *, schema: str, content_hash: str, canonical: str
     ) -> PutOutcome: ...
-    def get_object(
+    async def get_object(
         self, *, schema: str, content_hash: str
     ) -> tuple[str, str] | None: ...
-    def bind(
+    async def bind(
         self, *, key: str, schema: str, content_hash: str
     ) -> BindOutcome: ...
-    def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
-    def get_bound_objects(
+    async def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
+    async def get_bound_objects(
         self, *, keys: tuple[str, ...]
     ) -> dict[str, BoundObjectRow]: ...
-    def put_bound_objects(
+    async def put_bound_objects(
         self, *, entries: tuple[BoundObjectWrite, ...]
     ) -> dict[str, BindOutcome]: ...
 
 class MemoryBackend: ...
+class PostgresBackend:
+    @classmethod
+    async def open(cls, pool: asyncpg.Pool) -> PostgresBackend: ...
+
 class SqliteBackend:
-    def __init__(self, path: str | Path) -> None: ...
+    @classmethod
+    async def open(cls, path: str | Path) -> SqliteBackend: ...
+    async def aclose(self) -> None: ...
 ```
 
 Batch reads address only the supplied exact keys. SQLite performs chunked
@@ -224,6 +352,13 @@ joined binding/object queries and does not promise one snapshot across the
 chunks. Every non-empty SQLite write batch uses one immediate transaction; a
 failure rolls back that transaction. Committed rows persist across reopen, but
 the backend does not promise power-loss durability.
+
+PostgreSQL batches deduplicate objects and keys, use bounded set-based
+statements, and fetch bindings separately from distinct referenced objects.
+Every non-empty PostgreSQL write batch uses one transaction. The backend owns
+neither installation nor pool lifecycle, validates the fixed schema format
+during awaited open, and uses the fixed `dr_store` namespace regardless of the
+connection's search path.
 
 ## Record Cache
 
@@ -248,22 +383,21 @@ class CacheEntry:
 
 class RecordCache:
     def __init__(self, store: ObjectStore) -> None: ...
-    def get(self, key: str, *, schema: str) -> CacheHit | None: ...
-    def get_many(
+    async def get(self, key: str, *, schema: str) -> CacheHit | None: ...
+    async def get_many(
         self, keys: Iterable[str], *, schema: str
     ) -> dict[str, CacheHit | None]: ...
-    def put(
+    async def put(
         self, key: str, schema: str, record: Jsonable
     ) -> ObjectReference: ...
-    def put_many(
+    async def put_many(
         self, entries: Mapping[str, CacheEntry]
     ) -> dict[str, ObjectReference]: ...
 
 class SqliteRecordCache(RecordCache):
-    def __init__(self, path: str | Path) -> None: ...
-    def close(self) -> None: ...
-    def __enter__(self) -> SqliteRecordCache: ...
-    def __exit__(self, ...) -> bool: ...
+    @classmethod
+    async def open(cls, path: str | Path) -> SqliteRecordCache: ...
+    async def aclose(self) -> None: ...
 ```
 
 `get_many` deduplicates requested keys and returns exactly those distinct keys,
@@ -278,20 +412,18 @@ The cache intentionally provides no scheduler, dirty tracking, key enumeration,
 prefix query, delete, expiry, eviction, or size cap. Callers own those policies
 and choose new keys for invalidation.
 
-Construction captures a non-transient absolute filesystem path and establishes
-the SQLite schema before returning; empty and `:memory:` paths are rejected.
-Initialize a new database path with one constructor before starting concurrent
-constructors. Closing rejects new cache operations, waits for every admitted
-`get`, `get_many`, `put`, or `put_many` to finish, and then closes all
-operational connections tracked by that cache instance in the current process.
-A successful close is idempotent for repeated and concurrent callers.
+Opening captures a non-transient absolute filesystem path and establishes the
+SQLite schema before returning; empty and `:memory:` paths are rejected. Each
+instance owns one connection-affine worker and connection. Closing rejects new
+cache operations, waits for every admitted `get`, `get_many`, `put`, or
+`put_many` to finish, and then closes those owned resources. A successful close
+is idempotent for repeated and concurrent callers.
 `SqliteRecordCacheClosedError` reports
 operations requested after closing begins, before their inputs are validated;
 `SqliteRecordCacheCloseError` reports a terminal cleanup failure to close
-callers, including a context exit. An interruption before connection cleanup
-begins restores the open lifecycle and wakes another closer; a process-level
-cleanup interruption terminalizes it before propagating to the elected caller.
-Committed records remain available after close and reopen. Closing one cache
+callers, including a context exit. Cancelling one close waiter does not cancel
+the shared terminal cleanup. Committed records remain available after close and
+reopen. Closing one cache
 does not close a separate instance or coordinate another process, even when
 both use the same database path. These persistence semantics do not promise
 power-loss durability.
@@ -390,7 +522,7 @@ class DocumentDirectory:
         self,
         name: str,
         *,
-        expected_digest: str,
+        expected_sidecar_hash: str,
         expected_head_length: int,
         expected_tail_length: int,
     ) -> None: ...
@@ -403,12 +535,92 @@ class SidecarSummary:
     tail_length: int
     produced: int
     dropped: int
-    digest: str
+    sidecar_hash: str
 
 class SidecarWriter:
     def write(self, chunk: bytes) -> None: ...
     def finalize(self) -> SidecarSummary: ...
 ```
+
+## Artifact bundles
+
+An artifact bundle is separate from the mutable `DocumentDirectory` lifecycle.
+It uses strict frozen boundary models, complete raw-byte writers, and one
+terminal manifest transition:
+
+```python
+class ArtifactBundlePublication:
+    @classmethod
+    def allocate(
+        cls, root: str | Path, *, prefix: str
+    ) -> ArtifactBundlePublication: ...
+
+    @property
+    def path(self) -> Path: ...
+    def open_artifact(self, name: str) -> BundleArtifactWriter: ...
+    def publish(self, payload: Jsonable) -> None: ...
+
+class BundleArtifactWriter:
+    def write(self, data: bytes) -> None: ...
+    def finalize(self) -> ArtifactDescriptor: ...
+
+class ArtifactDescriptor(BaseModel):
+    name: str
+    sha256: str
+    byte_length: int
+
+class BundleManifest(BaseModel):
+    format: Literal["dr-store-artifact-bundle-v1"]
+    artifacts: tuple[ArtifactDescriptor, ...]
+    payload: Jsonable
+
+@dataclass(frozen=True, slots=True)
+class BundleReadLimits:
+    manifest_max_bytes: int
+    manifest_max_depth: int
+    max_artifacts: int
+    max_bytes_per_artifact: int
+    max_total_artifact_bytes: int
+
+class ArtifactBundleReader:
+    def __init__(
+        self, path: str | Path, *, limits: BundleReadLimits
+    ) -> None: ...
+    def audit(self) -> BundleManifest: ...
+    def consume_and_verify_artifact(
+        self,
+        name: str,
+        consumer: Callable[[VerifyingArtifactReader], None],
+    ) -> ArtifactDescriptor: ...
+
+class VerifyingArtifactReader:
+    def read(self, size: int = -1) -> bytes: ...
+```
+
+Artifact names are exact identities consisting of one non-empty relative path
+segment. `manifest.json`, dot segments, separators, and the
+`.dr-store-artifact-bundle-` temporary namespace are reserved. The format adds
+no case-folding or Unicode-normalization policy. A duplicate name rejected
+before admission does not poison the publication; a create, write, or finalize
+failure after admission does. Active writers and invalid payloads refuse
+publication without making it terminal. The first valid manifest attempt after
+all writers finalize makes it terminal whether replacement succeeds or fails.
+`audit()` validates the strict canonical manifest under all declared limits and
+streams every declared artifact before returning that `BundleManifest`.
+`consume_and_verify_artifact()` instead opens one selected artifact once and
+delivers it through the package-owned read-only facade. Success requires the
+callback to observe an actual empty operating-system read: `read(0)` and reading
+exactly the declared length without one later empty read do not prove EOF. The
+facade is invalid after the synchronous callback returns, and success returns
+the verified `ArtifactDescriptor`, not a path whose later contents are claimed
+to remain verified.
+
+`BundleReadError` covers manifest, filesystem, and consumer failures;
+`BundleIncompleteError` identifies a missing or invalid terminal manifest.
+`BundleVerificationError` exposes the selected or declared `artifact_name` and
+a `BundleVerificationReason` of `missing`, `not_regular`, `mismatch`,
+`bounds_exceeded`, or `incomplete_consumption`. Translated operating-system,
+decoding, model-validation, and consumer failures remain available as causes.
 
 ## Filesystem and failure semantics
 
@@ -450,11 +662,31 @@ Outside the reserved publication namespace, name validation prevents lexical
 traversal syntax. Sidecar creation and writes follow existing final-component
 symlinks and therefore require trusted, caller-controlled directory contents.
 Sidecar writer coordination remains the caller's concern. Sidecar finalization
-flushes the Sidecar descriptor before returning its summary, but it does not
-flush the Sidecar's directory entry or impose ordering on document publication.
+flushes the Sidecar descriptor before returning its stored-byte accounting and
+sidecar hash, but it does not flush the Sidecar's directory entry or impose
+ordering on document publication.
 Sidecar verification also refuses final-component symlinks for both the
 Document Directory and named child, requires a regular direct child, and reads
 from the descriptor it inspected.
+
+Artifact-bundle publication has a deliberately weaker visibility-only
+filesystem boundary. Writers flush userspace buffers and close their files;
+manifest publication writes and closes one same-directory temporary file and
+atomically replaces `manifest.json`. It performs no `F_FULLFSYNC`, `fsync`, or
+directory flush and exposes no durability mode. Success is process-visible and
+terminal through this API, not a claim of crash, machine, filesystem, or
+power-loss durability.
+
+Every artifact-bundle audit or verified-consumption operation opens the named
+bundle directory with required directory and no-follow behavior and holds that
+descriptor while validating the direct-child `manifest.json` and opening
+declared artifacts relative to it. Manifest reads are strict, canonical, and
+bounded. Artifact reads require inspected regular no-follow direct children and
+enforce count, per-artifact, and total byte bounds while streaming. Directory
+or child replacement after open cannot redirect those descriptor-owned reads,
+but the result is a point-in-time verification: it does not prevent later
+external mutation and does not claim containment for ancestor path resolution.
+Platforms without the required flags or `os.open(dir_fd=...)` fail closed.
 
 A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
 open and its accounting state advanced. The writer is unusable by contract and

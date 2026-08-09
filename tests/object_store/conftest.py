@@ -30,7 +30,7 @@ class ControlledBackend:
         self.object_row = (schema, content_hash, canonical)
         self.object_rows[(schema, content_hash)] = canonical
 
-    def put_object(
+    async def put_object(
         self,
         *,
         schema: str,
@@ -56,7 +56,7 @@ class ControlledBackend:
             stored_canonical=existing,
         )
 
-    def get_object(
+    async def get_object(
         self,
         *,
         schema: str,
@@ -73,7 +73,7 @@ class ControlledBackend:
                 return (stored_schema, canonical)
         return None
 
-    def bind(
+    async def bind(
         self,
         *,
         key: str,
@@ -94,10 +94,10 @@ class ControlledBackend:
             existing_content_hash=existing[1],
         )
 
-    def get_binding(self, *, key: str) -> tuple[str, str] | None:
+    async def get_binding(self, *, key: str) -> tuple[str, str] | None:
         return self.bindings.get(key)
 
-    def get_bound_objects(
+    async def get_bound_objects(
         self,
         *,
         keys: tuple[str, ...],
@@ -117,7 +117,7 @@ class ControlledBackend:
             )
         return rows
 
-    def put_bound_objects(
+    async def put_bound_objects(
         self,
         *,
         entries: tuple[BoundObjectWrite, ...],

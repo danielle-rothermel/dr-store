@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+import enum
 import os
 import sqlite3
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
+from dr_store.content_addressing import (
+    _validate_binding_key,
+    _validate_content_hash,
+    _validate_reference_schema,
+)
 from dr_store.core.errors import ObjectConflictError
 from dr_store.storage_backends.contract import (
     BindOutcome,
@@ -16,7 +23,8 @@ from dr_store.storage_backends.contract import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
+    from types import TracebackType
 
 _BUSY_TIMEOUT_MS = 30_000
 _KEY_QUERY_CHUNK_SIZE = 999
@@ -30,12 +38,22 @@ CREATE TABLE IF NOT EXISTS objects (
     PRIMARY KEY (schema, content_hash)
 ) WITHOUT ROWID;
 
+CREATE INDEX IF NOT EXISTS objects_by_content_hash
+    ON objects (content_hash, schema);
+
 CREATE TABLE IF NOT EXISTS bindings (
     key          TEXT PRIMARY KEY NOT NULL,
     schema       TEXT NOT NULL,
     content_hash TEXT NOT NULL
 ) WITHOUT ROWID;
 """
+
+
+class _Lifecycle(enum.Enum):
+    OPEN = enum.auto()
+    CLOSING = enum.auto()
+    CLOSED = enum.auto()
+    FAILED = enum.auto()
 
 
 def _persistent_database_path(path: str | Path) -> str:
@@ -49,132 +67,165 @@ def _persistent_database_path(path: str | Path) -> str:
     return str(Path(raw_path).absolute())
 
 
-class SqliteBackend:
-    """Persistent SQLite object and binding storage.
+def _open_connection(path: str) -> sqlite3.Connection:
+    connection = sqlite3.connect(
+        path,
+        timeout=_BUSY_TIMEOUT_MS / 1000,
+        isolation_level=None,
+    )
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
+        connection.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        connection.executescript(_SCHEMA)
+    except BaseException:
+        with suppress(Exception):
+            connection.close()
+        raise
+    return connection
 
-    Initialize before concurrent use. Thereafter, per-thread connections
-    coordinate object and binding operations across processes through SQLite.
-    """
+
+async def _await_settled[T](future: asyncio.Future[T]) -> T:
+    cancellation: asyncio.CancelledError | None = None
+    while True:
+        try:
+            result = await asyncio.shield(future)
+        except asyncio.CancelledError as error:
+            cancellation = error
+            continue
+        except BaseException as error:
+            if cancellation is not None:
+                raise cancellation from error
+            raise
+        if cancellation is not None:
+            raise cancellation
+        return result
+
+
+class SqliteBackend:
+    """One asynchronous worker and connection for persistent SQLite storage."""
+
+    _path: str
+    _loop: asyncio.AbstractEventLoop
+    _worker: ThreadPoolExecutor
+    _connection: sqlite3.Connection
+    _admission: asyncio.Lock
+    _state: _Lifecycle
+    _close_task: asyncio.Task[None] | None
 
     def __init__(self, path: str | Path) -> None:
-        self._path = _persistent_database_path(path)
-        self._track_connections = False
-        self._local = threading.local()
-        self._connections: set[sqlite3.Connection] = set()
-        self._connections_lock = threading.Lock()
-        conn = self._connect(check_same_thread=True)
-        try:
-            conn.executescript(_SCHEMA)
-            conn.commit()
-        finally:
-            conn.close()
+        del path
+        raise TypeError("use 'await SqliteBackend.open(path)'")
 
     @classmethod
-    def _managed(cls, path: str | Path) -> Self:
-        backend = cls(path)
-        backend._track_connections = True
-        return backend
-
-    def _connect(self, *, check_same_thread: bool) -> sqlite3.Connection:
-        conn = sqlite3.connect(
-            self._path,
-            timeout=_BUSY_TIMEOUT_MS / 1000,
-            isolation_level=None,
-            check_same_thread=check_same_thread,
+    async def open(cls, path: str | Path) -> Self:
+        database_path = _persistent_database_path(path)
+        loop = asyncio.get_running_loop()
+        worker = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="dr-store-sqlite",
         )
+        concurrent = worker.submit(_open_connection, database_path)
+        ready = asyncio.wrap_future(concurrent, loop=loop)
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=FULL")
-            conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
-        except BaseException:
-            with suppress(Exception):
-                conn.close()
+            connection = await _await_settled(ready)
+        except asyncio.CancelledError:
+            if (
+                ready.done()
+                and not ready.cancelled()
+                and ready.exception() is None
+            ):
+                connection = ready.result()
+                closing = asyncio.wrap_future(
+                    worker.submit(connection.close),
+                    loop=loop,
+                )
+                with suppress(asyncio.CancelledError):
+                    await _await_settled(closing)
+            worker.shutdown(wait=True)
             raise
-        return conn
+        except BaseException:
+            worker.shutdown(wait=True)
+            raise
 
-    @property
-    def _conn(self) -> sqlite3.Connection:
-        conn = getattr(self._local, "conn", None)
-        if conn is None:
-            # Connections remain thread-local during use. This flag exists
-            # only so a quiesced higher-level owner can close them centrally.
-            conn = self._connect(check_same_thread=False)
-            try:
-                if self._track_connections:
-                    with self._connections_lock:
-                        self._connections.add(conn)
-                        try:
-                            self._local.conn = conn
-                        except BaseException:
-                            self._connections.remove(conn)
-                            raise
-                else:
-                    self._local.conn = conn
-            except BaseException:
-                with suppress(Exception):
-                    conn.close()
-                raise
-        return conn
+        self = object.__new__(cls)
+        self._path = database_path
+        self._loop = loop
+        self._worker = worker
+        self._connection = connection
+        self._admission = asyncio.Lock()
+        self._state = _Lifecycle.OPEN
+        self._close_task = None
+        return self
 
-    def _close_connections(self) -> None:
-        """Close tracked operational connections.
-
-        A higher-level owner must quiesce all backend operations first.
-        """
-        with self._connections_lock:
-            connections = tuple(self._connections)
-            self._connections.clear()
-
-        failures: list[Exception] = []
-        process_failure: BaseException | None = None
-        for conn in connections:
-            try:
-                conn.close()
-            # Cleanup must continue after any connection close fault.
-            except BaseException as error:  # noqa: BLE001
-                if isinstance(error, Exception):
-                    failures.append(error)
-                elif process_failure is None:
-                    process_failure = error
-        if process_failure is not None:
-            raise process_failure
-        if failures:
-            raise ExceptionGroup(
-                "failed to close SQLite operational connections",
-                failures,
+    def _check_loop(self) -> None:
+        if asyncio.get_running_loop() is not self._loop:
+            raise RuntimeError(
+                "SQLite backend must be used on the event loop that opened it"
             )
+
+    def _check_operation(self) -> None:
+        self._check_loop()
+        if self._state is not _Lifecycle.OPEN:
+            raise RuntimeError("SQLite backend is closed")
+
+    async def _run[T](
+        self, operation: Callable[..., T], /, *args: object
+    ) -> T:
+        async with self._admission:
+            if self._state is not _Lifecycle.OPEN:
+                raise RuntimeError("SQLite backend is closed")
+            concurrent = self._worker.submit(operation, *args)
+            future = asyncio.wrap_future(concurrent, loop=self._loop)
+            return await _await_settled(future)
 
     @contextmanager
     def _immediate(self) -> Iterator[sqlite3.Connection]:
-        conn = self._conn
-        conn.execute("BEGIN IMMEDIATE")
+        self._connection.execute("BEGIN IMMEDIATE")
         try:
-            yield conn
-            conn.execute("COMMIT")
+            yield self._connection
+            self._connection.execute("COMMIT")
         except BaseException:
-            if conn.in_transaction:
-                conn.execute("ROLLBACK")
+            if self._connection.in_transaction:
+                self._connection.execute("ROLLBACK")
             raise
 
-    def put_object(
+    async def put_object(
         self,
         *,
         schema: str,
         content_hash: str,
         canonical: str,
     ) -> PutOutcome:
-        with self._immediate() as conn:
-            cursor = conn.execute(
+        self._check_operation()
+        _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
+        return await self._run(
+            self._put_object,
+            schema,
+            content_hash,
+            canonical,
+        )
+
+    def _put_object(
+        self,
+        schema: str,
+        content_hash: str,
+        canonical: str,
+    ) -> PutOutcome:
+        with self._immediate() as connection:
+            cursor = connection.execute(
                 "INSERT OR IGNORE INTO objects "
                 "(schema, content_hash, canonical) VALUES (?, ?, ?)",
                 (schema, content_hash, canonical),
             )
             inserted = cursor.rowcount == 1
-            row = conn.execute(
+            row = connection.execute(
                 "SELECT schema, canonical FROM objects "
                 "WHERE schema = ? AND content_hash = ?",
                 (schema, content_hash),
             ).fetchone()
+            assert row is not None
             stored_schema, stored_canonical = row
         return PutOutcome(
             inserted=inserted,
@@ -182,14 +233,23 @@ class SqliteBackend:
             stored_canonical=stored_canonical,
         )
 
-    def get_object(
+    async def get_object(
         self,
         *,
         schema: str,
         content_hash: str,
     ) -> tuple[str, str] | None:
-        # Alternate-schema lookup distinguishes mismatch from missing content.
-        row = self._conn.execute(
+        self._check_operation()
+        _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
+        return await self._run(self._get_object, schema, content_hash)
+
+    def _get_object(
+        self,
+        schema: str,
+        content_hash: str,
+    ) -> tuple[str, str] | None:
+        row = self._connection.execute(
             "SELECT schema, canonical FROM objects "
             "WHERE content_hash = ? ORDER BY schema = ? DESC LIMIT 1",
             (content_hash, schema),
@@ -198,24 +258,37 @@ class SqliteBackend:
             return None
         return (row[0], row[1])
 
-    def bind(
+    async def bind(
         self,
         *,
         key: str,
         schema: str,
         content_hash: str,
     ) -> BindOutcome:
-        with self._immediate() as conn:
-            cursor = conn.execute(
+        self._check_operation()
+        _validate_binding_key(key)
+        _validate_reference_schema(schema)
+        _validate_content_hash(content_hash)
+        return await self._run(self._bind, key, schema, content_hash)
+
+    def _bind(
+        self,
+        key: str,
+        schema: str,
+        content_hash: str,
+    ) -> BindOutcome:
+        with self._immediate() as connection:
+            cursor = connection.execute(
                 "INSERT OR IGNORE INTO bindings "
                 "(key, schema, content_hash) VALUES (?, ?, ?)",
                 (key, schema, content_hash),
             )
             bound = cursor.rowcount == 1
-            row = conn.execute(
+            row = connection.execute(
                 "SELECT schema, content_hash FROM bindings WHERE key = ?",
                 (key,),
             ).fetchone()
+            assert row is not None
             existing_schema, existing_hash = row
         return BindOutcome(
             bound=bound,
@@ -223,8 +296,13 @@ class SqliteBackend:
             existing_content_hash=existing_hash,
         )
 
-    def get_binding(self, *, key: str) -> tuple[str, str] | None:
-        row = self._conn.execute(
+    async def get_binding(self, *, key: str) -> tuple[str, str] | None:
+        self._check_operation()
+        _validate_binding_key(key)
+        return await self._run(self._get_binding, key)
+
+    def _get_binding(self, key: str) -> tuple[str, str] | None:
+        row = self._connection.execute(
             "SELECT schema, content_hash FROM bindings WHERE key = ?",
             (key,),
         ).fetchone()
@@ -232,19 +310,26 @@ class SqliteBackend:
             return None
         return (row[0], row[1])
 
-    def get_bound_objects(
+    async def get_bound_objects(
         self,
         *,
         keys: tuple[str, ...],
     ) -> dict[str, BoundObjectRow]:
+        self._check_operation()
+        for key in keys:
+            _validate_binding_key(key)
         if not keys:
             return {}
+        return await self._run(self._get_bound_objects, keys)
 
+    def _get_bound_objects(
+        self,
+        keys: tuple[str, ...],
+    ) -> dict[str, BoundObjectRow]:
         rows: dict[str, BoundObjectRow] = {}
         for start in range(0, len(keys), _KEY_QUERY_CHUNK_SIZE):
             chunk = keys[start : start + _KEY_QUERY_CHUNK_SIZE]
             placeholders = ", ".join("?" for _ in chunk)
-            # Only generated parameter placeholders enter the SQL text.
             query = (
                 "SELECT bindings.key, bindings.schema, "  # noqa: S608
                 "bindings.content_hash, objects.schema, objects.canonical "
@@ -253,7 +338,7 @@ class SqliteBackend:
                 "AND objects.content_hash = bindings.content_hash "
                 f"WHERE bindings.key IN ({placeholders})"
             )
-            stored_rows = self._conn.execute(query, chunk).fetchall()
+            stored_rows = self._connection.execute(query, chunk).fetchall()
             for (
                 key,
                 binding_schema,
@@ -269,16 +354,26 @@ class SqliteBackend:
                 )
         return rows
 
-    def put_bound_objects(
+    async def put_bound_objects(
         self,
         *,
         entries: tuple[BoundObjectWrite, ...],
     ) -> dict[str, BindOutcome]:
+        self._check_operation()
+        for entry in entries:
+            _validate_binding_key(entry.key)
+            _validate_reference_schema(entry.schema)
+            _validate_content_hash(entry.content_hash)
         if not entries:
             return {}
+        return await self._run(self._put_bound_objects, entries)
 
-        with self._immediate() as conn:
-            conn.executemany(
+    def _put_bound_objects(
+        self,
+        entries: tuple[BoundObjectWrite, ...],
+    ) -> dict[str, BindOutcome]:
+        with self._immediate() as connection:
+            connection.executemany(
                 "INSERT OR IGNORE INTO objects "
                 "(schema, content_hash, canonical) VALUES (?, ?, ?)",
                 (
@@ -287,11 +382,12 @@ class SqliteBackend:
                 ),
             )
             for entry in entries:
-                row = conn.execute(
+                row = connection.execute(
                     "SELECT canonical FROM objects "
                     "WHERE schema = ? AND content_hash = ?",
                     (entry.schema, entry.content_hash),
                 ).fetchone()
+                assert row is not None
                 if row[0] != entry.canonical:
                     raise ObjectConflictError(
                         schema=entry.schema,
@@ -302,19 +398,59 @@ class SqliteBackend:
             for entry in entries:
                 if entry.key in outcomes:
                     continue
-                cursor = conn.execute(
+                cursor = connection.execute(
                     "INSERT OR IGNORE INTO bindings "
                     "(key, schema, content_hash) VALUES (?, ?, ?)",
                     (entry.key, entry.schema, entry.content_hash),
                 )
                 bound = cursor.rowcount == 1
-                row = conn.execute(
+                row = connection.execute(
                     "SELECT schema, content_hash FROM bindings WHERE key = ?",
                     (entry.key,),
                 ).fetchone()
+                assert row is not None
                 outcomes[entry.key] = BindOutcome(
                     bound=bound,
                     existing_schema=row[0],
                     existing_content_hash=row[1],
                 )
         return outcomes
+
+    async def aclose(self) -> None:
+        if self._state is _Lifecycle.CLOSED:
+            return
+        self._check_loop()
+        if self._close_task is None:
+            self._state = _Lifecycle.CLOSING
+            self._close_task = self._loop.create_task(self._close_resources())
+        await _await_settled(self._close_task)
+
+    async def _close_resources(self) -> None:
+        failure: BaseException | None = None
+        try:
+            async with self._admission:
+                concurrent = self._worker.submit(self._connection.close)
+                closing = asyncio.wrap_future(concurrent, loop=self._loop)
+                await _await_settled(closing)
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            self._worker.shutdown(wait=True)
+            self._state = (
+                _Lifecycle.CLOSED if failure is None else _Lifecycle.FAILED
+            )
+
+    async def __aenter__(self) -> Self:
+        self._check_operation()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        del exc_type, exc_value, traceback
+        await self.aclose()
+        return False

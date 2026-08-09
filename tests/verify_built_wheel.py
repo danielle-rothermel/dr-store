@@ -7,6 +7,13 @@ import pkgutil
 import sys
 
 FUNCTIONAL_MODULES = (
+    "dr_store.artifact_bundle",
+    "dr_store.artifact_bundle._wire",
+    "dr_store.artifact_bundle.errors",
+    "dr_store.artifact_bundle.models",
+    "dr_store.artifact_bundle.names",
+    "dr_store.artifact_bundle.publication",
+    "dr_store.artifact_bundle.reading",
     "dr_store.content_addressing",
     "dr_store.core",
     "dr_store.core.errors",
@@ -24,6 +31,7 @@ FUNCTIONAL_MODULES = (
     "dr_store.storage_backends",
     "dr_store.storage_backends.contract",
     "dr_store.storage_backends.memory",
+    "dr_store.storage_backends.postgresql",
     "dr_store.storage_backends.sqlite",
 )
 
@@ -64,6 +72,9 @@ def main() -> None:
 
     for module_name in FUNCTIONAL_MODULES:
         importlib.import_module(module_name)
+
+    storage_backends = importlib.import_module("dr_store.storage_backends")
+    assert package.PostgresBackend is storage_backends.PostgresBackend
 
     typed_marker = importlib.resources.files("dr_store").joinpath("py.typed")
     assert typed_marker.is_file(), "dr_store/py.typed is absent from the wheel"

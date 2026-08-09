@@ -39,17 +39,17 @@ def _validate_cap(cap: int | None, *, role: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class SidecarSummary:
-    """Stored segment accounting and SHA-256 digest.
+    """Stored segment accounting and SHA-256 sidecar hash.
 
-    ``produced == head_length + tail_length + dropped``; ``digest`` covers
-    the stored head followed by the stored tail.
+    ``produced == head_length + tail_length + dropped``; ``sidecar_hash``
+    covers the stored head followed by the stored tail.
     """
 
     head_length: int
     tail_length: int
     produced: int
     dropped: int
-    digest: str
+    sidecar_hash: str
 
 
 class SidecarWriter:
@@ -77,7 +77,7 @@ class SidecarWriter:
         self._produced = 0
         self._tail = bytearray()
         self._dropped = 0
-        self._digest = hashlib.sha256()
+        self._sidecar_hasher = hashlib.sha256()
         try:
             self._handle = path.open("wb")
         except OSError as exc:
@@ -118,7 +118,7 @@ class SidecarWriter:
             raise AllocationError(
                 f"could not write sidecar {str(self._path)!r}"
             ) from exc
-        self._digest.update(part)
+        self._sidecar_hasher.update(part)
         self._head_length += len(part)
 
     def finalize(self) -> SidecarSummary:
@@ -134,13 +134,13 @@ class SidecarWriter:
             ) from exc
         finally:
             self._handle.close()
-        self._digest.update(tail)
+        self._sidecar_hasher.update(tail)
         return SidecarSummary(
             head_length=self._head_length,
             tail_length=len(tail),
             produced=self._produced,
             dropped=self._dropped,
-            digest=self._digest.hexdigest(),
+            sidecar_hash=self._sidecar_hasher.hexdigest(),
         )
 
 
@@ -148,7 +148,7 @@ def verify_sidecar(
     directory: Path,
     name: str,
     *,
-    expected_digest: str,
+    expected_sidecar_hash: str,
     expected_head_length: int,
     expected_tail_length: int,
 ) -> None:
@@ -184,7 +184,7 @@ def verify_sidecar(
     )
     child_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     expected_length = expected_head_length + expected_tail_length
-    digest = hashlib.sha256()
+    sidecar_hasher = hashlib.sha256()
     actual_length = 0
     directory_descriptor: int | None = None
     child_descriptor: int | None = None
@@ -198,7 +198,7 @@ def verify_sidecar(
         metadata = os.fstat(child_descriptor)
         _require_regular_file(metadata, sidecar_path)
         while chunk := os.read(child_descriptor, _READ_CHUNK_BYTES):
-            digest.update(chunk)
+            sidecar_hasher.update(chunk)
             actual_length += len(chunk)
     except SidecarVerificationError:
         raise
@@ -220,9 +220,9 @@ def verify_sidecar(
             f"({expected_head_length} head + {expected_tail_length} tail), "
             f"stored {actual_length}"
         )
-    actual_digest = digest.hexdigest()
-    if actual_digest != expected_digest:
+    actual_sidecar_hash = sidecar_hasher.hexdigest()
+    if actual_sidecar_hash != expected_sidecar_hash:
         raise SidecarVerificationError(
-            f"sidecar {str(sidecar_path)!r} digest mismatch: expected "
-            f"{expected_digest}, computed {actual_digest}"
+            f"sidecar {str(sidecar_path)!r} hash mismatch: expected "
+            f"{expected_sidecar_hash}, computed {actual_sidecar_hash}"
         )

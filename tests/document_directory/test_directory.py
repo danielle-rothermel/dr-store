@@ -199,7 +199,7 @@ def test_several_sidecars_live_side_by_side(tmp_path: Path) -> None:
     for name, summary in summaries.items():
         directory.verify_sidecar(
             name,
-            expected_digest=summary.digest,
+            expected_sidecar_hash=summary.sidecar_hash,
             expected_head_length=summary.head_length,
             expected_tail_length=summary.tail_length,
         )
