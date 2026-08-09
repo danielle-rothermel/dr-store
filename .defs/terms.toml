@@ -163,10 +163,11 @@ categories = ["object storage"]
 [[terms]]
 name = "PostgreSQL backend"
 definition = """
-A persistent shared storage capability whose fixed `dr_store` schema is created \
-explicitly in a caller-selected PostgreSQL database through one concrete \
-caller-owned asynchronous pool. Independently running clients observe the same \
-asynchronous backend semantics without PostgreSQL-specific behavior entering \
+A persistent shared storage capability whose fixed `dr_store` schema and exact \
+schema-format marker are installed explicitly in a caller-selected PostgreSQL \
+database through one concrete caller-owned asynchronous pool. Awaited opening \
+validates that marker before independently running clients observe the same \
+asynchronous backend semantics, without PostgreSQL-specific behavior entering \
 the object store or record cache surfaces."""
 exported_symbols = ["PostgresBackend", "install_postgres"]
 categories = ["object storage"]

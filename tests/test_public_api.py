@@ -60,7 +60,7 @@ def test_object_store_public_surface_is_exact() -> None:
 
 
 def test_backend_public_surfaces_are_exact() -> None:
-    from dr_store import Backend, MemoryBackend, PostgresBackend
+    from dr_store import Backend, MemoryBackend
 
     expected = {
         "bind",
@@ -70,7 +70,7 @@ def test_backend_public_surfaces_are_exact() -> None:
         "put_bound_objects",
         "put_object",
     }
-    for backend_type in (Backend, MemoryBackend, PostgresBackend):
+    for backend_type in (Backend, MemoryBackend):
         public = {
             name for name in dir(backend_type) if not name.startswith("_")
         }
@@ -99,6 +99,24 @@ def test_postgresql_public_surface_is_exact() -> None:
     assert inspect.iscoroutinefunction(install_postgres)
     assert list(inspect.signature(install_postgres).parameters) == ["pool"]
     assert list(inspect.signature(PostgresBackend).parameters) == ["pool"]
+    public = {
+        name for name in dir(PostgresBackend) if not name.startswith("_")
+    }
+    expected = {
+        "bind",
+        "get_binding",
+        "get_bound_objects",
+        "get_object",
+        "open",
+        "put_bound_objects",
+        "put_object",
+    }
+    assert public == expected
+    assert all(
+        inspect.iscoroutinefunction(getattr(PostgresBackend, name))
+        for name in expected
+    )
+    assert list(inspect.signature(PostgresBackend.open).parameters) == ["pool"]
 
 
 def test_record_cache_public_surface_is_exact() -> None:

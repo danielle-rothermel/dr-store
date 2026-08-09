@@ -66,7 +66,8 @@ async def main() -> None:
     pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
     try:
         await install_postgres(pool)
-        store = ObjectStore(PostgresBackend(pool))
+        backend = await PostgresBackend.open(pool)
+        store = ObjectStore(backend)
         reference, _ = await store.put(
             "example.note.v1", {"title": "hello"}
         )
@@ -79,10 +80,13 @@ asyncio.run(main())
 ```
 
 `install_postgres` is a one-time deployment operation that creates the fixed
-`dr_store` namespace and its tables in one transaction on a UTF-8 database.
-Repeating installation is an error. `PostgresBackend(pool)` uses that installed
-namespace for the same awaited point and batch operations as the other
-backends; it acquires and releases connections without closing the pool.
+`dr_store` namespace, its tables, and the exact
+`dr-store-postgresql-v1` schema-format marker in one transaction on a UTF-8
+database. Repeating installation is an error.
+`await PostgresBackend.open(pool)` validates that marker before returning a
+backend for the same awaited point and batch operations as the other backends;
+it acquires and releases connections without closing the pool. Opening never
+installs, alters, adopts, or upgrades storage.
 
 ## Usage
 
@@ -334,7 +338,8 @@ class Backend(Protocol):
 
 class MemoryBackend: ...
 class PostgresBackend:
-    def __init__(self, pool: asyncpg.Pool) -> None: ...
+    @classmethod
+    async def open(cls, pool: asyncpg.Pool) -> PostgresBackend: ...
 
 class SqliteBackend:
     @classmethod
@@ -351,8 +356,9 @@ the backend does not promise power-loss durability.
 PostgreSQL batches deduplicate objects and keys, use bounded set-based
 statements, and fetch bindings separately from distinct referenced objects.
 Every non-empty PostgreSQL write batch uses one transaction. The backend owns
-neither installation nor pool lifecycle and uses the fixed `dr_store`
-namespace regardless of the connection's search path.
+neither installation nor pool lifecycle, validates the fixed schema format
+during awaited open, and uses the fixed `dr_store` namespace regardless of the
+connection's search path.
 
 ## Record Cache
 

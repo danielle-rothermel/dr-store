@@ -26,20 +26,113 @@ async def postgres_backend(
     postgres_pool: asyncpg.Pool,
 ) -> PostgresBackend:
     await install_postgres(postgres_pool)
-    return PostgresBackend(postgres_pool)
+    return await PostgresBackend.open(postgres_pool)
 
 
-def test_rejects_non_pool_at_construction() -> None:
-    with pytest.raises(TypeError, match=r"pool must be an asyncpg\.Pool"):
+def test_direct_construction_is_not_public() -> None:
+    with pytest.raises(
+        TypeError, match=r"use 'await PostgresBackend\.open\(pool\)'"
+    ):
         PostgresBackend(cast("asyncpg.Pool", object()))
+
+
+async def test_open_rejects_non_pool_without_connection_work() -> None:
+    with pytest.raises(TypeError, match=r"pool must be an asyncpg\.Pool"):
+        await PostgresBackend.open(cast("asyncpg.Pool", object()))
+
+
+async def test_direct_construction_rejects_a_real_pool(
+    postgres_pool: asyncpg.Pool,
+) -> None:
+    with pytest.raises(
+        TypeError, match=r"use 'await PostgresBackend\.open\(pool\)'"
+    ):
+        PostgresBackend(postgres_pool)
 
 
 async def test_missing_namespace_fails_without_implicit_installation(
     postgres_pool: asyncpg.Pool,
 ) -> None:
-    backend = PostgresBackend(postgres_pool)
     with pytest.raises(asyncpg.UndefinedTableError):
-        await backend.get_binding(key="missing")
+        await PostgresBackend.open(postgres_pool)
+
+    async with postgres_pool.acquire() as connection:
+        assert not await connection.fetchval(
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM pg_catalog.pg_namespace
+                WHERE pg_namespace.nspname = 'dr_store'
+            )
+            """
+        )
+
+
+@pytest.mark.parametrize(
+    "formats",
+    [
+        [],
+        [None],
+        [1],
+        ["dr-store-postgresql-v2"],
+        ["dr-store-postgresql-v1"] * 2,
+    ],
+)
+def test_schema_format_validation_requires_one_exact_marker(
+    formats: list[object],
+) -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="schema format marker is missing, malformed, or unsupported",
+    ):
+        postgresql._validate_schema_format(formats)
+
+
+@pytest.mark.parametrize(
+    ("mutate_sql", "stored_format"),
+    [
+        ("DELETE FROM dr_store.schema_format", None),
+        (
+            "UPDATE dr_store.schema_format "
+            "SET format = 'dr-store-postgresql-v2'",
+            "dr-store-postgresql-v2",
+        ),
+    ],
+)
+async def test_open_rejects_incompatible_marker_without_modifying_storage(
+    postgres_pool: asyncpg.Pool,
+    mutate_sql: str,
+    stored_format: str | None,
+) -> None:
+    await install_postgres(postgres_pool)
+    async with postgres_pool.acquire() as connection:
+        await connection.execute(mutate_sql)
+
+    with pytest.raises(
+        RuntimeError,
+        match="schema format marker is missing, malformed, or unsupported",
+    ):
+        await PostgresBackend.open(postgres_pool)
+
+    async with postgres_pool.acquire() as connection:
+        formats = await connection.fetch(
+            "SELECT format FROM dr_store.schema_format"
+        )
+        assert [row["format"] for row in formats] == (
+            [] if stored_format is None else [stored_format]
+        )
+        assert (
+            await connection.fetchval(
+                "SELECT pg_catalog.count(*) FROM dr_store.objects"
+            )
+            == 0
+        )
+        assert (
+            await connection.fetchval(
+                "SELECT pg_catalog.count(*) FROM dr_store.bindings"
+            )
+            == 0
+        )
 
 
 async def test_backend_uses_qualified_tables_under_nondefault_search_path(
@@ -71,7 +164,7 @@ async def test_backend_does_not_stringify_retain_or_close_pool(
         pytest.fail("backend stringified the caller-owned pool")
 
     monkeypatch.setattr(asyncpg.Pool, "__str__", fail_stringification)
-    backend = PostgresBackend(postgres_pool)
+    backend = await PostgresBackend.open(postgres_pool)
     assert backend.__dict__ == {"_pool": postgres_pool}
     assert await backend.get_binding(key="missing") is None
     assert not postgres_pool.is_closing()
@@ -116,7 +209,7 @@ async def test_committed_rows_are_visible_through_independent_pools(
         server_settings={"search_path": "public"},
     )
     try:
-        second = PostgresBackend(independent_pool)
+        second = await PostgresBackend.open(independent_pool)
         assert (
             await postgres_backend.bind(
                 key="shared",
@@ -219,9 +312,8 @@ async def test_cancellation_waits_for_connection_release_before_terminating(
         server_settings={"search_path": "pg_catalog"},
     )
     try:
-        backend = PostgresBackend(pool)
         gate_enabled = True
-        operation = asyncio.create_task(backend.get_binding(key="missing"))
+        operation = asyncio.create_task(PostgresBackend.open(pool))
         await asyncio.wait_for(release_started.wait(), WATCHDOG_SECONDS)
 
         operation.cancel()
@@ -242,6 +334,8 @@ async def test_cancellation_waits_for_connection_release_before_terminating(
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(operation, WATCHDOG_SECONDS)
         assert pool.get_idle_size() == 1
+        gate_enabled = False
+        backend = await PostgresBackend.open(pool)
         assert await backend.get_binding(key="missing") is None
     finally:
         allow_release.set()
@@ -271,7 +365,7 @@ async def test_release_failure_is_cause_of_postgresql_cancellation(
         server_settings={"search_path": "pg_catalog"},
     )
     try:
-        backend = PostgresBackend(pool)
+        backend = await PostgresBackend.open(pool)
         gate_enabled = True
         operation = asyncio.create_task(backend.get_binding(key="missing"))
         await asyncio.wait_for(release_started.wait(), WATCHDOG_SECONDS)

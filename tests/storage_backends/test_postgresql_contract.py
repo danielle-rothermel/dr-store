@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 @pytest.fixture
 async def backend(postgres_pool: asyncpg.Pool) -> PostgresBackend:
     await install_postgres(postgres_pool)
-    return PostgresBackend(postgres_pool)
+    return await PostgresBackend.open(postgres_pool)
 
 
 test_put_absent_replay_and_competing_value = (

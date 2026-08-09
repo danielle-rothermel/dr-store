@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, Self, cast
 
 import asyncpg
 
@@ -28,6 +28,9 @@ _MINIMUM_POSTGRES_MAJOR = 16
 _MAXIMUM_POSTGRES_MAJOR = 18
 _BATCH_CHUNK_SIZE = 512
 
+# Persisted schema-format contract. A changed literal is a new format.
+_POSTGRES_SCHEMA_FORMAT: Final = "dr-store-postgresql-v1"
+
 _DATABASE_REQUIREMENTS_SQL = """
 SELECT
     pg_catalog.current_setting('server_version_num')::pg_catalog.int4
@@ -37,6 +40,12 @@ SELECT
 
 _INSTALL_SQL = """
 CREATE SCHEMA dr_store;
+
+CREATE TABLE dr_store.schema_format (
+    singleton pg_catalog.bool PRIMARY KEY,
+    format pg_catalog.text COLLATE pg_catalog.ucs_basic NOT NULL,
+    CONSTRAINT schema_format_singleton CHECK (singleton)
+);
 
 CREATE TABLE dr_store.objects (
     content_hash pg_catalog.text COLLATE pg_catalog.ucs_basic NOT NULL,
@@ -66,6 +75,16 @@ CREATE TABLE dr_store.bindings (
         ) = ''
     )
 );
+"""
+
+_INSERT_SCHEMA_FORMAT_SQL = """
+INSERT INTO dr_store.schema_format (singleton, format)
+VALUES (TRUE, $1)
+"""
+
+_GET_SCHEMA_FORMAT_SQL = """
+SELECT format
+FROM dr_store.schema_format
 """
 
 _INSERT_OBJECT_SQL = """
@@ -154,6 +173,14 @@ def _validate_database(*, version_num: int, server_encoding: str) -> None:
         raise RuntimeError("PostgreSQL 16 through 18 is required")
     if server_encoding != "UTF8":
         raise RuntimeError("PostgreSQL server encoding must be UTF-8")
+
+
+def _validate_schema_format(formats: list[object]) -> None:
+    if formats != [_POSTGRES_SCHEMA_FORMAT]:
+        raise RuntimeError(
+            "PostgreSQL schema format marker is missing, malformed, or "
+            "unsupported"
+        )
 
 
 _NO_RESULT = object()
@@ -249,6 +276,10 @@ async def install_postgres(pool: asyncpg.Pool) -> None:
             server_encoding=requirements["server_encoding"],
         )
         await connection.execute(_INSTALL_SQL)
+        await connection.execute(
+            _INSERT_SCHEMA_FORMAT_SQL,
+            _POSTGRES_SCHEMA_FORMAT,
+        )
 
     await _run_pool_operation(pool, install, transactional=True)
 
@@ -256,10 +287,26 @@ async def install_postgres(pool: asyncpg.Pool) -> None:
 class PostgresBackend:
     """Shared PostgreSQL storage through a caller-owned asynchronous pool."""
 
+    _pool: asyncpg.Pool
+
     def __init__(self, pool: asyncpg.Pool) -> None:
+        del pool
+        raise TypeError("use 'await PostgresBackend.open(pool)'")
+
+    @classmethod
+    async def open(cls, pool: asyncpg.Pool) -> Self:
+        """Validate the installed schema format and use ``pool``."""
         if not isinstance(pool, asyncpg.Pool):
             raise TypeError("pool must be an asyncpg.Pool")
+
+        async def validate(connection: asyncpg.Connection) -> None:
+            rows = await connection.fetch(_GET_SCHEMA_FORMAT_SQL)
+            _validate_schema_format([row["format"] for row in rows])
+
+        await _run_pool_operation(pool, validate, transactional=False)
+        self = object.__new__(cls)
         self._pool = pool
+        return self
 
     async def _execute(
         self,

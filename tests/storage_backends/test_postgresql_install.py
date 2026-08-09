@@ -41,6 +41,10 @@ def test_installer_has_no_credential_bearing_api_or_state() -> None:
     assert "dsn" not in inspect.getsource(postgresql).casefold()
 
 
+def test_postgresql_schema_format_wire_literal_is_pinned() -> None:
+    assert postgresql._POSTGRES_SCHEMA_FORMAT == "dr-store-postgresql-v1"
+
+
 async def test_installs_absent_fixed_schema_transactionally(
     postgres_pool: asyncpg.Pool,
 ) -> None:
@@ -56,7 +60,13 @@ async def test_installs_absent_fixed_schema_transactionally(
             FROM information_schema.tables
             WHERE tables.table_schema = 'dr_store'
             """
-        ) == ["bindings", "objects"]
+        ) == ["bindings", "objects", "schema_format"]
+        format_rows = await connection.fetch(
+            "SELECT singleton, format FROM dr_store.schema_format"
+        )
+        assert [tuple(row.values()) for row in format_rows] == [
+            (True, "dr-store-postgresql-v1")
+        ]
 
 
 async def test_installation_rolls_back_every_object_on_ddl_failure(
@@ -158,7 +168,9 @@ async def test_catalog_pins_qualified_exact_text_and_hash_leading_keys(
             JOIN pg_catalog.pg_namespace AS collation_schema
                 ON collation_schema.oid = collation_record.collnamespace
             WHERE table_schema.nspname = 'dr_store'
-                AND table_record.relname IN ('objects', 'bindings')
+                AND table_record.relname IN (
+                    'objects', 'bindings', 'schema_format'
+                )
                 AND column_record.attnum > 0
                 AND NOT column_record.attisdropped
             ORDER BY table_record.relname, column_record.attnum
@@ -183,6 +195,13 @@ async def test_catalog_pins_qualified_exact_text_and_hash_leading_keys(
             ),
             ("objects", "schema", "text", "pg_catalog", "ucs_basic"),
             ("objects", "canonical", "text", "pg_catalog", "ucs_basic"),
+            (
+                "schema_format",
+                "format",
+                "text",
+                "pg_catalog",
+                "ucs_basic",
+            ),
         ]
 
         constraints = await connection.fetch(
@@ -211,6 +230,7 @@ async def test_catalog_pins_qualified_exact_text_and_hash_leading_keys(
         assert primary_keys == {
             "bindings": "PRIMARY KEY (key)",
             "objects": "PRIMARY KEY (content_hash, schema)",
+            "schema_format": "PRIMARY KEY (singleton)",
         }
 
 
