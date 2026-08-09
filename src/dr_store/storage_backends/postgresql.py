@@ -208,7 +208,19 @@ async def _settle_task[T](
                 if cancel_on_cancellation and not task.done():
                     task.cancel()
             if task.done():
-                return _Settled(cancellation=cancellation)
+                if task.cancelled():
+                    return _Settled(cancellation=cancellation)
+                try:
+                    result = task.result()
+                except BaseException as task_error:  # noqa: BLE001
+                    return _Settled(
+                        cancellation=cancellation,
+                        failure=task_error,
+                    )
+                return _Settled(
+                    result=result,
+                    cancellation=cancellation,
+                )
             continue
         except BaseException as error:  # noqa: BLE001 - task boundary.
             return _Settled(cancellation=cancellation, failure=error)

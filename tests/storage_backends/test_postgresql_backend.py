@@ -388,6 +388,37 @@ async def test_release_failure_is_cause_of_postgresql_cancellation(
         await pool.close()
 
 
+async def test_settlement_preserves_simultaneous_failure() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    failure = RuntimeError("inner task failed")
+
+    async def fail() -> None:
+        started.set()
+        await release.wait()
+        raise failure
+
+    inner = asyncio.create_task(fail())
+    waiter: asyncio.Task[postgresql._Settled[None]]
+
+    def cancel_waiter(_completed: asyncio.Task[None]) -> None:
+        waiter.cancel()
+
+    inner.add_done_callback(cancel_waiter)
+    waiter = asyncio.create_task(
+        postgresql._settle_task(
+            inner,
+            cancel_on_cancellation=False,
+        )
+    )
+    await started.wait()
+    release.set()
+
+    settled = await waiter
+    assert isinstance(settled.cancellation, asyncio.CancelledError)
+    assert settled.failure is failure
+
+
 async def test_batch_statements_scale_with_chunks_and_distinct_objects(
     postgres_backend: PostgresBackend,
     monkeypatch: pytest.MonkeyPatch,
