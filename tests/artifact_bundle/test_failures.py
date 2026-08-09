@@ -44,26 +44,97 @@ def test_existing_child_create_failure_poisons_publication(
     assert not (publication.path / "manifest.json").exists()
 
 
-def test_admitted_write_failure_poisons_publication(
+class _WriteFailureHandle:
+    def __init__(
+        self,
+        wrapped: BinaryIO,
+        write_failure: OSError,
+        *,
+        close_failure: OSError | None = None,
+    ) -> None:
+        self._wrapped = wrapped
+        self._write_failure = write_failure
+        self._close_failure = close_failure
+        self.close_attempts = 0
+
+    def write(self, _data: bytes | memoryview) -> int:
+        raise self._write_failure
+
+    def close(self) -> None:
+        self.close_attempts += 1
+        self._wrapped.close()
+        if self._close_failure is not None:
+            raise self._close_failure
+
+
+def test_admitted_write_failure_poisons_publication_and_closes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    original_open = publication_module._open_exclusive_binary
+    failure = OSError(errno.EIO, "write refused")
+    handles: list[_WriteFailureHandle] = []
+
+    def failing_open(path: Path) -> BinaryIO:
+        handle = _WriteFailureHandle(original_open(path), failure)
+        handles.append(handle)
+        return cast("BinaryIO", handle)
+
+    monkeypatch.setattr(
+        publication_module,
+        "_open_exclusive_binary",
+        failing_open,
+    )
     publication = _allocate(tmp_path)
     writer = publication.open_artifact("stdout.bin")
-    failure = OSError(errno.EIO, "write refused")
 
-    def fail_write(*_args: object) -> None:
-        raise failure
-
-    monkeypatch.setattr(publication_module, "_write_all", fail_write)
     with pytest.raises(ArtifactBundleError) as writer_error:
         writer.write(b"data")
     assert writer_error.value.__cause__ is failure
+    assert handles[0].close_attempts == 1
+    assert handles[0]._wrapped.closed is True
 
     with pytest.raises(BundlePublishError) as caught:
         publication.publish(None)
     assert caught.value.phase is BundlePublicationPhase.PRECONDITION
     assert caught.value.replacement_state is None
+    assert caught.value.__cause__ is writer_error.value
+
+
+def test_admitted_write_close_failure_preserves_write_cause(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_open = publication_module._open_exclusive_binary
+    write_failure = OSError(errno.EIO, "write refused")
+    close_failure = OSError(errno.EIO, "close refused")
+    handles: list[_WriteFailureHandle] = []
+
+    def failing_open(path: Path) -> BinaryIO:
+        handle = _WriteFailureHandle(
+            original_open(path),
+            write_failure,
+            close_failure=close_failure,
+        )
+        handles.append(handle)
+        return cast("BinaryIO", handle)
+
+    monkeypatch.setattr(
+        publication_module,
+        "_open_exclusive_binary",
+        failing_open,
+    )
+    publication = _allocate(tmp_path)
+    writer = publication.open_artifact("stdout.bin")
+
+    with pytest.raises(ArtifactBundleError) as writer_error:
+        writer.write(b"data")
+    assert writer_error.value.__cause__ is write_failure
+    assert handles[0].close_attempts == 1
+    assert handles[0]._wrapped.closed is True
+
+    with pytest.raises(BundlePublishError) as caught:
+        publication.publish(None)
     assert caught.value.__cause__ is writer_error.value
 
 

@@ -93,6 +93,8 @@ class BundleArtifactWriter:
         try:
             _write_all(self._handle, data)
         except (OSError, TypeError, ValueError) as exc:
+            with suppress(OSError, ValueError):
+                self._handle.close()
             error = ArtifactBundleError(
                 f"could not write bundle artifact {self._name!r}"
             )
