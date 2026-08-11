@@ -229,11 +229,25 @@ class ObjectStore:
         self, schema: str, record: Jsonable
     ) -> tuple[ObjectReference, PutStatus]: ...
     async def get(self, reference: ObjectReference) -> Jsonable: ...
+    async def get_many(
+        self, keys: Iterable[str], *, schema: str
+    ) -> dict[str, Jsonable | None]: ...
+    async def put_many(
+        self, entries: Mapping[str, tuple[str, Jsonable]]
+    ) -> dict[str, ObjectReference]: ...
     async def bind(
         self, key: str, reference: ObjectReference
     ) -> BindStatus: ...
     async def resolve(self, key: str) -> ObjectReference | None: ...
 ```
+
+`get_many` deduplicates requested keys and returns one verified record or
+unbound `None` for every distinct key. Wrong binding schemas, missing referenced
+objects, and unverifiable stored content raise typed errors rather than
+reporting cache-style misses. `put_many` validates, canonicalizes, and hashes
+every proposed entry before one backend write batch, then returns the first
+binding winner for each input key. A batch read claims no single snapshot
+across backend read chunks.
 
 ## Storage backends
 
@@ -621,7 +635,11 @@ Sidecar verification also refuses final-component symlinks for both the
 Document Directory and named child, requires a regular direct child, and reads
 from the descriptor it inspected. Failures raise `SidecarVerificationError`
 with `SidecarVerificationReason` (`MISSING`, `NOT_REGULAR`, `MISMATCH`,
-`BOUNDS_EXCEEDED`, or `UNSUPPORTED_PLATFORM`).
+`BOUNDS_EXCEEDED`, or `UNSUPPORTED_PLATFORM`). `read_verified_regular_child` is
+the shared storage-owned primitive for bounded descriptor-pinned reads that
+verify a caller-supplied byte length and SHA-256 digest and return the verified
+bytes. `DocumentDirectory.verify_sidecar` delegates to it without returning
+bytes.
 
 A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
 open and its accounting state advanced. The writer is unusable by contract and

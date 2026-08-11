@@ -268,6 +268,18 @@ categories = ["document artifacts"]
 is_a = ["hash"]
 
 [[terms]]
+name = "verified regular-child read"
+definition = """
+A bounded operation that opens one regular direct child through pinned \
+no-follow descriptors, verifies the caller-supplied byte length and SHA-256 \
+digest against the recovered bytes, and returns those verified bytes."""
+exported_symbols = [
+  "read_verified_regular_child",
+  "VerifiedRegularChildReadError",
+]
+categories = ["document artifacts"]
+
+[[terms]]
 name = "record cache"
 definition = """
 The asynchronous memoization facade that binds cache keys to object references \

@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Added `RecordCacheStats` and corruption logging on unverifiable cache reads.
 - Added `ContentMismatchReason` and `SidecarVerificationReason` for typed
   object and sidecar verification failures.
+- Added `read_verified_regular_child` and `VerifiedRegularChildReadError` as the
+  storage-owned bounded descriptor-pinned read-and-verify primitive for regular
+  direct children.
+- Added public `ObjectStore.get_many` and `ObjectStore.put_many` for
+  evidence-grade bulk reads and prepared bulk writes.
 
 ### Changed
 
@@ -34,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Typed `ContentHashMismatchError` with `ContentMismatchReason`; removed
   diagnostic sentinel strings from `actual`.
 - Typed `SidecarVerificationError` with `path` and `SidecarVerificationReason`.
+- `DocumentDirectory.verify_sidecar` now delegates to
+  `read_verified_regular_child` while preserving its verify-only surface.
+- `RecordCache.put_many` now calls public `ObjectStore.put_many` instead of
+  the former private write batch path.
 
 ### Removed
 

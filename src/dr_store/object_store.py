@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import enum
 import json
+from collections.abc import Iterable, Mapping  # noqa: TC003
 from typing import TYPE_CHECKING
 
 from dr_serialize import (
@@ -17,6 +18,7 @@ from dr_store.content_addressing import (
     _hash_canonical,
     _prepare_record,
     _validate_binding_key,
+    _validate_reference_schema,
 )
 from dr_store.core.errors import (
     BindingConflictError,
@@ -32,8 +34,6 @@ from dr_store.storage_backends.contract import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from dr_store.storage_backends.contract import Backend
 
 
@@ -143,6 +143,51 @@ class ObjectStore:
                 reason=ContentMismatchReason.NON_CANONICAL_FORM,
             )
         return record
+
+    async def get_many(
+        self,
+        keys: Iterable[str],
+        *,
+        schema: str,
+    ) -> dict[str, Jsonable | None]:
+        """Return one verified record or unbound ``None`` per distinct key.
+
+        Invalid requested schemas, schema mismatches, missing referenced
+        objects, and unverifiable stored content raise typed errors.
+        """
+        validated_schema = _validate_reference_schema(schema)
+        distinct = tuple(dict.fromkeys(keys))
+        rows = await self._get_bound_objects(distinct)
+        results: dict[str, Jsonable | None] = {}
+        for key in distinct:
+            row = rows.get(key)
+            if row is None:
+                results[key] = None
+                continue
+            reference = ObjectReference(
+                schema=row.binding_schema,
+                content_hash=row.binding_content_hash,
+            )
+            if reference.schema != validated_schema:
+                raise SchemaMismatchError(
+                    expected=validated_schema,
+                    actual=reference.schema,
+                )
+            if row.object_schema is None or row.canonical is None:
+                raise ObjectNotFoundError(reference=reference)
+            results[key] = self._verify_stored_record(
+                reference=reference,
+                stored_schema=row.object_schema,
+                canonical=row.canonical,
+            )
+        return results
+
+    async def put_many(
+        self,
+        entries: Mapping[str, tuple[str, Jsonable]],
+    ) -> dict[str, ObjectReference]:
+        """Store records and return the first binding winner for each key."""
+        return await self._put_bound_records(entries)
 
     async def _get_bound_objects(
         self,

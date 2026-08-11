@@ -11,6 +11,7 @@ FUNCTIONAL_MODULES = (
     "dr_store.core",
     "dr_store.core.errors",
     "dr_store.core.filesystem",
+    "dr_store.core.verified_read",
     "dr_store.document_file",
     "dr_store.document_file.errors",
     "dr_store.document_file.canonical_json",

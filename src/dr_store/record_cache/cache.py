@@ -160,7 +160,7 @@ class RecordCache:
         self,
         entries: Mapping[str, CacheEntry],
     ) -> dict[str, ObjectReference]:
-        return await self._store._put_bound_records(
+        return await self._store.put_many(
             {
                 key: (entry.schema, entry.record)
                 for key, entry in entries.items()

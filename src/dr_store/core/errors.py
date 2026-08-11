@@ -197,3 +197,7 @@ class SidecarVerificationError(DocumentDirectoryError):
         super().__init__(
             f"sidecar verification failed for {str(path)!r}: {reason.value!r}"
         )
+
+
+class VerifiedRegularChildReadError(Exception):
+    """Failed to read or verify one pinned regular direct child."""

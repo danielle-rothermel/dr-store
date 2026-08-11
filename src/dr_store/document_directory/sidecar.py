@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import errno
 import hashlib
-import os
-import stat
-from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -12,27 +9,12 @@ from dr_store.core.errors import (
     AllocationError,
     SidecarVerificationError,
     SidecarVerificationReason,
+    VerifiedRegularChildReadError,
 )
+from dr_store.core.verified_read import read_verified_regular_child
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-_READ_CHUNK_BYTES = 1 << 16
-_OPEN_SUPPORTS_DIR_FD = os.open in getattr(os, "supports_dir_fd", ())
-_REQUIRED_OPEN_FLAGS = (
-    "O_CLOEXEC",
-    "O_DIRECTORY",
-    "O_NOFOLLOW",
-    "O_NONBLOCK",
-)
-
-
-def _require_regular_file(metadata: os.stat_result, path: Path) -> None:
-    if not stat.S_ISREG(metadata.st_mode):
-        raise SidecarVerificationError(
-            path,
-            SidecarVerificationReason.NOT_REGULAR,
-        )
 
 
 def _validate_cap(cap: int | None, *, role: str) -> None:
@@ -185,66 +167,43 @@ def verify_sidecar(
                 SidecarVerificationReason.BOUNDS_EXCEEDED,
             )
 
-    missing_flags = [
-        flag
-        for flag in _REQUIRED_OPEN_FLAGS
-        if not isinstance(getattr(os, flag, None), int)
-    ]
-    if not _OPEN_SUPPORTS_DIR_FD or missing_flags:
-        raise SidecarVerificationError(
-            sidecar_path,
-            SidecarVerificationReason.UNSUPPORTED_PLATFORM,
-        )
-
-    directory_flags = (
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-    )
-    child_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     expected_length = expected_head_length + expected_tail_length
-    sidecar_hasher = hashlib.sha256()
-    actual_length = 0
-    directory_descriptor: int | None = None
-    child_descriptor: int | None = None
     try:
-        directory_descriptor = os.open(directory, directory_flags)
-    except (NotImplementedError, OSError) as exc:
-        raise SidecarVerificationError(
-            sidecar_path,
-            _open_failure_reason(exc, child_open=False),
-        ) from exc
-    try:
-        child_descriptor = os.open(
+        read_verified_regular_child(
+            directory,
             name,
-            child_flags,
-            dir_fd=directory_descriptor,
+            max_bytes=expected_length,
+            expected_byte_length=expected_length,
+            expected_sha256=expected_sidecar_hash,
         )
-        metadata = os.fstat(child_descriptor)
-        _require_regular_file(metadata, sidecar_path)
-        while chunk := os.read(child_descriptor, _READ_CHUNK_BYTES):
-            sidecar_hasher.update(chunk)
-            actual_length += len(chunk)
-    except SidecarVerificationError:
-        raise
-    except (NotImplementedError, OSError) as exc:
+    except VerifiedRegularChildReadError as exc:
+        if exc.__cause__ is not None:
+            raise SidecarVerificationError(
+                sidecar_path,
+                _open_failure_reason(exc.__cause__, child_open=True),
+            ) from exc.__cause__
+        message = str(exc)
+        if "length mismatch" in message or "hash mismatch" in message:
+            raise SidecarVerificationError(
+                sidecar_path,
+                SidecarVerificationReason.MISMATCH,
+            ) from exc
+        if "is not a regular file" in message:
+            raise SidecarVerificationError(
+                sidecar_path,
+                SidecarVerificationReason.NOT_REGULAR,
+            ) from exc
+        if "exceeds the" in message:
+            raise SidecarVerificationError(
+                sidecar_path,
+                SidecarVerificationReason.BOUNDS_EXCEEDED,
+            ) from exc
+        if message.startswith("descriptor-pinned no-follow child reads"):
+            raise SidecarVerificationError(
+                sidecar_path,
+                SidecarVerificationReason.UNSUPPORTED_PLATFORM,
+            ) from None
         raise SidecarVerificationError(
             sidecar_path,
-            _open_failure_reason(exc, child_open=True),
+            SidecarVerificationReason.MISMATCH,
         ) from exc
-    finally:
-        if child_descriptor is not None:
-            with suppress(OSError):
-                os.close(child_descriptor)
-        if directory_descriptor is not None:
-            with suppress(OSError):
-                os.close(directory_descriptor)
-    if actual_length != expected_length:
-        raise SidecarVerificationError(
-            sidecar_path,
-            SidecarVerificationReason.MISMATCH,
-        )
-    actual_sidecar_hash = sidecar_hasher.hexdigest()
-    if actual_sidecar_hash != expected_sidecar_hash:
-        raise SidecarVerificationError(
-            sidecar_path,
-            SidecarVerificationReason.MISMATCH,
-        )
