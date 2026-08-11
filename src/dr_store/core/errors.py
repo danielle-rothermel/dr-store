@@ -1,9 +1,34 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from dr_store.document_file.errors import (
+    PublicationStage,
+    ReadReason,
+    ReadStage,
+    ReplacementState,
+)
+
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from dr_store.content_addressing import ObjectReference
+
+
+class ContentMismatchReason(StrEnum):
+    HASH_MISMATCH = "hash_mismatch"
+    INVALID_JSON = "invalid_json"
+    NON_CANONICAL_PROFILE = "non_canonical_profile"
+    NON_CANONICAL_FORM = "non_canonical_form"
+
+
+class SidecarVerificationReason(StrEnum):
+    MISSING = "missing"
+    NOT_REGULAR = "not_regular"
+    MISMATCH = "mismatch"
+    BOUNDS_EXCEEDED = "bounds_exceeded"
+    UNSUPPORTED_PLATFORM = "unsupported_platform"
 
 
 class StoreError(Exception):
@@ -15,24 +40,34 @@ class ReferenceValidationError(StoreError):
 
 
 class ContentHashMismatchError(StoreError):
-    """Covers hash mismatches and stored content that cannot be hashed.
-
-    ``actual`` is the observed hash or a diagnostic sentinel.
-    """
+    """Covers hash mismatches and stored content that cannot be verified."""
 
     def __init__(
         self,
         *,
         expected: str,
-        actual: str,
         schema: str,
+        reason: ContentMismatchReason,
+        actual: str | None = None,
     ) -> None:
+        if reason is ContentMismatchReason.HASH_MISMATCH:
+            if actual is None:
+                raise ValueError("actual is required for HASH_MISMATCH")
+        elif actual is not None:
+            raise ValueError(
+                "actual must be None unless reason is HASH_MISMATCH"
+            )
         self.expected = expected
         self.actual = actual
         self.schema = schema
+        self.reason = reason
+        if reason is ContentMismatchReason.HASH_MISMATCH:
+            detail = f"observed {actual}"
+        else:
+            detail = reason.value
         super().__init__(
-            f"content hash mismatch for schema {schema!r}: "
-            f"expected {expected}, observed {actual}"
+            f"content verification failed for schema {schema!r}: "
+            f"expected {expected}, {detail}"
         )
 
 
@@ -108,12 +143,57 @@ class AllocationError(DocumentDirectoryError):
 
 
 class ManifestPublishError(DocumentDirectoryError):
-    pass
+    """A failed manifest publication with explicit phase and state."""
+
+    def __init__(
+        self,
+        path: Path,
+        stage: PublicationStage,
+        *,
+        replacement_state: ReplacementState,
+    ) -> None:
+        self.path = path
+        self.stage = stage
+        self.replacement_state = replacement_state
+        if replacement_state is ReplacementState.NOT_REPLACED:
+            state = "without replacing the target"
+        elif replacement_state is ReplacementState.REPLACED:
+            state = "after replacing the target"
+        else:
+            state = "with an unknown replacement outcome"
+        super().__init__(
+            f"could not publish manifest {str(path)!r} at "
+            f"{stage.value!r} {state}"
+        )
 
 
 class ManifestReadError(DocumentDirectoryError):
-    pass
+    """A failed bounded, strict, canonical manifest read."""
+
+    def __init__(
+        self,
+        path: Path,
+        stage: ReadStage,
+        *,
+        reason: ReadReason,
+    ) -> None:
+        self.path = path
+        self.stage = stage
+        self.reason = reason
+        super().__init__(
+            f"could not read manifest {str(path)!r} at "
+            f"{stage.value!r} with reason {reason.value!r}"
+        )
 
 
 class SidecarVerificationError(DocumentDirectoryError):
-    pass
+    def __init__(
+        self,
+        path: Path,
+        reason: SidecarVerificationReason,
+    ) -> None:
+        self.path = path
+        self.reason = reason
+        super().__init__(
+            f"sidecar verification failed for {str(path)!r}: {reason.value!r}"
+        )

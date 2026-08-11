@@ -501,7 +501,12 @@ treating either value as authoritative. `DocumentReadError` reports
 `ReadStage`, `ReadReason`, and the requested path. `MISSING` means the selected
 document is absent; every other reason means the document is present but
 invalid. Both errors derive from `DocumentFileError` and preserve the
-originating failure as their cause.
+originating failure as their cause. `ManifestPublishError` and
+`ManifestReadError` expose the same structured fields on the directory surface.
+
+Verified object reads raise `ContentHashMismatchError` with
+`ContentMismatchReason`. `actual` carries the observed hash only for
+`HASH_MISMATCH`; other reasons leave `actual` unset.
 
 Unverifiable stored cache values still report a miss, but increment
 `RecordCache.stats.corruption_count` and log the corrupted key.
@@ -614,7 +619,9 @@ its stored-byte accounting and sidecar hash, but it does not flush the
 Sidecar's directory entry or impose ordering on document publication.
 Sidecar verification also refuses final-component symlinks for both the
 Document Directory and named child, requires a regular direct child, and reads
-from the descriptor it inspected.
+from the descriptor it inspected. Failures raise `SidecarVerificationError`
+with `SidecarVerificationReason` (`MISSING`, `NOT_REGULAR`, `MISMATCH`,
+`BOUNDS_EXCEEDED`, or `UNSUPPORTED_PLATFORM`).
 
 A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
 open and its accounting state advanced. The writer is unusable by contract and

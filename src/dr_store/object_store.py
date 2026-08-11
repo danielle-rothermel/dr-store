@@ -21,6 +21,7 @@ from dr_store.content_addressing import (
 from dr_store.core.errors import (
     BindingConflictError,
     ContentHashMismatchError,
+    ContentMismatchReason,
     ObjectConflictError,
     ObjectNotFoundError,
     SchemaMismatchError,
@@ -115,16 +116,16 @@ class ObjectStore:
         except (ValueError, RecursionError, StrictJsonError) as exc:
             raise ContentHashMismatchError(
                 expected=reference.content_hash,
-                actual="<stored content is not valid strict JSON>",
                 schema=reference.schema,
+                reason=ContentMismatchReason.INVALID_JSON,
             ) from exc
         try:
             verified_canonical = canonical_json(record)
         except JsonEncodeError as exc:
             raise ContentHashMismatchError(
                 expected=reference.content_hash,
-                actual="<stored content is outside the canonical profile>",
                 schema=reference.schema,
+                reason=ContentMismatchReason.NON_CANONICAL_PROFILE,
             ) from exc
         actual_hash = _hash_canonical(verified_canonical)
         if actual_hash != reference.content_hash:
@@ -132,13 +133,14 @@ class ObjectStore:
                 expected=reference.content_hash,
                 actual=actual_hash,
                 schema=reference.schema,
+                reason=ContentMismatchReason.HASH_MISMATCH,
             )
         # Stored text must equal its canonical re-encoding.
         if verified_canonical != canonical:
             raise ContentHashMismatchError(
                 expected=reference.content_hash,
-                actual="<stored content is not in canonical form>",
                 schema=reference.schema,
+                reason=ContentMismatchReason.NON_CANONICAL_FORM,
             )
         return record
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import stat
@@ -7,7 +8,11 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from dr_store.core.errors import AllocationError, SidecarVerificationError
+from dr_store.core.errors import (
+    AllocationError,
+    SidecarVerificationError,
+    SidecarVerificationReason,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -25,7 +30,8 @@ _REQUIRED_OPEN_FLAGS = (
 def _require_regular_file(metadata: os.stat_result, path: Path) -> None:
     if not stat.S_ISREG(metadata.st_mode):
         raise SidecarVerificationError(
-            f"sidecar {str(path)!r} is not a regular file"
+            path,
+            SidecarVerificationReason.NOT_REGULAR,
         )
 
 
@@ -155,26 +161,26 @@ def verify_sidecar(
     There is no path fallback because a precheck followed by open would race
     name resolution.
     """
-    for role, length in (
+    sidecar_path = directory / name
+    for _role, length in (
         ("expected_head_length", expected_head_length),
         ("expected_tail_length", expected_tail_length),
     ):
         if length < 0:
             raise SidecarVerificationError(
-                f"{role} must be a non-negative byte count, got {length!r}"
+                sidecar_path,
+                SidecarVerificationReason.BOUNDS_EXCEEDED,
             )
 
-    sidecar_path = directory / name
     missing_flags = [
         flag
         for flag in _REQUIRED_OPEN_FLAGS
         if not isinstance(getattr(os, flag, None), int)
     ]
     if not _OPEN_SUPPORTS_DIR_FD or missing_flags:
-        detail = ", ".join(missing_flags) or "os.open(dir_fd=...)"
         raise SidecarVerificationError(
-            "descriptor-pinned no-follow Sidecar verification is unsupported: "
-            f"missing {detail}"
+            sidecar_path,
+            SidecarVerificationReason.UNSUPPORTED_PLATFORM,
         )
 
     directory_flags = (
@@ -201,8 +207,14 @@ def verify_sidecar(
     except SidecarVerificationError:
         raise
     except (NotImplementedError, OSError) as exc:
+        if isinstance(exc, OSError) and exc.errno == errno.ENOENT:
+            raise SidecarVerificationError(
+                sidecar_path,
+                SidecarVerificationReason.MISSING,
+            ) from exc
         raise SidecarVerificationError(
-            f"could not read sidecar {str(sidecar_path)!r}"
+            sidecar_path,
+            SidecarVerificationReason.MISMATCH,
         ) from exc
     finally:
         if child_descriptor is not None:
@@ -213,14 +225,12 @@ def verify_sidecar(
                 os.close(directory_descriptor)
     if actual_length != expected_length:
         raise SidecarVerificationError(
-            f"sidecar {str(sidecar_path)!r} length mismatch: expected "
-            f"{expected_length} bytes "
-            f"({expected_head_length} head + {expected_tail_length} tail), "
-            f"stored {actual_length}"
+            sidecar_path,
+            SidecarVerificationReason.MISMATCH,
         )
     actual_sidecar_hash = sidecar_hasher.hexdigest()
     if actual_sidecar_hash != expected_sidecar_hash:
         raise SidecarVerificationError(
-            f"sidecar {str(sidecar_path)!r} hash mismatch: expected "
-            f"{expected_sidecar_hash}, computed {actual_sidecar_hash}"
+            sidecar_path,
+            SidecarVerificationReason.MISMATCH,
         )

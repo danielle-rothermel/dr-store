@@ -9,7 +9,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from dr_store import DocumentDirectory, SidecarVerificationError
+from dr_store import (
+    DocumentDirectory,
+    SidecarVerificationError,
+    SidecarVerificationReason,
+)
 from dr_store.document_directory import sidecar as sidecar_module
 
 if TYPE_CHECKING:
@@ -50,13 +54,14 @@ def test_verify_sidecar_rejects_mutated_bytes(tmp_path: Path) -> None:
     directory = _allocate(tmp_path)
     (directory.path / SIDECAR_NAME).write_bytes(payload)
 
-    with pytest.raises(SidecarVerificationError):
+    with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             SIDECAR_NAME,
             expected_sidecar_hash=expected_sidecar_hash,
             expected_head_length=4,
             expected_tail_length=4,
         )
+    assert caught.value.reason is SidecarVerificationReason.MISMATCH
 
 
 @pytest.mark.parametrize(
@@ -73,39 +78,40 @@ def test_verify_sidecar_rejects_mismatched_length(
     directory = _allocate(tmp_path)
     (directory.path / SIDECAR_NAME).write_bytes(payload)
 
-    with pytest.raises(SidecarVerificationError):
+    with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             SIDECAR_NAME,
             expected_sidecar_hash=hashlib.sha256(b"headtail").hexdigest(),
             expected_head_length=expected_head_length,
             expected_tail_length=expected_tail_length,
         )
+    assert caught.value.reason is SidecarVerificationReason.MISMATCH
 
 
 @pytest.mark.parametrize(
-    ("expected_head_length", "expected_tail_length", "role"),
+    ("expected_head_length", "expected_tail_length"),
     [
-        pytest.param(-1, 2, "expected_head_length", id="negative-head"),
-        pytest.param(2, -1, "expected_tail_length", id="negative-tail"),
+        pytest.param(-1, 2, id="negative-head"),
+        pytest.param(2, -1, id="negative-tail"),
     ],
 )
 def test_verify_sidecar_rejects_negative_segment_length(
     tmp_path: Path,
     expected_head_length: int,
     expected_tail_length: int,
-    role: str,
 ) -> None:
     payload = b"x"
     directory = _allocate(tmp_path)
     (directory.path / SIDECAR_NAME).write_bytes(payload)
 
-    with pytest.raises(SidecarVerificationError, match=role):
+    with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             SIDECAR_NAME,
             expected_sidecar_hash=hashlib.sha256(payload).hexdigest(),
             expected_head_length=expected_head_length,
             expected_tail_length=expected_tail_length,
         )
+    assert caught.value.reason is SidecarVerificationReason.BOUNDS_EXCEEDED
 
 
 def test_verify_sidecar_missing_file_is_typed(tmp_path: Path) -> None:
@@ -117,6 +123,7 @@ def test_verify_sidecar_missing_file_is_typed(tmp_path: Path) -> None:
             expected_head_length=0,
             expected_tail_length=0,
         )
+    assert caught.value.reason is SidecarVerificationReason.MISSING
     assert isinstance(caught.value.__cause__, OSError)
 
 
@@ -145,13 +152,14 @@ def test_verify_sidecar_rejects_unsafe_and_reserved_names_before_open(
         pytest.fail("unsafe Sidecar name reached the filesystem open")
 
     monkeypatch.setattr(sidecar_module.os, "open", unexpected_open)
-    with pytest.raises(SidecarVerificationError):
+    with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             name,
             expected_sidecar_hash=hashlib.sha256(b"").hexdigest(),
             expected_head_length=0,
             expected_tail_length=0,
         )
+    assert caught.value.reason is SidecarVerificationReason.BOUNDS_EXCEEDED
 
 
 @pytest.mark.parametrize("target_location", ["outside", "inside"])
@@ -177,6 +185,7 @@ def test_verify_sidecar_rejects_final_component_symlinks(
             expected_head_length=len(payload),
             expected_tail_length=0,
         )
+    assert caught.value.reason is SidecarVerificationReason.MISMATCH
     assert isinstance(caught.value.__cause__, OSError)
 
 
@@ -198,6 +207,7 @@ def test_verify_sidecar_rejects_a_symlinked_directory_authority(
             expected_head_length=len(payload),
             expected_tail_length=0,
         )
+    assert caught.value.reason is SidecarVerificationReason.MISMATCH
     assert isinstance(caught.value.__cause__, OSError)
 
 
@@ -205,13 +215,14 @@ def test_verify_sidecar_rejects_a_directory(tmp_path: Path) -> None:
     directory = _allocate(tmp_path)
     (directory.path / SIDECAR_NAME).mkdir()
 
-    with pytest.raises(SidecarVerificationError):
+    with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             SIDECAR_NAME,
             expected_sidecar_hash=hashlib.sha256(b"").hexdigest(),
             expected_head_length=0,
             expected_tail_length=0,
         )
+    assert caught.value.reason is SidecarVerificationReason.NOT_REGULAR
 
 
 def test_verify_sidecar_rejects_a_fifo_without_blocking(
@@ -352,6 +363,7 @@ def test_verify_sidecar_unreadable_child_is_typed(
             expected_head_length=6,
             expected_tail_length=0,
         )
+    assert caught.value.reason is SidecarVerificationReason.MISMATCH
     assert isinstance(caught.value.__cause__, PermissionError)
 
 
@@ -370,4 +382,7 @@ def test_verify_sidecar_fails_closed_without_no_follow_support(
             expected_head_length=6,
             expected_tail_length=0,
         )
+    assert (
+        caught.value.reason is SidecarVerificationReason.UNSUPPORTED_PLATFORM
+    )
     assert caught.value.__cause__ is None

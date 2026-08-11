@@ -11,6 +11,7 @@ from dr_serialize import (
 
 from dr_store.core.errors import (
     ContentHashMismatchError,
+    ContentMismatchReason,
     ReferenceValidationError,
 )
 
@@ -105,4 +106,5 @@ class ObjectReference:
                 expected=self.content_hash,
                 actual=actual,
                 schema=self.schema,
+                reason=ContentMismatchReason.HASH_MISMATCH,
             )

@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Added typed `DocumentReadError` reporting with `ReadStage` and `ReadReason`.
 - Added `RecordCacheStats` and corruption logging on unverifiable cache reads.
+- Added `ContentMismatchReason` and `SidecarVerificationReason` for typed
+  object and sidecar verification failures.
 
 ### Changed
 
@@ -27,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Hard-cut document publication to visibility-only same-directory replacement
   without `F_FULLFSYNC`, `fsync`, or directory flush.
 - Removed `FLUSH_TEMP` and `FLUSH_DIRECTORY` from `PublicationStage`.
+- Flattened `ManifestPublishError` and `ManifestReadError` onto the same
+  structured fields as delegated document-file errors.
+- Typed `ContentHashMismatchError` with `ContentMismatchReason`; removed
+  diagnostic sentinel strings from `actual`.
+- Typed `SidecarVerificationError` with `path` and `SidecarVerificationReason`.
 
 ### Removed
 

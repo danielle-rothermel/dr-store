@@ -18,6 +18,7 @@ from dr_store.document_file import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReadReason,
     ReplacementState,
 )
 from dr_store.document_file import canonical_json as file_module
@@ -74,10 +75,11 @@ def test_publish_error_is_thin_contextual_translation(
     with pytest.raises(ManifestPublishError) as caught:
         directory.publish({"bad": float("inf")})
 
+    assert caught.value.path == directory.path / MANIFEST_NAME
+    assert caught.value.stage is PublicationStage.ENCODE
+    assert caught.value.replacement_state is ReplacementState.NOT_REPLACED
     document_error = caught.value.__cause__
     assert isinstance(document_error, DocumentPublishError)
-    assert document_error.stage is PublicationStage.ENCODE
-    assert document_error.replacement_state is ReplacementState.NOT_REPLACED
     assert document_error.__cause__ is not None
     assert directory.read_manifest() == FIRST
 
@@ -97,10 +99,10 @@ def test_pre_replace_failure_preserves_manifest_and_stage(
     with pytest.raises(ManifestPublishError) as caught:
         directory.publish(SECOND)
 
+    assert caught.value.stage is PublicationStage.WRITE_TEMP
+    assert caught.value.replacement_state is ReplacementState.NOT_REPLACED
     document_error = caught.value.__cause__
     assert isinstance(document_error, DocumentPublishError)
-    assert document_error.stage is PublicationStage.WRITE_TEMP
-    assert document_error.replacement_state is ReplacementState.NOT_REPLACED
     assert document_error.__cause__ is failure
     assert directory.read_manifest() == FIRST
 
@@ -138,10 +140,9 @@ def test_post_replace_failure_reports_visible_manifest_and_state(
     with pytest.raises(ManifestPublishError) as caught:
         directory.publish(SECOND)
 
-    document_error = caught.value.__cause__
-    assert isinstance(document_error, DocumentPublishError)
-    assert document_error.stage is PublicationStage.REPLACE_TARGET
-    assert document_error.replacement_state is ReplacementState.REPLACED
+    assert caught.value.stage is PublicationStage.REPLACE_TARGET
+    assert caught.value.replacement_state is ReplacementState.REPLACED
+    assert isinstance(caught.value.__cause__, DocumentPublishError)
     assert directory._manifest.path.read_bytes() == canonical_json_bytes(
         validate_strict_json(SECOND)
     )
@@ -168,9 +169,10 @@ def test_read_error_is_thin_contextual_translation(
     with pytest.raises(ManifestReadError) as caught:
         directory.read_manifest()
 
+    assert caught.value.path == directory.path / MANIFEST_NAME
+    assert caught.value.reason is ReadReason.MISMATCH
     document_error = caught.value.__cause__
     assert isinstance(document_error, DocumentReadError)
-    assert document_error.path == directory.path / MANIFEST_NAME
     assert document_error.__cause__ is not None
 
 
