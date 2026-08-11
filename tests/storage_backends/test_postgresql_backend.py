@@ -63,6 +63,16 @@ async def test_direct_construction_rejects_a_real_engine(
         PostgresBackend(postgres_engine)
 
 
+async def test_open_rejects_nonpositive_batch_chunk_size(
+    postgres_engine: AsyncEngine,
+) -> None:
+    await install_postgres(postgres_engine)
+    with pytest.raises(ValueError, match="batch_chunk_size must be positive"):
+        await PostgresBackend.open(postgres_engine, batch_chunk_size=0)
+    with pytest.raises(ValueError, match="batch_chunk_size must be positive"):
+        await PostgresBackend.open(postgres_engine, batch_chunk_size=-1)
+
+
 async def test_missing_namespace_fails_without_implicit_installation(
     postgres_engine: AsyncEngine,
 ) -> None:
@@ -265,14 +275,12 @@ async def _wait_until_insert_is_lock_blocked(
         while not await connection.scalar(
             text(
                 """
-                SELECT pg_catalog.bool_or(
-                    activity.wait_event_type = 'Lock'
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_locks AS locks
+                    WHERE locks.relation = 'dr_store.objects'::regclass
+                        AND NOT locks.granted
                 )
-                FROM pg_catalog.pg_stat_activity AS activity
-                WHERE activity.datname = pg_catalog.current_database()
-                    AND activity.query LIKE
-                        '%INSERT INTO dr_store.objects%'
-                    AND activity.pid <> pg_catalog.pg_backend_pid()
                 """
             )
         ):
@@ -287,25 +295,30 @@ async def test_cancelled_open_releases_connection_for_engine_reuse(
 ) -> None:
     await install_postgres(postgres_engine)
     gate = asyncio.Event()
+    gated_calls = 0
 
-    original_fetchrow = postgresql._fetchrow
+    original_fetch = postgresql._fetch
 
-    async def gated_fetchrow(
+    async def gated_fetch(
         connection: AsyncConnection,
         query: str,
         parameters: dict[str, object] | None = None,
-    ) -> object:
+    ) -> list[Mapping[str, object]]:
+        nonlocal gated_calls
         if "schema_format" in query:
-            await gate.wait()
-        return await original_fetchrow(connection, query, parameters)
+            gated_calls += 1
+            if gated_calls == 1:
+                await gate.wait()
+        return await original_fetch(connection, query, parameters)
 
-    monkeypatch.setattr(postgresql, "_fetchrow", gated_fetchrow)
+    monkeypatch.setattr(postgresql, "_fetch", gated_fetch)
     operation = asyncio.create_task(PostgresBackend.open(postgres_engine))
     await asyncio.sleep(0)
     operation.cancel()
     with pytest.raises(asyncio.CancelledError):
         await operation
 
+    assert gated_calls == 1
     backend = await PostgresBackend.open(postgres_engine)
     assert await backend.get_binding(key="missing") is None
 

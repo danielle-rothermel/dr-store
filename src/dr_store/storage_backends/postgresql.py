@@ -248,13 +248,15 @@ class PostgresBackend:
     ) -> Self:
         """Validate the installed schema format and use ``engine``.
 
-        ``batch_chunk_size`` bounds batch statement parameter count below
-        the PostgreSQL driver limit.
+        ``batch_chunk_size`` must be positive and bounds batch statement
+        parameter count below the PostgreSQL driver limit.
         """
         if not isinstance(engine, AsyncEngine):
             raise TypeError(
                 "engine must be a sqlalchemy.ext.asyncio.AsyncEngine"
             )
+        if batch_chunk_size <= 0:
+            raise ValueError("batch_chunk_size must be positive")
 
         async def validate(connection: AsyncConnection) -> None:
             rows = await _fetch(connection, _GET_SCHEMA_FORMAT_SQL)
