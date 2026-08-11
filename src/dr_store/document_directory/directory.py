@@ -15,6 +15,7 @@ from dr_store.core.errors import (
     ManifestPublishError,
     ManifestReadError,
     SidecarVerificationError,
+    SidecarVerificationReason,
 )
 from dr_store.core.filesystem import validate_safe_name
 from dr_store.document_directory.sidecar import (
@@ -116,16 +117,16 @@ class DocumentDirectory:
         """Replace the Manifest in the same directory with canonical JSON.
 
         Atomic visibility depends on filesystem same-directory replace
-        semantics.
-        A post-replace directory-flush failure raises even though the new
-        Manifest may be visible; no rollback occurs. Flush success does not
-        guarantee power-loss durability.
+        semantics. A post-replace directory-close failure raises even though
+        the new Manifest may be visible; no rollback occurs.
         """
         try:
             self._manifest.publish(manifest)
         except DocumentPublishError as exc:
             raise ManifestPublishError(
-                f"could not publish manifest {str(self._manifest.path)!r}"
+                exc.path,
+                exc.stage,
+                replacement_state=exc.replacement_state,
             ) from exc
 
     def open_sidecar(
@@ -148,6 +149,28 @@ class DocumentDirectory:
         *,
         error: type[DocumentDirectoryError],
     ) -> None:
+        sidecar_path = self._path / name
+        if error is SidecarVerificationError:
+            try:
+                validate_safe_name(
+                    name,
+                    role="sidecar name",
+                    error=AllocationError,
+                )
+            except AllocationError as exc:
+                raise SidecarVerificationError(
+                    sidecar_path,
+                    SidecarVerificationReason.BOUNDS_EXCEEDED,
+                ) from exc
+            if (
+                name.casefold() == self._manifest.path.name.casefold()
+                or _is_reserved_document_temp_name(name)
+            ):
+                raise SidecarVerificationError(
+                    sidecar_path,
+                    SidecarVerificationReason.BOUNDS_EXCEEDED,
+                )
+            return
         validate_safe_name(name, role="sidecar name", error=error)
         if (
             name.casefold() == self._manifest.path.name.casefold()
@@ -164,7 +187,9 @@ class DocumentDirectory:
             return self._manifest.read()
         except DocumentReadError as exc:
             raise ManifestReadError(
-                f"could not read manifest {str(self._manifest.path)!r}"
+                exc.path,
+                exc.stage,
+                reason=exc.reason,
             ) from exc
 
     def verify_sidecar(

@@ -9,6 +9,7 @@ from dr_serialize import StrictJsonError
 from dr_store import (
     CONTENT_HASH_LENGTH,
     ContentHashMismatchError,
+    ContentMismatchReason,
     ObjectReference,
     ReferenceValidationError,
     compute_content_hash,
@@ -107,5 +108,7 @@ def test_reference_is_frozen_and_hashable() -> None:
 def test_for_record_matches_verify_record() -> None:
     ref = ObjectReference.for_record("example.record", {"a": 1})
     ref.verify_record({"a": 1})
-    with pytest.raises(ContentHashMismatchError):
+    with pytest.raises(ContentHashMismatchError) as caught:
         ref.verify_record({"a": 2})
+    assert caught.value.reason is ContentMismatchReason.HASH_MISMATCH
+    assert caught.value.actual is not None

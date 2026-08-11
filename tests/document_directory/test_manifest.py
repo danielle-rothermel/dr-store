@@ -4,6 +4,10 @@ import errno
 from typing import TYPE_CHECKING
 
 import pytest
+from dr_serialize import canonical_json_bytes, validate_strict_json
+
+if TYPE_CHECKING:
+    import os
 
 from dr_store import (
     DocumentDirectory,
@@ -14,6 +18,7 @@ from dr_store.document_file import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReadReason,
     ReplacementState,
 )
 from dr_store.document_file import canonical_json as file_module
@@ -70,10 +75,11 @@ def test_publish_error_is_thin_contextual_translation(
     with pytest.raises(ManifestPublishError) as caught:
         directory.publish({"bad": float("inf")})
 
+    assert caught.value.path == directory.path / MANIFEST_NAME
+    assert caught.value.stage is PublicationStage.ENCODE
+    assert caught.value.replacement_state is ReplacementState.NOT_REPLACED
     document_error = caught.value.__cause__
     assert isinstance(document_error, DocumentPublishError)
-    assert document_error.stage is PublicationStage.ENCODE
-    assert document_error.replacement_state is ReplacementState.NOT_REPLACED
     assert document_error.__cause__ is not None
     assert directory.read_manifest() == FIRST
 
@@ -93,10 +99,10 @@ def test_pre_replace_failure_preserves_manifest_and_stage(
     with pytest.raises(ManifestPublishError) as caught:
         directory.publish(SECOND)
 
+    assert caught.value.stage is PublicationStage.WRITE_TEMP
+    assert caught.value.replacement_state is ReplacementState.NOT_REPLACED
     document_error = caught.value.__cause__
     assert isinstance(document_error, DocumentPublishError)
-    assert document_error.stage is PublicationStage.WRITE_TEMP
-    assert document_error.replacement_state is ReplacementState.NOT_REPLACED
     assert document_error.__cause__ is failure
     assert directory.read_manifest() == FIRST
 
@@ -107,29 +113,39 @@ def test_post_replace_failure_reports_visible_manifest_and_state(
 ) -> None:
     directory = _allocate(tmp_path)
     directory.publish(FIRST)
-    calls = 0
-    original_flush = file_module.flush_descriptor
+    original_open = file_module.os.open
+    directory_descriptors: set[int] = set()
 
-    def fail_directory_flush(descriptor: int) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OSError(errno.EIO, "directory flush failed")
-        original_flush(descriptor)
+    def recording_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        if dir_fd is None:
+            directory_descriptors.add(descriptor)
+        return descriptor
 
-    monkeypatch.setattr(
-        file_module,
-        "flush_descriptor",
-        fail_directory_flush,
-    )
+    original_close = file_module.os.close
+
+    def close_then_fail(descriptor: int) -> None:
+        original_close(descriptor)
+        if descriptor in directory_descriptors:
+            raise OSError(errno.EIO, "directory close failed")
+
+    monkeypatch.setattr(file_module.os, "open", recording_open)
+    monkeypatch.setattr(file_module.os, "close", close_then_fail)
     with pytest.raises(ManifestPublishError) as caught:
         directory.publish(SECOND)
 
-    document_error = caught.value.__cause__
-    assert isinstance(document_error, DocumentPublishError)
-    assert document_error.stage is PublicationStage.FLUSH_DIRECTORY
-    assert document_error.replacement_state is ReplacementState.REPLACED
-    assert directory.read_manifest() == SECOND
+    assert caught.value.stage is PublicationStage.REPLACE_TARGET
+    assert caught.value.replacement_state is ReplacementState.REPLACED
+    assert isinstance(caught.value.__cause__, DocumentPublishError)
+    assert directory._manifest.path.read_bytes() == canonical_json_bytes(
+        validate_strict_json(SECOND)
+    )
 
 
 @pytest.mark.parametrize(
@@ -153,9 +169,10 @@ def test_read_error_is_thin_contextual_translation(
     with pytest.raises(ManifestReadError) as caught:
         directory.read_manifest()
 
+    assert caught.value.path == directory.path / MANIFEST_NAME
+    assert caught.value.reason is ReadReason.MISMATCH
     document_error = caught.value.__cause__
     assert isinstance(document_error, DocumentReadError)
-    assert document_error.path == directory.path / MANIFEST_NAME
     assert document_error.__cause__ is not None
 
 

@@ -6,6 +6,8 @@ from dr_store.document_file.errors import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReadReason,
+    ReadStage,
     ReplacementState,
 )
 
@@ -15,5 +17,7 @@ __all__ = [
     "DocumentPublishError",
     "DocumentReadError",
     "PublicationStage",
+    "ReadReason",
+    "ReadStage",
     "ReplacementState",
 ]

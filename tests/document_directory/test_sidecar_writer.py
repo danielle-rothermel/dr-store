@@ -7,7 +7,6 @@ from typing import BinaryIO, cast
 import pytest
 
 from dr_store import AllocationError, DocumentDirectory, SidecarSummary
-from dr_store.document_directory import sidecar as sidecar_module
 
 MANIFEST_NAME = "record.json"
 MANIFEST_MAX_BYTES = 1 << 20
@@ -283,13 +282,47 @@ def test_a_failed_finalize_is_typed_and_closes_the_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     directory = _allocate(tmp_path)
+    original_open = Path.open
+
+    class _FailingSidecarHandle:
+        def __init__(self, wrapped: BinaryIO) -> None:
+            self._wrapped = wrapped
+            self.closed = False
+
+        def write(self, data: bytes | memoryview) -> int:
+            return self._wrapped.write(data)
+
+        def flush(self) -> None:
+            raise OSError("flush refused")
+
+        def close(self) -> None:
+            self.closed = True
+            self._wrapped.close()
+
+    def open_sidecar(  # noqa: PLR0913
+        self: Path,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> BinaryIO:
+        handle = original_open(
+            self,
+            mode,
+            buffering=buffering,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+        if "w" in mode:
+            wrapped = cast("BinaryIO", handle)
+            return cast("BinaryIO", _FailingSidecarHandle(wrapped))
+        return cast("BinaryIO", handle)
+
+    monkeypatch.setattr(Path, "open", open_sidecar)
     writer = directory.open_sidecar(SIDECAR_NAME)
     writer.write(b"streamed")
-
-    def failing_flush(_descriptor: int) -> None:
-        raise OSError("flush refused")
-
-    monkeypatch.setattr(sidecar_module, "flush_descriptor", failing_flush)
     with pytest.raises(AllocationError) as caught:
         writer.finalize()
     assert isinstance(caught.value.__cause__, OSError)

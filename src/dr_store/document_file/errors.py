@@ -15,9 +15,7 @@ class PublicationStage(StrEnum):
     ENCODE = "encode"
     CREATE_TEMP = "create_temp"
     WRITE_TEMP = "write_temp"
-    FLUSH_TEMP = "flush_temp"
     REPLACE_TARGET = "replace_target"
-    FLUSH_DIRECTORY = "flush_directory"
 
 
 @verify(UNIQUE)
@@ -31,6 +29,49 @@ class ReplacementState(StrEnum):
     NOT_REPLACED = "not_replaced"
     REPLACED = "replaced"
     UNKNOWN = "unknown"
+
+
+@verify(UNIQUE)
+class ReadStage(StrEnum):
+    """The phase in which a document read failed.
+
+    Members describe reporting phases. Read behavior must never be constructed
+    by iterating this enum.
+    """
+
+    OPEN_DIRECTORY = "open_directory"
+    OPEN_CHILD = "open_child"
+    READ_BYTES = "read_bytes"
+    DECODE = "decode"
+    VERIFY_CANONICALITY = "verify_canonicality"
+
+
+@verify(UNIQUE)
+class ReadReason(StrEnum):
+    """Why a document read did not recover one complete canonical document.
+
+    Members describe reporting outcomes. Read behavior must never be
+    constructed by iterating this enum.
+    """
+
+    MISSING = "missing"
+    NOT_REGULAR = "not_regular"
+    MISMATCH = "mismatch"
+    BOUNDS_EXCEEDED = "bounds_exceeded"
+
+
+@verify(UNIQUE)
+class ReadBoundsExceededMarker(StrEnum):
+    """Substrings that identify bound-limit failures in decode errors."""
+
+    MAX_BYTES = "max_bytes"
+    MAX_DEPTH = "max_depth"
+    NESTING_DEPTH = "nesting depth"
+    BYTE_BOUND = "byte bound"
+    DEPTH_BOUND = "depth bound"
+    EXCEEDS_CONFIGURED = "exceeds the configured"
+    LIMIT_IS = "limit is"
+    REACHES_DEPTH = "reaches depth"
 
 
 class DocumentFileError(Exception):
@@ -65,6 +106,17 @@ class DocumentPublishError(DocumentFileError):
 class DocumentReadError(DocumentFileError):
     """A failed bounded, strict, canonical document read."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        stage: ReadStage,
+        *,
+        reason: ReadReason,
+    ) -> None:
         self.path = path
-        super().__init__(f"could not read canonical document {str(path)!r}")
+        self.stage = stage
+        self.reason = reason
+        super().__init__(
+            f"could not read canonical document {str(path)!r} at "
+            f"{stage.value!r} with reason {reason.value!r}"
+        )

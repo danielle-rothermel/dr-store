@@ -13,6 +13,7 @@ from dr_serialize.canonical import (
 import dr_store.object_store as object_store_module
 from dr_store import (
     ContentHashMismatchError,
+    ContentMismatchReason,
     ObjectConflictError,
     ObjectNotFoundError,
     ObjectReference,
@@ -76,22 +77,28 @@ def _controlled_store(
 
 
 @pytest.mark.parametrize(
-    "canonical",
+    ("canonical", "reason"),
     [
-        '{"tampered":true}',
-        "not-json{{{",
-        '{"payload":NaN}',
-        '{"a": 1}',
+        ('{"tampered":true}', ContentMismatchReason.HASH_MISMATCH),
+        ("not-json{{{", ContentMismatchReason.INVALID_JSON),
+        ('{"payload":NaN}', ContentMismatchReason.INVALID_JSON),
+        ('{"a": 1}', ContentMismatchReason.NON_CANONICAL_FORM),
     ],
 )
 async def test_get_rejects_corrupt_or_noncanonical_storage(
     controlled_backend: ControlledBackend,
     canonical: str,
+    reason: ContentMismatchReason,
 ) -> None:
     reference = ObjectReference.for_record(SCHEMA, {"a": 1})
     store = _controlled_store(controlled_backend, reference, canonical)
-    with pytest.raises(ContentHashMismatchError):
+    with pytest.raises(ContentHashMismatchError) as caught:
         await store.get(reference)
+    assert caught.value.reason is reason
+    if reason is ContentMismatchReason.HASH_MISMATCH:
+        assert caught.value.actual is not None
+    else:
+        assert caught.value.actual is None
 
 
 @pytest.mark.parametrize(
@@ -112,6 +119,7 @@ async def test_get_translates_parser_failures(
     monkeypatch.setattr(object_store_module.json, "loads", fail_parse)
     with pytest.raises(ContentHashMismatchError) as caught:
         await store.get(reference)
+    assert caught.value.reason is ContentMismatchReason.INVALID_JSON
     assert caught.value.__cause__ is parse_error
 
 
@@ -125,6 +133,7 @@ async def test_get_translates_canonical_profile_failure(
     store = _controlled_store(controlled_backend, reference, canonical)
     with pytest.raises(ContentHashMismatchError) as caught:
         await store.get(reference)
+    assert caught.value.reason is ContentMismatchReason.NON_CANONICAL_PROFILE
     assert isinstance(caught.value.__cause__, JsonEncodeError)
 
 

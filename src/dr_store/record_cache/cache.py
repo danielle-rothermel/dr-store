@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import (  # noqa: TC003 - public hints resolve at runtime.
     Iterable,
     Mapping,
@@ -24,6 +25,8 @@ from dr_store.core.errors import (
 
 if TYPE_CHECKING:
     from dr_store.object_store import ObjectStore
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def derive_cache_key(namespace: str, payload: Jsonable) -> str:
@@ -50,11 +53,24 @@ class CacheEntry:
     record: Jsonable
 
 
+@dataclass(frozen=True, slots=True)
+class RecordCacheStats:
+    """Observed record-cache read outcomes."""
+
+    corruption_count: int
+
+
 class RecordCache:
     """Best-effort memoization facade over an :class:`ObjectStore`."""
 
     def __init__(self, store: ObjectStore) -> None:
         self._store = store
+        self._corruption_count = 0
+
+    @property
+    def stats(self) -> RecordCacheStats:
+        """Return observed corruption outcomes from best-effort reads."""
+        return RecordCacheStats(corruption_count=self._corruption_count)
 
     async def get(self, key: str, *, schema: str) -> CacheHit | None:
         """Return a hit or a miss for absent or unverifiable stored data.
@@ -110,6 +126,11 @@ class RecordCache:
                 ReferenceValidationError,
                 SchemaMismatchError,
             ):
+                self._corruption_count += 1
+                _LOGGER.warning(
+                    "record cache corruption for key %r",
+                    key,
+                )
                 results[key] = None
             else:
                 results[key] = CacheHit(record=record)

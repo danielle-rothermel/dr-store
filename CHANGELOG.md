@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Added typed `DocumentReadError` reporting with `ReadStage` and `ReadReason`.
+- Added `RecordCacheStats` and corruption logging on unverifiable cache reads.
+- Added `ContentMismatchReason` and `SidecarVerificationReason` for typed
+  object and sidecar verification failures.
+
 ### Changed
 
 - Hard-cut the PostgreSQL backend from `asyncpg` to SQLAlchemy async with
@@ -19,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Exposed `batch_chunk_size` on `PostgresBackend.open` and `busy_timeout_ms` on
   `SqliteBackend.open` and `SqliteRecordCache.open` as constructor knobs with
   documented defaults.
+- Hard-cut document publication to visibility-only same-directory replacement
+  without `F_FULLFSYNC`, `fsync`, or directory flush.
+- Removed `FLUSH_TEMP` and `FLUSH_DIRECTORY` from `PublicationStage`.
+- Flattened `ManifestPublishError` and `ManifestReadError` onto the same
+  structured fields as delegated document-file errors.
+- Typed `ContentHashMismatchError` with `ContentMismatchReason`; removed
+  diagnostic sentinel strings from `actual`.
+- Typed `SidecarVerificationError` with `path` and `SidecarVerificationReason`.
+
+### Removed
+
+- Removed the artifact-bundle public API and package.
+- Removed the unused `pydantic` runtime dependency left after the bundle cutover.
 
 ## [0.2.0] - 2026-08-08
 

@@ -29,17 +29,16 @@ document artifacts:
   requested schemas and operational backend faults raise. Entries are never
   rebound, so callers invalidate by selecting a new key; `derive_cache_key`
   provides a canonical scheme using a versioned namespace and payload.
+  Unverifiable stored values still report misses, but increment
+  `RecordCache.stats.corruption_count` and log the corrupted key.
   Single and bulk methods share these per-key semantics;
   `await SqliteRecordCache.open(path)` is the managed persistent lifecycle.
 - **[Canonical JSON document files](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)**
   publish and read one standalone, bounded canonical document in an existing
   directory through descriptor-pinned filesystem operations.
-- **[Artifact bundles](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/artifact_bundle)**
-  publish one terminal task, run, or result directory containing complete raw
-  artifacts and a closed canonical manifest with caller-owned metadata.
 - **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
-  delegates one bounded canonical Manifest to that file capability beside
-  streamed binary Sidecars.
+  groups one canonical JSON Manifest with streamed binary Sidecars for one task,
+  run, or result publication.
 
 ## Installation
 
@@ -179,69 +178,6 @@ metadata = CanonicalJsonFile(
 metadata.publish({"state": "complete"})
 assert metadata.read() == {"state": "complete"}
 ```
-
-`ArtifactBundlePublication` allocates one fresh terminal publication. Distinct
-artifact writers may run concurrently; the non-waiting `publish` call succeeds
-only after every admitted writer finalizes:
-
-```python
-from pathlib import Path
-
-from dr_store import (
-    ArtifactBundlePublication,
-    ArtifactBundleReader,
-    BundleReadLimits,
-    VerifyingArtifactReader,
-)
-
-root = Path("results")
-root.mkdir(exist_ok=True)
-bundle = ArtifactBundlePublication.allocate(root, prefix="task-42")
-
-stdout = bundle.open_artifact("stdout.bin")
-stdout.write(b"complete output\n")
-descriptor = stdout.finalize()
-
-bundle.publish(
-    {
-        "kind": "example.result.v1",
-        "stdout_sha256": descriptor.sha256,
-    }
-)
-assert (bundle.path / "manifest.json").is_file()
-
-reader = ArtifactBundleReader(
-    bundle.path,
-    limits=BundleReadLimits(
-        manifest_max_bytes=1 << 20,
-        manifest_max_depth=64,
-        max_artifacts=16,
-        max_bytes_per_artifact=1 << 30,
-        max_total_artifact_bytes=4 << 30,
-    ),
-)
-manifest = reader.audit()
-assert manifest.payload["kind"] == "example.result.v1"
-
-captured_stdout = bytearray()
-
-def consume_stdout(stream: VerifyingArtifactReader) -> None:
-    while chunk := stream.read(1 << 16):
-        captured_stdout.extend(chunk)
-
-
-verified = reader.consume_and_verify_artifact("stdout.bin", consume_stdout)
-assert verified.sha256 == descriptor.sha256
-assert captured_stdout == b"complete output\n"
-```
-
-The bundle API is synchronous. Async applications offload a complete writer or
-publication, audit, or verified-consumption operation rather than running its
-hashing and filesystem I/O on an event-loop thread. One bundle is a task, run,
-or result publication—not a per-event record or packed execution-record
-backend. Callers own partitioned allocation roots and retention; sustained
-creation near 100,000 bundles per hour is outside the directory format's
-intended envelope.
 
 Use the lower-level `await SqliteBackend.open(path)` when assembling an
 `ObjectStore` directly whose objects and bindings must persist across processes.
@@ -446,8 +382,14 @@ class CacheEntry:
     schema: str
     record: Jsonable
 
+@dataclass(frozen=True, slots=True)
+class RecordCacheStats:
+    corruption_count: int
+
 class RecordCache:
     def __init__(self, store: ObjectStore) -> None: ...
+    @property
+    def stats(self) -> RecordCacheStats: ...
     async def get(self, key: str, *, schema: str) -> CacheHit | None: ...
     async def get_many(
         self, keys: Iterable[str], *, schema: str
@@ -526,9 +468,22 @@ class PublicationStage(StrEnum):
     ENCODE = "encode"
     CREATE_TEMP = "create_temp"
     WRITE_TEMP = "write_temp"
-    FLUSH_TEMP = "flush_temp"
     REPLACE_TARGET = "replace_target"
-    FLUSH_DIRECTORY = "flush_directory"
+
+@verify(UNIQUE)
+class ReadStage(StrEnum):
+    OPEN_DIRECTORY = "open_directory"
+    OPEN_CHILD = "open_child"
+    READ_BYTES = "read_bytes"
+    DECODE = "decode"
+    VERIFY_CANONICALITY = "verify_canonicality"
+
+@verify(UNIQUE)
+class ReadReason(StrEnum):
+    MISSING = "missing"
+    NOT_REGULAR = "not_regular"
+    MISMATCH = "mismatch"
+    BOUNDS_EXCEEDED = "bounds_exceeded"
 
 @verify(UNIQUE)
 class ReplacementState(StrEnum):
@@ -542,9 +497,19 @@ class ReplacementState(StrEnum):
 authoritative. `REPLACED` means replacement returned before later finalization
 failed. `UNKNOWN` means the replacement operation itself failed and cannot
 prove whether the target changed, so callers must inspect or coordinate before
-treating either value as authoritative. `DocumentReadError` reports the
-requested path. Both errors derive from `DocumentFileError` and preserve the
-originating failure as their cause.
+treating either value as authoritative. `DocumentReadError` reports
+`ReadStage`, `ReadReason`, and the requested path. `MISSING` means the selected
+document is absent; every other reason means the document is present but
+invalid. Both errors derive from `DocumentFileError` and preserve the
+originating failure as their cause. `ManifestPublishError` and
+`ManifestReadError` expose the same structured fields on the directory surface.
+
+Verified object reads raise `ContentHashMismatchError` with
+`ContentMismatchReason`. `actual` carries the observed hash only for
+`HASH_MISMATCH`; other reasons leave `actual` unset.
+
+Unverifiable stored cache values still report a miss, but increment
+`RecordCache.stats.corruption_count` and log the corrupted key.
 
 ## Document Directory
 
@@ -609,112 +574,32 @@ class SidecarWriter:
     def finalize(self) -> SidecarSummary: ...
 ```
 
-## Artifact bundles
-
-An artifact bundle is separate from the mutable `DocumentDirectory` lifecycle.
-It uses strict frozen boundary models, complete raw-byte writers, and one
-terminal manifest transition:
-
-```python
-class ArtifactBundlePublication:
-    @classmethod
-    def allocate(
-        cls, root: str | Path, *, prefix: str
-    ) -> ArtifactBundlePublication: ...
-
-    @property
-    def path(self) -> Path: ...
-    def open_artifact(self, name: str) -> BundleArtifactWriter: ...
-    def publish(self, payload: Jsonable) -> None: ...
-
-class BundleArtifactWriter:
-    def write(self, data: bytes) -> None: ...
-    def finalize(self) -> ArtifactDescriptor: ...
-
-class ArtifactDescriptor(BaseModel):
-    name: str
-    sha256: str
-    byte_length: int
-
-class BundleManifest(BaseModel):
-    format: Literal["dr-store-artifact-bundle-v1"]
-    artifacts: tuple[ArtifactDescriptor, ...]
-    payload: Jsonable
-
-@dataclass(frozen=True, slots=True)
-class BundleReadLimits:
-    manifest_max_bytes: int
-    manifest_max_depth: int
-    max_artifacts: int
-    max_bytes_per_artifact: int
-    max_total_artifact_bytes: int
-
-class ArtifactBundleReader:
-    def __init__(
-        self, path: str | Path, *, limits: BundleReadLimits
-    ) -> None: ...
-    def audit(self) -> BundleManifest: ...
-    def consume_and_verify_artifact(
-        self,
-        name: str,
-        consumer: Callable[[VerifyingArtifactReader], None],
-    ) -> ArtifactDescriptor: ...
-
-class VerifyingArtifactReader:
-    def read(self, size: int = -1) -> bytes: ...
-```
-
-Artifact names are exact identities consisting of one non-empty relative path
-segment. `manifest.json`, dot segments, separators, and the
-`.dr-store-artifact-bundle-` temporary namespace are reserved. The format adds
-no case-folding or Unicode-normalization policy. A duplicate name rejected
-before admission does not poison the publication; a create, write, or finalize
-failure after admission does. Active writers and invalid payloads refuse
-publication without making it terminal. The first valid manifest attempt after
-all writers finalize makes it terminal whether replacement succeeds or fails.
-`audit()` validates the strict canonical manifest under all declared limits and
-streams every declared artifact before returning that `BundleManifest`.
-`consume_and_verify_artifact()` instead opens one selected artifact once and
-delivers it through the package-owned read-only facade. Success requires the
-callback to observe an actual empty operating-system read: `read(0)` and reading
-exactly the declared length without one later empty read do not prove EOF. The
-facade is invalid after the synchronous callback returns, and success returns
-the verified `ArtifactDescriptor`, not a path whose later contents are claimed
-to remain verified.
-
-`BundleReadError` covers manifest, filesystem, and consumer failures;
-`BundleIncompleteError` identifies a missing or invalid terminal manifest.
-`BundleVerificationError` exposes the selected or declared `artifact_name` and
-a `BundleVerificationReason` of `missing`, `not_regular`, `mismatch`,
-`bounds_exceeded`, or `incomplete_consumption`. Translated operating-system,
-decoding, model-validation, and consumer failures remain available as causes.
-
 ## Filesystem and failure semantics
 
 Canonical document publication creates a reserved unique temporary file with
-private permissions for each call, writes its complete canonical bytes, flushes
-and closes it, replaces the target in the same directory, and flushes and closes
-the directory. The case-insensitive `.dr-store-document-` prefix is reserved for
-these temporary files and cannot be used by document targets or Document
-Directory sidecars. Concurrent supported publishers use independent temporary
-files, and the last successful replacement is authoritative. Publication does
-not provide locks, compare-and-set, multi-file transactions, or ordering with
-Sidecar writes.
+private permissions for each call, writes its complete canonical bytes, closes
+it, replaces the target in the same directory, and closes the directory. The
+path performs no `F_FULLFSYNC`, `fsync`, or directory flush and defines no
+configurable durability mode. Successful publication is process-visible and
+atomic to readers, without promising survival across machine or power loss. The
+case-insensitive `.dr-store-document-` prefix is reserved for these temporary
+files and cannot be used by document targets or Document Directory sidecars.
+Concurrent supported publishers use independent temporary files, and the last
+successful replacement is authoritative. Publication does not provide locks,
+compare-and-set, multi-file transactions, or ordering with Sidecar writes.
 
 All-or-nothing visibility depends on the underlying filesystem honoring atomic
 same-directory replacement; network, synchronized, or other filesystems whose
 rename semantics are not established are outside current evidence. A final
-directory flush or close failure raises even though replacement may already be
-visible and does not roll the document back. Publication and allocation make no
-power-loss durability promise. Document Directory allocation uses a timestamp
-and UUID4, but a generated-name collision raises `AllocationError` rather than
-being retried, and allocation does not flush the caller-owned root directory.
+directory close failure raises even though replacement may already be visible
+and does not roll the document back. Document Directory allocation uses a
+timestamp and UUID4, but a generated-name collision raises `AllocationError`
+rather than being retried, and allocation does not flush the caller-owned root
+directory.
 
 Canonical files, Document Directories, and persistent SQLite storage capture a
 lexical absolute path at construction, so later working-directory changes do
-not redirect their operations. This does not freeze symlink targets. Directory
-durability is performed only where a pinned descriptor is already owned by the
-operation.
+not redirect their operations. This does not freeze symlink targets.
 
 Canonical document reads open the named directory and regular direct child with
 required no-follow, directory-relative flags, then stream from the child
@@ -729,31 +614,14 @@ Outside the reserved publication namespace, name validation prevents lexical
 traversal syntax. Sidecar creation and writes follow existing final-component
 symlinks and therefore require trusted, caller-controlled directory contents.
 Sidecar writer coordination remains the caller's concern. Sidecar finalization
-flushes the Sidecar descriptor before returning its stored-byte accounting and
-sidecar hash, but it does not flush the Sidecar's directory entry or impose
-ordering on document publication.
+flushes userspace buffers and closes the Sidecar descriptor before returning
+its stored-byte accounting and sidecar hash, but it does not flush the
+Sidecar's directory entry or impose ordering on document publication.
 Sidecar verification also refuses final-component symlinks for both the
 Document Directory and named child, requires a regular direct child, and reads
-from the descriptor it inspected.
-
-Artifact-bundle publication has a deliberately weaker visibility-only
-filesystem boundary. Writers flush userspace buffers and close their files;
-manifest publication writes and closes one same-directory temporary file and
-atomically replaces `manifest.json`. It performs no `F_FULLFSYNC`, `fsync`, or
-directory flush and exposes no durability mode. Success is process-visible and
-terminal through this API, not a claim of crash, machine, filesystem, or
-power-loss durability.
-
-Every artifact-bundle audit or verified-consumption operation opens the named
-bundle directory with required directory and no-follow behavior and holds that
-descriptor while validating the direct-child `manifest.json` and opening
-declared artifacts relative to it. Manifest reads are strict, canonical, and
-bounded. Artifact reads require inspected regular no-follow direct children and
-enforce count, per-artifact, and total byte bounds while streaming. Directory
-or child replacement after open cannot redirect those descriptor-owned reads,
-but the result is a point-in-time verification: it does not prevent later
-external mutation and does not claim containment for ancestor path resolution.
-Platforms without the required flags or `os.open(dir_fd=...)` fail closed.
+from the descriptor it inspected. Failures raise `SidecarVerificationError`
+with `SidecarVerificationReason` (`MISSING`, `NOT_REGULAR`, `MISMATCH`,
+`BOUNDS_EXCEEDED`, or `UNSUPPORTED_PLATFORM`).
 
 A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
 open and its accounting state advanced. The writer is unusable by contract and
