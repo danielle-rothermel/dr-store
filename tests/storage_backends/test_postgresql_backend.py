@@ -281,6 +281,35 @@ async def _wait_until_insert_is_lock_blocked(
     await asyncio.wait_for(observe(), WATCHDOG_SECONDS)
 
 
+async def test_cancelled_open_releases_connection_for_engine_reuse(
+    postgres_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await install_postgres(postgres_engine)
+    gate = asyncio.Event()
+
+    original_fetchrow = postgresql._fetchrow
+
+    async def gated_fetchrow(
+        connection: AsyncConnection,
+        query: str,
+        parameters: dict[str, object] | None = None,
+    ) -> object:
+        if "schema_format" in query:
+            await gate.wait()
+        return await original_fetchrow(connection, query, parameters)
+
+    monkeypatch.setattr(postgresql, "_fetchrow", gated_fetchrow)
+    operation = asyncio.create_task(PostgresBackend.open(postgres_engine))
+    await asyncio.sleep(0)
+    operation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+
+    backend = await PostgresBackend.open(postgres_engine)
+    assert await backend.get_binding(key="missing") is None
+
+
 async def test_cancelled_locked_write_releases_connection_for_engine_reuse(
     postgres_engine: AsyncEngine,
     postgres_backend: PostgresBackend,
