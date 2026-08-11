@@ -22,6 +22,7 @@ from dr_store.document_file.errors import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReadBoundsExceededMarker,
     ReadReason,
     ReadStage,
     ReplacementState,
@@ -194,19 +195,7 @@ def _read_reason_from_oserror(error: OSError) -> ReadReason:
 
 def _read_reason_from_decode(error: BaseException) -> ReadReason:
     message = str(error).casefold()
-    if any(
-        marker in message
-        for marker in (
-            "max_bytes",
-            "max_depth",
-            "nesting depth",
-            "byte bound",
-            "depth bound",
-            "exceeds the configured",
-            "limit is",
-            "reaches depth",
-        )
-    ):
+    if any(marker.value in message for marker in ReadBoundsExceededMarker):
         return ReadReason.BOUNDS_EXCEEDED
     if isinstance(error, ValueError) and "canonical" in message:
         return ReadReason.MISMATCH
