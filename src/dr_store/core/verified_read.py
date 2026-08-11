@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from dr_store.content_addressing import is_content_hash
 from dr_store.core.errors import VerifiedRegularChildReadError
+from dr_store.core.filesystem import validate_safe_name
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -147,6 +148,11 @@ def read_verified_regular_child(
         expected_sha256=expected_sha256,
     )
     child_path = directory / name
+    validate_safe_name(
+        name,
+        role="child name",
+        error=VerifiedRegularChildReadError,
+    )
     _require_descriptor_support()
     chunks, digest = _read_pinned_child(
         directory,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import enum
 import json
 from collections.abc import Iterable, Mapping  # noqa: TC003
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dr_serialize import (
@@ -45,6 +46,13 @@ class BindStatus(enum.Enum):
 class PutStatus(enum.Enum):
     STORED = "stored"
     IDEMPOTENT = "idempotent"
+
+
+@dataclass(frozen=True, slots=True)
+class StoreHit:
+    """One verified bound record, including a strict-JSON ``null`` record."""
+
+    record: Jsonable
 
 
 class ObjectStore:
@@ -149,8 +157,8 @@ class ObjectStore:
         keys: Iterable[str],
         *,
         schema: str,
-    ) -> dict[str, Jsonable | None]:
-        """Return one verified record or unbound ``None`` per distinct key.
+    ) -> dict[str, StoreHit | None]:
+        """Return one verified hit or unbound ``None`` per distinct key.
 
         Invalid requested schemas, schema mismatches, missing referenced
         objects, and unverifiable stored content raise typed errors.
@@ -158,7 +166,7 @@ class ObjectStore:
         validated_schema = _validate_reference_schema(schema)
         distinct = tuple(dict.fromkeys(keys))
         rows = await self._get_bound_objects(distinct)
-        results: dict[str, Jsonable | None] = {}
+        results: dict[str, StoreHit | None] = {}
         for key in distinct:
             row = rows.get(key)
             if row is None:
@@ -175,10 +183,12 @@ class ObjectStore:
                 )
             if row.object_schema is None or row.canonical is None:
                 raise ObjectNotFoundError(reference=reference)
-            results[key] = self._verify_stored_record(
-                reference=reference,
-                stored_schema=row.object_schema,
-                canonical=row.canonical,
+            results[key] = StoreHit(
+                record=self._verify_stored_record(
+                    reference=reference,
+                    stored_schema=row.object_schema,
+                    canonical=row.canonical,
+                )
             )
         return results
 

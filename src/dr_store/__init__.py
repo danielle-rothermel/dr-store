@@ -45,6 +45,7 @@ from dr_store.object_store import (
     BindStatus,
     ObjectStore,
     PutStatus,
+    StoreHit,
 )
 from dr_store.record_cache import (
     CacheEntry,
@@ -116,6 +117,7 @@ __all__ = [
     "SqliteRecordCacheCloseError",
     "SqliteRecordCacheClosedError",
     "StoreError",
+    "StoreHit",
     "VerifiedRegularChildReadError",
     "compute_content_hash",
     "derive_cache_key",

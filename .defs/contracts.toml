@@ -61,11 +61,12 @@ check = "uv run pytest -q tests/object_store/test_put_get.py"
 title = "Object store batch reads verify stored content"
 statement = """
 ``ObjectStore.get_many`` deduplicates its input keys and returns exactly one \
-verified record or unbound ``None`` for every distinct requested key. It \
-validates the requested schema before awaiting storage and verifies each \
-returned bound object once. An unbound key reports ``None``; a wrong binding \
-schema, missing referenced object row, and unverifiable stored object or \
-binding raise typed errors. ``ObjectStore.put_many`` validates, \
+verified hit or unbound ``None`` for every distinct requested key. A hit wraps \
+the record so a bound strict-JSON ``null`` value is distinct from an unbound \
+key. It validates the requested schema before awaiting storage and verifies \
+each returned bound object once. An unbound key reports ``None``; a wrong \
+binding schema, missing referenced object row, and unverifiable stored object \
+or binding raise typed errors. ``ObjectStore.put_many`` validates, \
 canonicalizes, and hashes every proposed entry before one backend write batch, \
 then returns the first binding winner for each input key. A batch read claims \
 no single snapshot across backend read chunks."""

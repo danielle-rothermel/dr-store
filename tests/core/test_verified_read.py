@@ -121,6 +121,19 @@ def test_read_verified_regular_child_fails_closed_without_no_follow_support(
     assert caught.value.__cause__ is None
 
 
+def test_read_verified_regular_child_rejects_unsafe_name(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(VerifiedRegularChildReadError):
+        read_verified_regular_child(
+            tmp_path,
+            "../outside.bin",
+            max_bytes=0,
+            expected_byte_length=0,
+            expected_sha256=hashlib.sha256(b"").hexdigest(),
+        )
+
+
 def test_read_verified_regular_child_detects_overflow_with_one_extra_byte(
     tmp_path: Path,
 ) -> None:

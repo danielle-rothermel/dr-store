@@ -11,6 +11,7 @@ from dr_store import (
     ObjectStore,
     RecordCache,
     SchemaMismatchError,
+    StoreHit,
     compute_content_hash,
 )
 
@@ -62,8 +63,18 @@ async def test_get_many_returns_verified_records_and_unbound_none(
         schema=SCHEMA,
     ) == {
         KEY_MISSING: None,
-        KEY_A: RECORD_A,
-        KEY_B: RECORD_B,
+        KEY_A: StoreHit(record=RECORD_A),
+        KEY_B: StoreHit(record=RECORD_B),
+    }
+
+
+async def test_get_many_distinguishes_unbound_from_null_record(
+    store: ObjectStore,
+) -> None:
+    await store.put_many({KEY_A: (SCHEMA, None)})
+    assert await store.get_many([KEY_A, KEY_MISSING], schema=SCHEMA) == {
+        KEY_A: StoreHit(record=None),
+        KEY_MISSING: None,
     }
 
 

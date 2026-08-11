@@ -231,7 +231,7 @@ class ObjectStore:
     async def get(self, reference: ObjectReference) -> Jsonable: ...
     async def get_many(
         self, keys: Iterable[str], *, schema: str
-    ) -> dict[str, Jsonable | None]: ...
+    ) -> dict[str, StoreHit | None]: ...
     async def put_many(
         self, entries: Mapping[str, tuple[str, Jsonable]]
     ) -> dict[str, ObjectReference]: ...
@@ -241,8 +241,9 @@ class ObjectStore:
     async def resolve(self, key: str) -> ObjectReference | None: ...
 ```
 
-`get_many` deduplicates requested keys and returns one verified record or
-unbound `None` for every distinct key. Wrong binding schemas, missing referenced
+`get_many` deduplicates requested keys and returns one verified hit or
+unbound `None` for every distinct key. A hit wraps the record so a bound
+strict-JSON `null` value is distinct from an unbound key. Wrong binding schemas, missing referenced
 objects, and unverifiable stored content raise typed errors rather than
 reporting cache-style misses. `put_many` validates, canonicalizes, and hashes
 every proposed entry before one backend write batch, then returns the first

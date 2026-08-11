@@ -10,7 +10,7 @@ def validate_safe_name(
     name: str,
     *,
     role: str,
-    error: type[DocumentDirectoryError] = AllocationError,
+    error: type[Exception] = AllocationError,
 ) -> None:
     """Require one path segment, preserving the caller's error taxonomy.
 

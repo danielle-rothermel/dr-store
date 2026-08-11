@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   storage-owned bounded descriptor-pinned read-and-verify primitive for regular
   direct children.
 - Added public `ObjectStore.get_many` and `ObjectStore.put_many` for
-  evidence-grade bulk reads and prepared bulk writes.
+  evidence-grade bulk reads and prepared bulk writes. Bulk hits use
+  `StoreHit` so bound strict-JSON `null` records are distinct from unbound
+  keys.
 
 ### Changed
 

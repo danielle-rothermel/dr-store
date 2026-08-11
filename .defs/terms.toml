@@ -109,7 +109,7 @@ definition = """
 The asynchronous append-only mapping from object references to immutable records \
 together with the single-assignment mapping from caller-owned keys to those \
 references."""
-exported_symbols = ["ObjectStore", "StoreError"]
+exported_symbols = ["ObjectStore", "StoreError", "StoreHit"]
 categories = ["object storage"]
 
 [[terms]]
