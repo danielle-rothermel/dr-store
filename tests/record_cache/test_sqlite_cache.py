@@ -38,6 +38,36 @@ async def test_open_rejects_transient_paths(path: str) -> None:
         await SqliteRecordCache.open(path)
 
 
+async def test_open_forwards_busy_timeout_ms_to_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dr_store.storage_backends import sqlite as sqlite_backend
+
+    observed: list[int] = []
+    original_open = sqlite_backend.SqliteBackend.open
+
+    async def capturing_open(
+        path: str | Path,
+        *,
+        busy_timeout_ms: int = 30_000,
+    ) -> sqlite_backend.SqliteBackend:
+        observed.append(busy_timeout_ms)
+        return await original_open(path, busy_timeout_ms=busy_timeout_ms)
+
+    monkeypatch.setattr(
+        sqlite_backend.SqliteBackend,
+        "open",
+        capturing_open,
+    )
+    cache = await SqliteRecordCache.open(
+        tmp_path / "cache.db",
+        busy_timeout_ms=7_500,
+    )
+    await cache.aclose()
+    assert observed == [7_500]
+
+
 async def test_records_persist_across_close_and_reopen(
     tmp_path: Path,
 ) -> None:

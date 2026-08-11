@@ -51,8 +51,22 @@ class SqliteRecordCache(RecordCache):
         raise TypeError("use 'await SqliteRecordCache.open(path)'")
 
     @classmethod
-    async def open(cls, path: str | Path) -> Self:
-        backend = await SqliteBackend.open(path)
+    async def open(
+        cls,
+        path: str | Path,
+        *,
+        busy_timeout_ms: int = 30_000,
+    ) -> Self:
+        """Open a persistent record cache on ``path``.
+
+        ``busy_timeout_ms`` is forwarded to the owned SQLite backend; when the
+        bound expires, SQLite raises ``OperationalError`` rather than retrying
+        indefinitely.
+        """
+        backend = await SqliteBackend.open(
+            path,
+            busy_timeout_ms=busy_timeout_ms,
+        )
         self = object.__new__(cls)
         RecordCache.__init__(self, ObjectStore(backend))
         self._sqlite_backend = backend
