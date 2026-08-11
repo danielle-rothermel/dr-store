@@ -185,7 +185,7 @@ def test_verify_sidecar_rejects_final_component_symlinks(
             expected_head_length=len(payload),
             expected_tail_length=0,
         )
-    assert caught.value.reason is SidecarVerificationReason.MISMATCH
+    assert caught.value.reason is SidecarVerificationReason.NOT_REGULAR
     assert isinstance(caught.value.__cause__, OSError)
 
 

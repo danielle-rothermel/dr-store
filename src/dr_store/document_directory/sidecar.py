@@ -148,6 +148,15 @@ class SidecarWriter:
         )
 
 
+def _open_failure_reason(exc: BaseException) -> SidecarVerificationReason:
+    if isinstance(exc, OSError):
+        if exc.errno == errno.ENOENT:
+            return SidecarVerificationReason.MISSING
+        if exc.errno == errno.ELOOP:
+            return SidecarVerificationReason.NOT_REGULAR
+    return SidecarVerificationReason.MISMATCH
+
+
 def verify_sidecar(
     directory: Path,
     name: str,
@@ -207,14 +216,9 @@ def verify_sidecar(
     except SidecarVerificationError:
         raise
     except (NotImplementedError, OSError) as exc:
-        if isinstance(exc, OSError) and exc.errno == errno.ENOENT:
-            raise SidecarVerificationError(
-                sidecar_path,
-                SidecarVerificationReason.MISSING,
-            ) from exc
         raise SidecarVerificationError(
             sidecar_path,
-            SidecarVerificationReason.MISMATCH,
+            _open_failure_reason(exc),
         ) from exc
     finally:
         if child_descriptor is not None:
