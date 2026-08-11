@@ -218,8 +218,10 @@ categories = ["document artifacts"]
 name = "document read failure"
 definition = """
 A failed attempt to recover one complete canonical document within its declared \
-bounds from the document selected at the start of the read."""
-exported_symbols = ["DocumentReadError"]
+bounds from the document selected at the start of the read. It reports the read \
+phase and whether the failure is missing, not regular, mismatched, or \
+bounds-exceeded."""
+exported_symbols = ["DocumentReadError", "ReadStage", "ReadReason"]
 categories = ["document artifacts"]
 
 [[terms]]
@@ -271,7 +273,7 @@ The asynchronous memoization facade that binds cache keys to object references \
 over an object store and returns a typed hit or miss for each exact requested \
 key. It adds no delete, expiry, eviction, size-cap, enumeration, prefix-query, \
 dirty-tracking, or scheduling path."""
-exported_symbols = ["RecordCache", "CacheHit"]
+exported_symbols = ["RecordCache", "RecordCacheStats", "CacheHit"]
 categories = ["record caching"]
 
 [[terms]]

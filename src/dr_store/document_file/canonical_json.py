@@ -23,6 +23,8 @@ from dr_store.document_file.errors import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReadReason,
+    ReadStage,
     ReplacementState,
 )
 
@@ -179,6 +181,51 @@ def _require_regular_file(metadata: os.stat_result) -> None:
         raise OSError(errno.EINVAL, "document is not a regular file")
 
 
+def _read_reason_from_oserror(error: OSError) -> ReadReason:
+    if error.errno == errno.ENOENT:
+        return ReadReason.MISSING
+    if error.errno in {errno.EINVAL, errno.EBADF, errno.ELOOP}:
+        message = str(error).casefold()
+        if "not a regular file" in message:
+            return ReadReason.NOT_REGULAR
+        if error.errno == errno.ELOOP:
+            return ReadReason.NOT_REGULAR
+    return ReadReason.MISMATCH
+
+
+def _read_reason_from_decode(error: BaseException) -> ReadReason:
+    message = str(error).casefold()
+    if any(
+        marker in message
+        for marker in (
+            "max_bytes",
+            "max_depth",
+            "nesting depth",
+            "byte bound",
+            "depth bound",
+            "exceeds the configured",
+            "limit is",
+            "reaches depth",
+        )
+    ):
+        return ReadReason.BOUNDS_EXCEEDED
+    if isinstance(error, ValueError) and "canonical" in message:
+        return ReadReason.MISMATCH
+    return ReadReason.MISMATCH
+
+
+def _raise_read_error(
+    path: Path,
+    stage: ReadStage,
+    error: BaseException,
+) -> None:
+    if isinstance(error, OSError):
+        reason = _read_reason_from_oserror(error)
+    else:
+        reason = _read_reason_from_decode(error)
+    raise DocumentReadError(path, stage, reason=reason) from error
+
+
 class CanonicalJsonFile:
     """One bounded Canonical JSON Text document in an existing directory."""
 
@@ -295,11 +342,18 @@ class CanonicalJsonFile:
         """Read through pinned descriptors and require canonical bytes."""
         try:
             raw = self._read_bytes()
+        except DocumentReadError:
+            raise
+        except (NotImplementedError, OSError, TypeError, ValueError) as exc:
+            _raise_read_error(self._path, ReadStage.OPEN_DIRECTORY, exc)
+        stage = ReadStage.DECODE
+        try:
             document = decode_strict_json_bytes(
                 raw,
                 max_bytes=self._max_bytes,
                 max_depth=self._max_depth,
             )
+            stage = ReadStage.VERIFY_CANONICALITY
             _require_canonical_storage(document, raw)
         except (
             NotImplementedError,
@@ -308,25 +362,32 @@ class CanonicalJsonFile:
             TypeError,
             ValueError,
         ) as exc:
-            raise DocumentReadError(self._path) from exc
+            _raise_read_error(self._path, stage, exc)
         return document
 
-    def _read_bytes(self) -> bytes:
-        _require_descriptor_support(publication=False)
+    def _read_bytes(self) -> bytes:  # noqa: PLR0915
+        stage = ReadStage.OPEN_DIRECTORY
+        try:
+            _require_descriptor_support(publication=False)
+        except (NotImplementedError, OSError) as exc:
+            _raise_read_error(self._path, stage, exc)
         directory_descriptor: int | None = None
         child_descriptor: int | None = None
-        failure: Exception | None = None
+        failure: BaseException | None = None
+        failure_stage = stage
         raw: bytes | None = None
         try:
             directory_descriptor = os.open(
                 self._directory,
                 _directory_flags(),
             )
+            stage = ReadStage.OPEN_CHILD
             child_descriptor = os.open(
                 self._name,
                 _read_flags(),
                 dir_fd=directory_descriptor,
             )
+            stage = ReadStage.READ_BYTES
             metadata = os.fstat(child_descriptor)
             _require_regular_file(metadata)
             chunks = bytearray()
@@ -340,6 +401,7 @@ class CanonicalJsonFile:
             raw = bytes(chunks)
         except (NotImplementedError, OSError, TypeError, ValueError) as exc:
             failure = exc
+            failure_stage = stage
         finally:
             if child_descriptor is not None:
                 descriptor_to_close = child_descriptor
@@ -349,6 +411,7 @@ class CanonicalJsonFile:
                 except OSError as exc:
                     if failure is None:
                         failure = exc
+                        failure_stage = stage
             if directory_descriptor is not None:
                 descriptor_to_close = directory_descriptor
                 directory_descriptor = None
@@ -357,7 +420,8 @@ class CanonicalJsonFile:
                 except OSError as exc:
                     if failure is None:
                         failure = exc
+                        failure_stage = stage
         if failure is not None:
-            raise failure
+            _raise_read_error(self._path, failure_stage, failure)
         assert raw is not None
         return raw

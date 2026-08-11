@@ -248,7 +248,9 @@ byte beyond the caller-supplied byte bound from the child descriptor it \
 inspected, and accepts only one complete UTF-8 strict JSON value within the \
 configured nesting-depth bound whose stored bytes exactly equal its canonical \
 JSON bytes. Every open, read, close, decoding, bounds, or canonicality failure \
-raises a typed document-read error, and unsupported platforms fail closed."""
+raises `DocumentReadError` with `ReadStage` and `ReadReason`. `MISSING` means \
+the selected document is absent; every other reason means the document is \
+present but invalid. Unsupported platforms fail closed."""
 rationale = """
 Pinned descriptors keep a concurrent replacement from changing the object \
 mid-read. Exact bounded read-back rejects symlinks, non-regular files, malformed \
@@ -318,7 +320,9 @@ validates the requested schema before awaiting storage and parses and verifies \
 each returned bound object once. An unbound key, missing content, schema \
 mismatch, and unverifiable stored object or binding all report a per-key miss; \
 invalid requested schemas, cancellation, and operational backend failures \
-propagate. An awaited cache batch put validates, canonicalizes, and hashes every \
+propagate. Unverifiable stored objects and bindings increment \
+`RecordCache.stats.corruption_count` and log the corrupted key without changing \
+miss semantics. An awaited cache batch put validates, canonicalizes, and hashes every \
 proposed entry before one backend write batch, then returns the first binding \
 winner for each input key. Invalidation selects a new caller-owned key rather \
 than deleting or expiring an entry, and a batch read claims no single snapshot \

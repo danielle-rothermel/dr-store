@@ -163,10 +163,11 @@ def test_record_cache_public_surface_is_exact() -> None:
     from dr_store import RecordCache
 
     public = {name for name in dir(RecordCache) if not name.startswith("_")}
-    assert public == {"get", "get_many", "put", "put_many"}
+    assert public == {"get", "get_many", "put", "put_many", "stats"}
     assert all(
         inspect.iscoroutinefunction(getattr(RecordCache, name))
         for name in public
+        if name != "stats"
     )
 
 
@@ -204,11 +205,13 @@ def test_sqlite_record_cache_public_surface_is_exact() -> None:
         "open",
         "put",
         "put_many",
+        "stats",
     }
     assert public == expected
     assert all(
         inspect.iscoroutinefunction(getattr(SqliteRecordCache, name))
         for name in expected
+        if name != "stats"
     )
 
 

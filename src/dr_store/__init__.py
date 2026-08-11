@@ -50,6 +50,8 @@ from dr_store.document_file import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReadReason,
+    ReadStage,
     ReplacementState,
 )
 from dr_store.object_store import (
@@ -61,6 +63,7 @@ from dr_store.record_cache import (
     CacheEntry,
     CacheHit,
     RecordCache,
+    RecordCacheStats,
     SqliteRecordCache,
     derive_cache_key,
 )
@@ -123,7 +126,10 @@ __all__ = [
     "PublicationStage",
     "PutOutcome",
     "PutStatus",
+    "ReadReason",
+    "ReadStage",
     "RecordCache",
+    "RecordCacheStats",
     "ReferenceValidationError",
     "ReplacementState",
     "SchemaMismatchError",

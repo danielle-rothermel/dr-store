@@ -87,6 +87,7 @@ async def test_batch_reports_distinct_hits_misses_and_corruption(
         "null": CacheHit(record=None),
         "corrupt": None,
     }
+    assert cache.stats.corruption_count == 1
 
 
 async def test_missing_object_is_a_miss(
@@ -120,6 +121,7 @@ class CorruptBindingBackend(MemoryBackend):
 async def test_controlled_corrupt_binding_is_a_cache_miss() -> None:
     cache = RecordCache(ObjectStore(CorruptBindingBackend()))
     assert await cache.get("bad-binding", schema=SCHEMA) is None
+    assert cache.stats.corruption_count == 1
 
 
 class BackendReadError(StoreError):

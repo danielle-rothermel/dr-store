@@ -10,6 +10,7 @@ from dr_store.document_file import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
+    ReadStage,
     ReplacementState,
 )
 from dr_store.document_file import canonical_json as file_module
@@ -234,6 +235,7 @@ def test_read_fails_closed_without_descriptor_support(
         document_file.read()
 
     assert caught.value.path == document_file.path
+    assert caught.value.stage is ReadStage.OPEN_DIRECTORY
     assert isinstance(caught.value.__cause__, OSError)
 
 
@@ -273,6 +275,7 @@ def test_read_close_failure_is_typed(
         document_file.read()
 
     assert caught.value.path == document_file.path
+    assert caught.value.stage is ReadStage.READ_BYTES
     assert isinstance(caught.value.__cause__, OSError)
 
 
@@ -294,6 +297,7 @@ def test_read_cleanup_failure_does_not_mask_primary_failure(
         document_file.read()
 
     assert caught.value.__cause__ is primary
+    assert caught.value.stage is ReadStage.READ_BYTES
 
 
 def test_cleanup_failure_does_not_mask_primary_failure(
