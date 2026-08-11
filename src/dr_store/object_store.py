@@ -100,13 +100,13 @@ class ObjectStore:
         if stored is None:
             raise ObjectNotFoundError(reference=reference)
         stored_schema, canonical = stored
-        return self._verify_stored_record(
+        return self.verify_stored_record(
             reference=reference,
             stored_schema=stored_schema,
             canonical=canonical,
         )
 
-    def _verify_stored_record(
+    def verify_stored_record(
         self,
         *,
         reference: ObjectReference,
@@ -165,7 +165,7 @@ class ObjectStore:
         """
         validated_schema = _validate_reference_schema(schema)
         distinct = tuple(dict.fromkeys(keys))
-        rows = await self._get_bound_objects(distinct)
+        rows = await self.get_bound_rows(distinct)
         results: dict[str, StoreHit | None] = {}
         for key in distinct:
             row = rows.get(key)
@@ -184,7 +184,7 @@ class ObjectStore:
             if row.object_schema is None or row.canonical is None:
                 raise ObjectNotFoundError(reference=reference)
             results[key] = StoreHit(
-                record=self._verify_stored_record(
+                record=self.verify_stored_record(
                     reference=reference,
                     stored_schema=row.object_schema,
                     canonical=row.canonical,
@@ -199,13 +199,15 @@ class ObjectStore:
         """Store records and return the first binding winner for each key."""
         return await self._put_bound_records(entries)
 
-    async def _get_bound_objects(
+    async def get_bound_rows(
         self,
-        keys: tuple[str, ...],
+        keys: Iterable[str],
     ) -> Mapping[str, BoundObjectRow]:
-        for key in keys:
+        """Return joined binding/object rows without verification."""
+        distinct = tuple(dict.fromkeys(keys))
+        for key in distinct:
             _validate_binding_key(key)
-        return await self._backend.get_bound_objects(keys=keys)
+        return await self._backend.get_bound_objects(keys=distinct)
 
     async def _put_bound_records(
         self,

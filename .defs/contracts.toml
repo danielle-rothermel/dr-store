@@ -64,7 +64,9 @@ statement = """
 verified hit or unbound ``None`` for every distinct requested key. A hit wraps \
 the record so a bound strict-JSON ``null`` value is distinct from an unbound \
 key. It validates the requested schema before awaiting storage and verifies \
-each returned bound object once. An unbound key reports ``None``; a wrong \
+each returned bound object once. ``ObjectStore.get_bound_rows`` performs the \
+joined fetch only; verification is separate through ``verify_stored_record`` \
+or evidence-grade ``get_many``. An unbound key reports ``None``; a wrong \
 binding schema, missing referenced object row, and unverifiable stored object \
 or binding raise typed errors. ``ObjectStore.put_many`` validates, \
 canonicalizes, and hashes every proposed entry before one backend write batch, \

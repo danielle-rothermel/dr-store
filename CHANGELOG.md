@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   evidence-grade bulk reads and prepared bulk writes. Bulk hits use
   `StoreHit` so bound strict-JSON `null` records are distinct from unbound
   keys.
+- Added public `ObjectStore.get_bound_rows` and `ObjectStore.verify_stored_record`
+  so callers can join binding/object rows and verify stored content through
+  separate steps.
 
 ### Changed
 
@@ -45,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `read_verified_regular_child` while preserving its verify-only surface.
 - `RecordCache.put_many` now calls public `ObjectStore.put_many` instead of
   the former private write batch path.
+- `read_verified_regular_child` now composes private bounded descriptor
+  read/verify helpers internally.
+- `RecordCache` batch misses now call public `ObjectStore.get_bound_rows` and
+  `ObjectStore.verify_stored_record` instead of private Object Store helpers.
+- `ObjectStore.get_many` now composes `get_bound_rows` and
+  `verify_stored_record` internally.
 
 ### Removed
 

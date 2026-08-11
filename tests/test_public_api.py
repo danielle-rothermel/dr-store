@@ -54,7 +54,16 @@ def test_object_store_public_surface_is_exact() -> None:
     from dr_store import ObjectStore
 
     public = {name for name in dir(ObjectStore) if not name.startswith("_")}
-    assert public == {"bind", "get", "get_many", "put", "put_many", "resolve"}
+    assert public == {
+        "bind",
+        "get",
+        "get_bound_rows",
+        "get_many",
+        "put",
+        "put_many",
+        "resolve",
+        "verify_stored_record",
+    }
 
 
 def test_backend_public_surfaces_are_exact() -> None:

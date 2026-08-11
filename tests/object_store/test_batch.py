@@ -113,6 +113,27 @@ async def test_get_many_raises_when_referenced_object_is_missing(
         await store.get_many([KEY_A], schema=SCHEMA)
 
 
+async def test_get_bound_rows_returns_unverified_rows(
+    controlled_backend: ControlledBackend,
+) -> None:
+    store = ObjectStore(controlled_backend)
+    reference, _ = await store.put(SCHEMA, RECORD_A)
+    await store.bind(KEY_A, reference)
+    controlled_backend.object_rows[
+        (reference.schema, reference.content_hash)
+    ] = "not valid json"
+    rows = await store.get_bound_rows([KEY_A])
+    row = rows[KEY_A]
+    assert row.object_schema is not None
+    assert row.canonical is not None
+    with pytest.raises(ContentHashMismatchError):
+        store.verify_stored_record(
+            reference=reference,
+            stored_schema=row.object_schema,
+            canonical=row.canonical,
+        )
+
+
 async def test_record_cache_still_reports_corruption_as_miss(
     controlled_backend: ControlledBackend,
 ) -> None:

@@ -229,21 +229,34 @@ class ObjectStore:
         self, schema: str, record: Jsonable
     ) -> tuple[ObjectReference, PutStatus]: ...
     async def get(self, reference: ObjectReference) -> Jsonable: ...
+    async def get_bound_rows(
+        self, keys: Iterable[str]
+    ) -> Mapping[str, BoundObjectRow]: ...
     async def get_many(
         self, keys: Iterable[str], *, schema: str
     ) -> dict[str, StoreHit | None]: ...
     async def put_many(
         self, entries: Mapping[str, tuple[str, Jsonable]]
     ) -> dict[str, ObjectReference]: ...
+    def verify_stored_record(
+        self,
+        *,
+        reference: ObjectReference,
+        stored_schema: str,
+        canonical: str,
+    ) -> Jsonable: ...
     async def bind(
         self, key: str, reference: ObjectReference
     ) -> BindStatus: ...
     async def resolve(self, key: str) -> ObjectReference | None: ...
 ```
 
-`get_many` deduplicates requested keys and returns one verified hit or
-unbound `None` for every distinct key. A hit wraps the record so a bound
-strict-JSON `null` value is distinct from an unbound key. Wrong binding schemas, missing referenced
+`get_bound_rows` deduplicates requested keys and returns joined binding/object
+rows without verification. `verify_stored_record` applies the same checks as
+`get` to one stored row. `get_many` composes those steps for evidence-grade
+bulk reads: deduplicated keys, one verified hit or unbound `None` for every
+distinct key. A hit wraps the record so a bound strict-JSON `null` value is
+distinct from an unbound key. Wrong binding schemas, missing referenced
 objects, and unverifiable stored content raise typed errors rather than
 reporting cache-style misses. `put_many` validates, canonicalizes, and hashes
 every proposed entry before one backend write batch, then returns the first
