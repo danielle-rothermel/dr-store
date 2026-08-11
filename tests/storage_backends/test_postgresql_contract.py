@@ -8,13 +8,13 @@ from dr_store import PostgresBackend, install_postgres
 from tests.storage_backends import test_contract as contract_tests
 
 if TYPE_CHECKING:
-    import asyncpg
+    from sqlalchemy.ext.asyncio import AsyncEngine
 
 
 @pytest.fixture
-async def backend(postgres_pool: asyncpg.Pool) -> PostgresBackend:
-    await install_postgres(postgres_pool)
-    return await PostgresBackend.open(postgres_pool)
+async def backend(postgres_engine: AsyncEngine) -> PostgresBackend:
+    await install_postgres(postgres_engine)
+    return await PostgresBackend.open(postgres_engine)
 
 
 test_put_absent_replay_and_competing_value = (

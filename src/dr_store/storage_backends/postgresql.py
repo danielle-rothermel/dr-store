@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Self, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 
-import asyncpg
+from sqlalchemy import text
+from sqlalchemy.engine import Connection  # noqa: TC002
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from dr_store.content_addressing import (
     _validate_binding_key,
@@ -18,18 +18,24 @@ from dr_store.storage_backends.contract import (
     BoundObjectWrite,
     PutOutcome,
 )
+from dr_store.storage_backends.postgresql_schema import (
+    POSTGRES_METADATA,
+    POSTGRES_SCHEMA_FORMAT,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterator
+    from collections.abc import Awaitable, Callable, Iterator, Mapping
 
-__all__ = ["PostgresBackend", "install_postgres"]
+__all__ = [
+    "POSTGRES_METADATA",
+    "POSTGRES_SCHEMA_FORMAT",
+    "PostgresBackend",
+    "install_postgres",
+]
 
 _MINIMUM_POSTGRES_MAJOR = 16
 _MAXIMUM_POSTGRES_MAJOR = 18
-_BATCH_CHUNK_SIZE = 512
-
-# Persisted schema-format contract. A changed literal is a new format.
-_POSTGRES_SCHEMA_FORMAT: Final = "dr-store-postgresql-v1"
+_DEFAULT_BATCH_CHUNK_SIZE = 512
 
 _DATABASE_REQUIREMENTS_SQL = """
 SELECT
@@ -38,48 +44,11 @@ SELECT
     pg_catalog.current_setting('server_encoding') AS server_encoding
 """
 
-_INSTALL_SQL = """
-CREATE SCHEMA dr_store;
-
-CREATE TABLE dr_store.schema_format (
-    singleton pg_catalog.bool PRIMARY KEY,
-    format pg_catalog.text COLLATE pg_catalog.ucs_basic NOT NULL,
-    CONSTRAINT schema_format_singleton CHECK (singleton)
-);
-
-CREATE TABLE dr_store.objects (
-    content_hash pg_catalog.text COLLATE pg_catalog.ucs_basic NOT NULL,
-    schema pg_catalog.text COLLATE pg_catalog.ucs_basic NOT NULL,
-    canonical pg_catalog.text COLLATE pg_catalog.ucs_basic NOT NULL,
-    CONSTRAINT objects_content_hash_lowercase_hex CHECK (
-        pg_catalog.octet_length(content_hash) = 64
-        AND pg_catalog.translate(
-            content_hash,
-            '0123456789abcdef',
-            ''
-        ) = ''
-    ),
-    PRIMARY KEY (content_hash, schema)
-);
-
-CREATE TABLE dr_store.bindings (
-    key pg_catalog.text COLLATE pg_catalog.ucs_basic PRIMARY KEY,
-    schema pg_catalog.text COLLATE pg_catalog.ucs_basic NOT NULL,
-    content_hash pg_catalog.text COLLATE pg_catalog.ucs_basic NOT NULL,
-    CONSTRAINT bindings_content_hash_lowercase_hex CHECK (
-        pg_catalog.octet_length(content_hash) = 64
-        AND pg_catalog.translate(
-            content_hash,
-            '0123456789abcdef',
-            ''
-        ) = ''
-    )
-);
-"""
+_CREATE_SCHEMA_SQL = "CREATE SCHEMA dr_store"
 
 _INSERT_SCHEMA_FORMAT_SQL = """
 INSERT INTO dr_store.schema_format (singleton, format)
-VALUES (TRUE, $1)
+VALUES (TRUE, :format)
 """
 
 _GET_SCHEMA_FORMAT_SQL = """
@@ -89,7 +58,7 @@ FROM dr_store.schema_format
 
 _INSERT_OBJECT_SQL = """
 INSERT INTO dr_store.objects (content_hash, schema, canonical)
-VALUES ($1, $2, $3)
+VALUES (:content_hash, :schema, :canonical)
 ON CONFLICT (content_hash, schema) DO NOTHING
 RETURNING schema, canonical
 """
@@ -97,20 +66,20 @@ RETURNING schema, canonical
 _GET_OBJECT_SQL = """
 SELECT schema, canonical
 FROM dr_store.objects
-WHERE content_hash = $1
-ORDER BY (schema = $2) DESC
+WHERE content_hash = :content_hash
+ORDER BY (schema = :schema) DESC
 LIMIT 1
 """
 
 _GET_EXACT_OBJECT_SQL = """
 SELECT schema, canonical
 FROM dr_store.objects
-WHERE content_hash = $1 AND schema = $2
+WHERE content_hash = :content_hash AND schema = :schema
 """
 
 _INSERT_BINDING_SQL = """
 INSERT INTO dr_store.bindings (key, schema, content_hash)
-VALUES ($1, $2, $3)
+VALUES (:key, :schema, :content_hash)
 ON CONFLICT (key) DO NOTHING
 RETURNING key
 """
@@ -118,16 +87,16 @@ RETURNING key
 _GET_BINDING_SQL = """
 SELECT schema, content_hash
 FROM dr_store.bindings
-WHERE key = $1
+WHERE key = :key
 """
 
 _INSERT_OBJECTS_SQL = """
 INSERT INTO dr_store.objects (content_hash, schema, canonical)
 SELECT proposed.content_hash, proposed.schema, proposed.canonical
 FROM ROWS FROM (
-    pg_catalog.unnest($1::pg_catalog.text[]),
-    pg_catalog.unnest($2::pg_catalog.text[]),
-    pg_catalog.unnest($3::pg_catalog.text[])
+    pg_catalog.unnest(CAST(:content_hashes AS pg_catalog.text[])),
+    pg_catalog.unnest(CAST(:schemas AS pg_catalog.text[])),
+    pg_catalog.unnest(CAST(:canonicals AS pg_catalog.text[]))
 ) AS proposed(content_hash, schema, canonical)
 ON CONFLICT (content_hash, schema) DO NOTHING
 """
@@ -136,8 +105,8 @@ _FETCH_OBJECTS_SQL = """
 SELECT objects.content_hash, objects.schema, objects.canonical
 FROM dr_store.objects AS objects
 JOIN ROWS FROM (
-    pg_catalog.unnest($1::pg_catalog.text[]),
-    pg_catalog.unnest($2::pg_catalog.text[])
+    pg_catalog.unnest(CAST(:content_hashes AS pg_catalog.text[])),
+    pg_catalog.unnest(CAST(:schemas AS pg_catalog.text[]))
 ) AS requested(content_hash, schema)
     ON objects.content_hash = requested.content_hash
     AND objects.schema = requested.schema
@@ -147,9 +116,9 @@ _INSERT_BINDINGS_SQL = """
 INSERT INTO dr_store.bindings (key, schema, content_hash)
 SELECT proposed.key, proposed.schema, proposed.content_hash
 FROM ROWS FROM (
-    pg_catalog.unnest($1::pg_catalog.text[]),
-    pg_catalog.unnest($2::pg_catalog.text[]),
-    pg_catalog.unnest($3::pg_catalog.text[])
+    pg_catalog.unnest(CAST(:keys AS pg_catalog.text[])),
+    pg_catalog.unnest(CAST(:schemas AS pg_catalog.text[])),
+    pg_catalog.unnest(CAST(:content_hashes AS pg_catalog.text[]))
 ) AS proposed(key, schema, content_hash)
 ON CONFLICT (key) DO NOTHING
 RETURNING key
@@ -158,13 +127,8 @@ RETURNING key
 _FETCH_BINDINGS_SQL = """
 SELECT key, schema, content_hash
 FROM dr_store.bindings
-WHERE key = ANY($1::pg_catalog.text[])
+WHERE key = ANY(CAST(:keys AS pg_catalog.text[]))
 """
-
-
-def _chunks[T](values: tuple[T, ...]) -> Iterator[tuple[T, ...]]:
-    for start in range(0, len(values), _BATCH_CHUNK_SIZE):
-        yield values[start : start + _BATCH_CHUNK_SIZE]
 
 
 def _validate_database(*, version_num: int, server_encoding: str) -> None:
@@ -176,173 +140,139 @@ def _validate_database(*, version_num: int, server_encoding: str) -> None:
 
 
 def _validate_schema_format(formats: list[object]) -> None:
-    if formats != [_POSTGRES_SCHEMA_FORMAT]:
+    if formats != [POSTGRES_SCHEMA_FORMAT]:
         raise RuntimeError(
             "PostgreSQL schema format marker is missing, malformed, or "
             "unsupported"
         )
 
 
-_NO_RESULT = object()
+async def _fetchrow(
+    connection: AsyncConnection,
+    query: str,
+    parameters: dict[str, Any] | None = None,
+) -> Mapping[str, Any] | None:
+    result = await connection.execute(text(query), parameters or {})
+    return cast("Mapping[str, Any] | None", result.mappings().first())
 
 
-@dataclass(frozen=True, slots=True)
-class _Settled[T]:
-    result: T | object = _NO_RESULT
-    cancellation: asyncio.CancelledError | None = None
-    failure: BaseException | None = None
+async def _fetch(
+    connection: AsyncConnection,
+    query: str,
+    parameters: dict[str, Any] | None = None,
+) -> list[Mapping[str, Any]]:
+    result = await connection.execute(text(query), parameters or {})
+    return cast("list[Mapping[str, Any]]", list(result.mappings()))
 
 
-async def _settle_task[T](
-    task: asyncio.Task[T],
-    *,
-    cancel_on_cancellation: bool,
-) -> _Settled[T]:
-    cancellation: asyncio.CancelledError | None = None
-    while True:
-        try:
-            result = await asyncio.shield(task)
-        except asyncio.CancelledError as error:
-            if cancellation is None:
-                cancellation = error
-                if cancel_on_cancellation and not task.done():
-                    task.cancel()
-            if task.done():
-                if task.cancelled():
-                    return _Settled(cancellation=cancellation)
-                try:
-                    result = task.result()
-                except BaseException as task_error:  # noqa: BLE001
-                    return _Settled(
-                        cancellation=cancellation,
-                        failure=task_error,
-                    )
-                return _Settled(
-                    result=result,
-                    cancellation=cancellation,
-                )
-            continue
-        except BaseException as error:  # noqa: BLE001 - task boundary.
-            return _Settled(cancellation=cancellation, failure=error)
-        else:
-            return _Settled(result=result, cancellation=cancellation)
+async def _execute(
+    connection: AsyncConnection,
+    query: str,
+    parameters: dict[str, Any] | None = None,
+) -> None:
+    await connection.execute(text(query), parameters or {})
 
 
-async def _run_pool_operation[T](
-    pool: asyncpg.Pool,
-    operation: Callable[[asyncpg.Connection], Awaitable[T]],
+async def _create_storage_tables(connection: AsyncConnection) -> None:
+    await connection.execute(text(_CREATE_SCHEMA_SQL))
+
+    def create_all(sync_connection: Connection) -> None:
+        POSTGRES_METADATA.create_all(sync_connection)
+
+    await connection.run_sync(create_all)
+
+
+async def _run_connection_operation[T](
+    engine: AsyncEngine,
+    operation: Callable[[AsyncConnection], Awaitable[T]],
     *,
     transactional: bool,
+    connection: AsyncConnection | None = None,
 ) -> T:
-    connection = await pool.acquire()
-
-    async def run() -> T:
-        if transactional:
-            async with connection.transaction():
-                return await operation(connection)
+    if connection is not None:
+        if not isinstance(connection, AsyncConnection):
+            raise TypeError(
+                "connection must be a sqlalchemy.ext.asyncio.AsyncConnection"
+            )
         return await operation(connection)
 
-    operation_settled = await _settle_task(
-        asyncio.create_task(run()),
-        cancel_on_cancellation=True,
-    )
-    release_settled = await _settle_task(
-        asyncio.create_task(pool.release(connection)),
-        cancel_on_cancellation=False,
-    )
-
-    cancellation = (
-        operation_settled.cancellation or release_settled.cancellation
-    )
-    operation_failure = operation_settled.failure
-    release_failure = release_settled.failure
-    if cancellation is not None:
-        cleanup_failure = release_failure or operation_failure
-        if cleanup_failure is not None:
-            raise cancellation from cleanup_failure
-        raise cancellation
-    if release_failure is not None:
-        if operation_failure is not None:
-            raise release_failure from operation_failure
-        raise release_failure
-    if operation_failure is not None:
-        raise operation_failure
-    assert operation_settled.result is not _NO_RESULT
-    return cast("T", operation_settled.result)
+    async with engine.connect() as acquired:
+        if transactional:
+            async with acquired.begin():
+                return await operation(acquired)
+        return await operation(acquired)
 
 
-async def install_postgres(pool: asyncpg.Pool) -> None:
+async def install_postgres(engine: AsyncEngine) -> None:
     """Install the fixed ``dr_store`` schema into an empty namespace.
 
-    The caller owns ``pool``. This operation acquires and releases one
-    connection without closing the pool.
+    The caller owns ``engine``. This operation acquires and releases one
+    connection without disposing the engine.
     """
-    if not isinstance(pool, asyncpg.Pool):
-        raise TypeError("pool must be an asyncpg.Pool")
+    if not isinstance(engine, AsyncEngine):
+        raise TypeError("engine must be a sqlalchemy.ext.asyncio.AsyncEngine")
 
-    async def install(connection: asyncpg.Connection) -> None:
-        requirements = await connection.fetchrow(_DATABASE_REQUIREMENTS_SQL)
+    async def install(connection: AsyncConnection) -> None:
+        requirements = await _fetchrow(connection, _DATABASE_REQUIREMENTS_SQL)
         assert requirements is not None
         _validate_database(
             version_num=requirements["server_version_num"],
             server_encoding=requirements["server_encoding"],
         )
-        await connection.execute(_INSTALL_SQL)
-        await connection.execute(
+        await _create_storage_tables(connection)
+        await _execute(
+            connection,
             _INSERT_SCHEMA_FORMAT_SQL,
-            _POSTGRES_SCHEMA_FORMAT,
+            {"format": POSTGRES_SCHEMA_FORMAT},
         )
 
-    await _run_pool_operation(pool, install, transactional=True)
+    await _run_connection_operation(engine, install, transactional=True)
 
 
 class PostgresBackend:
-    """Shared PostgreSQL storage through a caller-owned asynchronous pool."""
+    """Shared PostgreSQL storage through a caller-owned asynchronous engine."""
 
-    _pool: asyncpg.Pool
+    _engine: AsyncEngine
+    _batch_chunk_size: int
 
-    def __init__(self, pool: asyncpg.Pool) -> None:
-        del pool
-        raise TypeError("use 'await PostgresBackend.open(pool)'")
+    def __init__(self, engine: AsyncEngine) -> None:
+        del engine
+        raise TypeError("use 'await PostgresBackend.open(engine)'")
 
     @classmethod
-    async def open(cls, pool: asyncpg.Pool) -> Self:
-        """Validate the installed schema format and use ``pool``."""
-        if not isinstance(pool, asyncpg.Pool):
-            raise TypeError("pool must be an asyncpg.Pool")
+    async def open(
+        cls,
+        engine: AsyncEngine,
+        *,
+        batch_chunk_size: int = _DEFAULT_BATCH_CHUNK_SIZE,
+    ) -> Self:
+        """Validate the installed schema format and use ``engine``.
 
-        async def validate(connection: asyncpg.Connection) -> None:
-            rows = await connection.fetch(_GET_SCHEMA_FORMAT_SQL)
+        ``batch_chunk_size`` bounds batch statement parameter count below
+        the PostgreSQL driver limit.
+        """
+        if not isinstance(engine, AsyncEngine):
+            raise TypeError(
+                "engine must be a sqlalchemy.ext.asyncio.AsyncEngine"
+            )
+
+        async def validate(connection: AsyncConnection) -> None:
+            rows = await _fetch(connection, _GET_SCHEMA_FORMAT_SQL)
             _validate_schema_format([row["format"] for row in rows])
 
-        await _run_pool_operation(pool, validate, transactional=False)
+        await _run_connection_operation(
+            engine,
+            validate,
+            transactional=False,
+        )
         self = object.__new__(cls)
-        self._pool = pool
+        self._engine = engine
+        self._batch_chunk_size = batch_chunk_size
         return self
 
-    async def _execute(
-        self,
-        connection: asyncpg.Connection,
-        query: str,
-        *args: object,
-    ) -> str:
-        return await connection.execute(query, *args)
-
-    async def _fetch(
-        self,
-        connection: asyncpg.Connection,
-        query: str,
-        *args: object,
-    ) -> list[asyncpg.Record]:
-        return await connection.fetch(query, *args)
-
-    async def _fetchrow(
-        self,
-        connection: asyncpg.Connection,
-        query: str,
-        *args: object,
-    ) -> asyncpg.Record | None:
-        return await connection.fetchrow(query, *args)
+    def _chunks[T](self, values: tuple[T, ...]) -> Iterator[tuple[T, ...]]:
+        for start in range(0, len(values), self._batch_chunk_size):
+            yield values[start : start + self._batch_chunk_size]
 
     async def put_object(
         self,
@@ -350,17 +280,20 @@ class PostgresBackend:
         schema: str,
         content_hash: str,
         canonical: str,
+        connection: AsyncConnection | None = None,
     ) -> PutOutcome:
         _validate_reference_schema(schema)
         _validate_content_hash(content_hash)
 
-        async def put(connection: asyncpg.Connection) -> PutOutcome:
-            inserted = await self._fetchrow(
-                connection,
+        async def put(conn: AsyncConnection) -> PutOutcome:
+            inserted = await _fetchrow(
+                conn,
                 _INSERT_OBJECT_SQL,
-                content_hash,
-                schema,
-                canonical,
+                {
+                    "content_hash": content_hash,
+                    "schema": schema,
+                    "canonical": canonical,
+                },
             )
             if inserted is not None:
                 return PutOutcome(
@@ -368,11 +301,10 @@ class PostgresBackend:
                     stored_schema=inserted["schema"],
                     stored_canonical=inserted["canonical"],
                 )
-            stored = await self._fetchrow(
-                connection,
+            stored = await _fetchrow(
+                conn,
                 _GET_EXACT_OBJECT_SQL,
-                content_hash,
-                schema,
+                {"content_hash": content_hash, "schema": schema},
             )
             assert stored is not None
             return PutOutcome(
@@ -381,10 +313,11 @@ class PostgresBackend:
                 stored_canonical=stored["canonical"],
             )
 
-        return await _run_pool_operation(
-            self._pool,
+        return await _run_connection_operation(
+            self._engine,
             put,
             transactional=True,
+            connection=connection,
         )
 
     async def get_object(
@@ -396,21 +329,18 @@ class PostgresBackend:
         _validate_reference_schema(schema)
         _validate_content_hash(content_hash)
 
-        async def get(
-            connection: asyncpg.Connection,
-        ) -> tuple[str, str] | None:
-            row = await self._fetchrow(
-                connection,
+        async def get(conn: AsyncConnection) -> tuple[str, str] | None:
+            row = await _fetchrow(
+                conn,
                 _GET_OBJECT_SQL,
-                content_hash,
-                schema,
+                {"content_hash": content_hash, "schema": schema},
             )
             if row is None:
                 return None
             return (row["schema"], row["canonical"])
 
-        return await _run_pool_operation(
-            self._pool,
+        return await _run_connection_operation(
+            self._engine,
             get,
             transactional=False,
         )
@@ -421,24 +351,19 @@ class PostgresBackend:
         key: str,
         schema: str,
         content_hash: str,
+        connection: AsyncConnection | None = None,
     ) -> BindOutcome:
         _validate_binding_key(key)
         _validate_reference_schema(schema)
         _validate_content_hash(content_hash)
 
-        async def bind(connection: asyncpg.Connection) -> BindOutcome:
-            inserted = await self._fetchrow(
-                connection,
+        async def bind_key(conn: AsyncConnection) -> BindOutcome:
+            inserted = await _fetchrow(
+                conn,
                 _INSERT_BINDING_SQL,
-                key,
-                schema,
-                content_hash,
+                {"key": key, "schema": schema, "content_hash": content_hash},
             )
-            row = await self._fetchrow(
-                connection,
-                _GET_BINDING_SQL,
-                key,
-            )
+            row = await _fetchrow(conn, _GET_BINDING_SQL, {"key": key})
             assert row is not None
             return BindOutcome(
                 bound=inserted is not None,
@@ -446,25 +371,24 @@ class PostgresBackend:
                 existing_content_hash=row["content_hash"],
             )
 
-        return await _run_pool_operation(
-            self._pool,
-            bind,
+        return await _run_connection_operation(
+            self._engine,
+            bind_key,
             transactional=True,
+            connection=connection,
         )
 
     async def get_binding(self, *, key: str) -> tuple[str, str] | None:
         _validate_binding_key(key)
 
-        async def get(
-            connection: asyncpg.Connection,
-        ) -> tuple[str, str] | None:
-            row = await self._fetchrow(connection, _GET_BINDING_SQL, key)
+        async def get(conn: AsyncConnection) -> tuple[str, str] | None:
+            row = await _fetchrow(conn, _GET_BINDING_SQL, {"key": key})
             if row is None:
                 return None
             return (row["schema"], row["content_hash"])
 
-        return await _run_pool_operation(
-            self._pool,
+        return await _run_connection_operation(
+            self._engine,
             get,
             transactional=False,
         )
@@ -483,12 +407,12 @@ class PostgresBackend:
         bindings: dict[str, tuple[str, str]] = {}
         objects: dict[tuple[str, str], str] = {}
 
-        async def get(connection: asyncpg.Connection) -> None:
-            for chunk in _chunks(distinct_keys):
-                rows = await self._fetch(
-                    connection,
+        async def get(conn: AsyncConnection) -> None:
+            for chunk in self._chunks(distinct_keys):
+                rows = await _fetch(
+                    conn,
                     _FETCH_BINDINGS_SQL,
-                    list(chunk),
+                    {"keys": list(chunk)},
                 )
                 for row in rows:
                     bindings[row["key"]] = (
@@ -497,20 +421,24 @@ class PostgresBackend:
                     )
 
             references = tuple(dict.fromkeys(bindings.values()))
-            for chunk in _chunks(references):
-                rows = await self._fetch(
-                    connection,
+            for chunk in self._chunks(references):
+                rows = await _fetch(
+                    conn,
                     _FETCH_OBJECTS_SQL,
-                    [reference[1] for reference in chunk],
-                    [reference[0] for reference in chunk],
+                    {
+                        "content_hashes": [
+                            reference[1] for reference in chunk
+                        ],
+                        "schemas": [reference[0] for reference in chunk],
+                    },
                 )
                 for row in rows:
                     objects[(row["schema"], row["content_hash"])] = row[
                         "canonical"
                     ]
 
-        await _run_pool_operation(
-            self._pool,
+        await _run_connection_operation(
+            self._engine,
             get,
             transactional=False,
         )
@@ -530,6 +458,7 @@ class PostgresBackend:
         self,
         *,
         entries: tuple[BoundObjectWrite, ...],
+        connection: AsyncConnection | None = None,
     ) -> dict[str, BindOutcome]:
         for entry in entries:
             _validate_binding_key(entry.key)
@@ -556,21 +485,31 @@ class PostgresBackend:
         stored_objects: dict[tuple[str, str], str] = {}
         stored_bindings: dict[str, tuple[str, str]] = {}
 
-        async def put(connection: asyncpg.Connection) -> None:
-            for chunk in _chunks(references):
-                await self._execute(
-                    connection,
+        async def put(conn: AsyncConnection) -> None:
+            for chunk in self._chunks(references):
+                await _execute(
+                    conn,
                     _INSERT_OBJECTS_SQL,
-                    [reference[1] for reference in chunk],
-                    [reference[0] for reference in chunk],
-                    [objects[reference] for reference in chunk],
+                    {
+                        "content_hashes": [
+                            reference[1] for reference in chunk
+                        ],
+                        "schemas": [reference[0] for reference in chunk],
+                        "canonicals": [
+                            objects[reference] for reference in chunk
+                        ],
+                    },
                 )
-            for chunk in _chunks(references):
-                rows = await self._fetch(
-                    connection,
+            for chunk in self._chunks(references):
+                rows = await _fetch(
+                    conn,
                     _FETCH_OBJECTS_SQL,
-                    [reference[1] for reference in chunk],
-                    [reference[0] for reference in chunk],
+                    {
+                        "content_hashes": [
+                            reference[1] for reference in chunk
+                        ],
+                        "schemas": [reference[0] for reference in chunk],
+                    },
                 )
                 for row in rows:
                     stored_objects[(row["schema"], row["content_hash"])] = row[
@@ -585,20 +524,24 @@ class PostgresBackend:
                         content_hash=reference[1],
                     )
 
-            for chunk in _chunks(distinct_writes):
-                rows = await self._fetch(
-                    connection,
+            for chunk in self._chunks(distinct_writes):
+                rows = await _fetch(
+                    conn,
                     _INSERT_BINDINGS_SQL,
-                    [entry.key for entry in chunk],
-                    [entry.schema for entry in chunk],
-                    [entry.content_hash for entry in chunk],
+                    {
+                        "keys": [entry.key for entry in chunk],
+                        "schemas": [entry.schema for entry in chunk],
+                        "content_hashes": [
+                            entry.content_hash for entry in chunk
+                        ],
+                    },
                 )
                 inserted_keys.update(row["key"] for row in rows)
-            for chunk in _chunks(tuple(writes)):
-                rows = await self._fetch(
-                    connection,
+            for chunk in self._chunks(tuple(writes)):
+                rows = await _fetch(
+                    conn,
                     _FETCH_BINDINGS_SQL,
-                    list(chunk),
+                    {"keys": list(chunk)},
                 )
                 for row in rows:
                     stored_bindings[row["key"]] = (
@@ -606,10 +549,11 @@ class PostgresBackend:
                         row["content_hash"],
                     )
 
-        await _run_pool_operation(
-            self._pool,
+        await _run_connection_operation(
+            self._engine,
             put,
             transactional=True,
+            connection=connection,
         )
 
         assert stored_bindings.keys() == writes.keys()

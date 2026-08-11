@@ -165,11 +165,19 @@ name = "PostgreSQL backend"
 definition = """
 A persistent shared storage capability whose fixed `dr_store` schema and exact \
 schema-format marker are installed explicitly in a caller-selected PostgreSQL \
-database through one concrete caller-owned asynchronous pool. Awaited opening \
-validates that marker before independently running clients observe the same \
-asynchronous backend semantics, without PostgreSQL-specific behavior entering \
-the object store or record cache surfaces."""
-exported_symbols = ["PostgresBackend", "install_postgres"]
+database through one caller-owned SQLAlchemy asynchronous engine. Table \
+definitions are exported as SQLAlchemy metadata for platform Alembic ownership. \
+Mutating operations optionally accept an explicit SQLAlchemy Core connection so \
+evidence writes can join a caller-owned transaction. Awaited opening validates \
+the marker before independently running clients observe the same asynchronous \
+backend semantics, without PostgreSQL-specific behavior entering the object \
+store or record cache surfaces."""
+exported_symbols = [
+  "PostgresBackend",
+  "POSTGRES_METADATA",
+  "POSTGRES_SCHEMA_FORMAT",
+  "install_postgres",
+]
 categories = ["object storage"]
 is_a = ["backend"]
 

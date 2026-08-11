@@ -65,6 +65,8 @@ from dr_store.record_cache import (
     derive_cache_key,
 )
 from dr_store.storage_backends import (
+    POSTGRES_METADATA,
+    POSTGRES_SCHEMA_FORMAT,
     Backend,
     BindOutcome,
     BoundObjectRow,
@@ -78,6 +80,8 @@ from dr_store.storage_backends import (
 
 __all__ = [
     "CONTENT_HASH_LENGTH",
+    "POSTGRES_METADATA",
+    "POSTGRES_SCHEMA_FORMAT",
     "AllocationError",
     "ArtifactBundleError",
     "ArtifactBundlePublication",

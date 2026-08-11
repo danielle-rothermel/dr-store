@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Hard-cut the PostgreSQL backend from `asyncpg` to SQLAlchemy async with
+  psycopg. `install_postgres(engine)` and `PostgresBackend.open(engine)` accept
+  a caller-owned `AsyncEngine`; exported `POSTGRES_METADATA` defines the fixed
+  `dr_store` tables for platform Alembic ownership while retaining the
+  `dr-store-postgresql-v1` marker.
+- Added optional explicit SQLAlchemy Core `connection=` on mutating PostgreSQL
+  backend methods so evidence writes can join a caller-owned transaction.
+- Exposed `batch_chunk_size` on `PostgresBackend.open` and `busy_timeout_ms` on
+  `SqliteBackend.open` as constructor knobs with documented defaults.
+
 ## [0.2.0] - 2026-08-08
 
 ### Added
