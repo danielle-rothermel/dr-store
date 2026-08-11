@@ -168,10 +168,12 @@ schema-format marker are installed explicitly in a caller-selected PostgreSQL \
 database through one caller-owned SQLAlchemy asynchronous engine. Table \
 definitions are exported as SQLAlchemy metadata for platform Alembic ownership. \
 Mutating operations optionally accept an explicit SQLAlchemy Core connection so \
-evidence writes can join a caller-owned transaction. Awaited opening validates \
-the marker before independently running clients observe the same asynchronous \
-backend semantics, without PostgreSQL-specific behavior entering the object \
-store or record cache surfaces."""
+evidence writes can join a caller-owned transaction. Read operations accept the \
+same optional connection for same-transaction visibility; enlisted \
+`get_bound_objects` observes one caller-transaction snapshot. Awaited opening \
+validates the marker before independently running clients observe the same \
+asynchronous backend semantics, without PostgreSQL-specific behavior entering \
+the object store or record cache surfaces."""
 exported_symbols = [
   "PostgresBackend",
   "POSTGRES_METADATA",

@@ -97,11 +97,12 @@ creates the namespace, its tables, and the exact
 database. Repeating installation is an error.
 `await PostgresBackend.open(engine)` validates that marker before returning a
 backend for the same awaited point and batch operations as the other backends;
-it acquires and releases connections without disposing the engine. Mutating
-`PostgresBackend` methods accept an optional explicit SQLAlchemy Core
-connection so evidence writes can join a caller-owned transaction; when
-provided, dr-store never commits that connection. Opening never installs,
-alters, adopts, or upgrades storage.
+it acquires and releases connections without disposing the engine. PostgreSQL
+backend methods accept an optional explicit SQLAlchemy Core connection so
+evidence reads and writes can join a caller-owned transaction; when provided,
+dr-store never commits that connection. Enlisted `get_bound_objects` observes
+one caller-transaction snapshot. Opening never installs, alters, adopts, or
+upgrades storage.
 
 ## Usage
 
@@ -125,7 +126,8 @@ asyncio.run(main())
 
 `await SqliteRecordCache.open(path)` is the paved persistent Record Cache. It
 returns only after its dedicated worker, connection, and schema are ready and
-closes those resources on normal or exceptional async context exit. When
+forwards optional `busy_timeout_ms` to the owned SQLite backend. It closes those
+resources on normal or exceptional async context exit. When
 cleanup succeeds, an exception from the context body is not suppressed;
 cleanup failure raises
 `SqliteRecordCacheCloseError`:
@@ -382,6 +384,25 @@ class PostgresBackend:
         entries: tuple[BoundObjectWrite, ...],
         connection: AsyncConnection | None = None,
     ) -> dict[str, BindOutcome]: ...
+    async def get_object(
+        self,
+        *,
+        schema: str,
+        content_hash: str,
+        connection: AsyncConnection | None = None,
+    ) -> tuple[str, str] | None: ...
+    async def get_binding(
+        self,
+        *,
+        key: str,
+        connection: AsyncConnection | None = None,
+    ) -> tuple[str, str] | None: ...
+    async def get_bound_objects(
+        self,
+        *,
+        keys: tuple[str, ...],
+        connection: AsyncConnection | None = None,
+    ) -> dict[str, BoundObjectRow]: ...
 
 class SqliteBackend:
     @classmethod
@@ -440,7 +461,9 @@ class RecordCache:
 
 class SqliteRecordCache(RecordCache):
     @classmethod
-    async def open(cls, path: str | Path) -> SqliteRecordCache: ...
+    async def open(
+        cls, path: str | Path, *, busy_timeout_ms: int = 30_000
+    ) -> SqliteRecordCache: ...
     async def aclose(self) -> None: ...
 ```
 

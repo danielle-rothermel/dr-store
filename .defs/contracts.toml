@@ -373,8 +373,11 @@ transaction on the auto-commit path, preserves exact replay, releases \
 connections acquired on that path before the operation completes, and makes \
 committed rows available to independently running clients without exposing a \
 PostgreSQL-specific object-store or record-cache API. An optional explicit Core \
-connection on mutating operations runs on the caller-owned transaction \
-boundary without commit, rollback, or connection release."""
+connection on any backend operation runs on the caller-owned transaction \
+boundary without commit, rollback, or connection release. Enlisted \
+`get_bound_objects` reads bindings and objects on that connection and observes \
+one caller-transaction snapshot, including uncommitted writes in that \
+transaction."""
 rationale = """
 A shared deployment changes persistence scope and contention mechanism, not the \
 observable storage model. One conformance suite across every backend prevents \
@@ -627,19 +630,22 @@ title = "PostgreSQL uses one caller-owned engine and optional enlisted connectio
 statement = """
 `sqlalchemy[asyncio]` and `psycopg` are required runtime dependencies. \
 `PostgresBackend` accepts a caller-owned SQLAlchemy `AsyncEngine` only through \
-its awaited `open` operation as its default connection source. Mutating \
+its awaited `open` operation as its default connection source. Backend \
 operations optionally accept one explicit SQLAlchemy Core `AsyncConnection`; \
 when provided, the operation runs on it and never commits, rolls back, or \
-releases it. When absent, the backend acquires a connection, uses one \
-transaction for non-empty writes, and releases the connection before the \
-operation completes. The backend never closes or disposes the caller-owned \
-engine. It defines no custom connection-source Protocol, DSN acceptance or \
-ownership, synchronous source, managed-source lifecycle API, ambient transaction \
-context, ORM Session surface, or distributed-transaction machinery."""
+releases it. Enlisted `get_bound_objects` fetches bindings and referenced \
+objects on that connection and observes one caller-transaction snapshot, \
+including uncommitted writes in that transaction. When absent, the backend \
+acquires a connection, uses one transaction for non-empty writes, and releases \
+the connection before the operation completes. The backend never closes or \
+disposes the caller-owned engine. It defines no custom connection-source \
+Protocol, DSN acceptance or ownership, synchronous source, managed-source \
+lifecycle API, ambient transaction context, ORM Session surface, or \
+distributed-transaction machinery."""
 rationale = """
 One engine boundary matches platform ownership while a narrow per-call enlisted \
-connection supports ledger-coordinated evidence writes without inventing a \
-general adapter framework or a second managed lifecycle."""
+connection supports ledger-coordinated evidence reads and writes without \
+inventing a general adapter framework or a second managed lifecycle."""
 date = "2026-08-11"
 check = "scripts/test-postgres.sh"
 

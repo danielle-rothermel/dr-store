@@ -325,6 +325,7 @@ class PostgresBackend:
         *,
         schema: str,
         content_hash: str,
+        connection: AsyncConnection | None = None,
     ) -> tuple[str, str] | None:
         _validate_reference_schema(schema)
         _validate_content_hash(content_hash)
@@ -343,6 +344,7 @@ class PostgresBackend:
             self._engine,
             get,
             transactional=False,
+            connection=connection,
         )
 
     async def bind(
@@ -378,7 +380,12 @@ class PostgresBackend:
             connection=connection,
         )
 
-    async def get_binding(self, *, key: str) -> tuple[str, str] | None:
+    async def get_binding(
+        self,
+        *,
+        key: str,
+        connection: AsyncConnection | None = None,
+    ) -> tuple[str, str] | None:
         _validate_binding_key(key)
 
         async def get(conn: AsyncConnection) -> tuple[str, str] | None:
@@ -391,12 +398,14 @@ class PostgresBackend:
             self._engine,
             get,
             transactional=False,
+            connection=connection,
         )
 
     async def get_bound_objects(
         self,
         *,
         keys: tuple[str, ...],
+        connection: AsyncConnection | None = None,
     ) -> dict[str, BoundObjectRow]:
         for key in keys:
             _validate_binding_key(key)
@@ -441,6 +450,7 @@ class PostgresBackend:
             self._engine,
             get,
             transactional=False,
+            connection=connection,
         )
 
         results: dict[str, BoundObjectRow] = {}

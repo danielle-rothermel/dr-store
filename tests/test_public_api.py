@@ -140,6 +140,25 @@ def test_sqlite_backend_open_exposes_busy_timeout_knob() -> None:
     )
 
 
+def test_sqlite_record_cache_open_exposes_busy_timeout_knob() -> None:
+    from dr_store import SqliteRecordCache
+
+    assert (
+        "busy_timeout_ms"
+        in inspect.signature(SqliteRecordCache.open).parameters
+    )
+
+
+def test_postgres_backend_read_methods_expose_connection_kwarg() -> None:
+    from dr_store import PostgresBackend
+
+    for name in ("get_object", "get_binding", "get_bound_objects"):
+        assert (
+            "connection"
+            in inspect.signature(getattr(PostgresBackend, name)).parameters
+        )
+
+
 def test_record_cache_public_surface_is_exact() -> None:
     from dr_store import RecordCache
 
