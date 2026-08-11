@@ -17,7 +17,6 @@ from dr_serialize import (
     validate_strict_json,
 )
 
-from dr_store.core.filesystem import flush_descriptor
 from dr_store.document_file.errors import (
     DocumentFileError,
     DocumentPublishError,
@@ -300,9 +299,6 @@ class CanonicalJsonFile:
 
             stage = PublicationStage.WRITE_TEMP
             _write_all(temporary_descriptor, encoded)
-
-            stage = PublicationStage.FLUSH_TEMP
-            flush_descriptor(temporary_descriptor)
             descriptor_to_close = temporary_descriptor
             temporary_descriptor = None
             os.close(descriptor_to_close)
@@ -316,21 +312,16 @@ class CanonicalJsonFile:
             )
             replacement_state = ReplacementState.REPLACED
             owns_temporary = False
-
-            stage = PublicationStage.FLUSH_DIRECTORY
-            flush_descriptor(directory_descriptor)
         except (NotImplementedError, OSError, TypeError, ValueError) as exc:
             failure = exc
         finally:
-            failure, directory_close_failed = _finalize_publication_resources(
+            failure, _directory_close_failed = _finalize_publication_resources(
                 temporary_descriptor=temporary_descriptor,
                 temporary_name=temporary_name,
                 owns_temporary=owns_temporary,
                 directory_descriptor=directory_descriptor,
                 failure=failure,
             )
-            if directory_close_failed:
-                stage = PublicationStage.FLUSH_DIRECTORY
         if failure is not None:
             raise DocumentPublishError(
                 self._path,

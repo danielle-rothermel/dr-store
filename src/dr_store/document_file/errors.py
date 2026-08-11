@@ -15,9 +15,7 @@ class PublicationStage(StrEnum):
     ENCODE = "encode"
     CREATE_TEMP = "create_temp"
     WRITE_TEMP = "write_temp"
-    FLUSH_TEMP = "flush_temp"
     REPLACE_TARGET = "replace_target"
-    FLUSH_DIRECTORY = "flush_directory"
 
 
 @verify(UNIQUE)

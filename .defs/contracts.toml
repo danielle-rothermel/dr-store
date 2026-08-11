@@ -187,28 +187,29 @@ statement = """
 A standalone canonical document file validates one complete strict JSON value \
 within its caller-supplied byte and nesting-depth bounds before filesystem \
 publication. Publication writes the complete canonical bytes to a reserved \
-same-directory temporary file created with private permissions, flushes and \
-closes that file, replaces the target, and then flushes and closes the \
-directory. Its lexical absolute directory path is captured at construction; \
+same-directory temporary file created with private permissions, closes that \
+file, replaces the target, and closes the directory. Its lexical absolute \
+directory path is captured at construction; \
 this prevents working-directory redirection but does not freeze symlink \
 targets. All-or-nothing visibility depends on the filesystem's same-directory \
-replacement semantics, \
-and no power-loss durability is promised."""
+replacement semantics. The path does not call `F_FULLFSYNC`, `fsync`, or a \
+directory flush and defines no configurable durability mode. Successful \
+publication is process-visible and atomic to readers, without promising \
+survival across machine or power loss."""
 rationale = """
 Pre-publication bounds prevent an accepted write from exceeding the matching \
 read contract. Same-directory replacement avoids exposing a partial target, \
-while the filesystem and power-loss limitations keep visibility and durability \
-claims no stronger than the available evidence."""
+while close and replacement support the intended process-visible terminal \
+boundary rather than power-loss durability."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/document_file"
 
 [[contracts]]
 title = "Document publication failures report phase and replacement"
 statement = """
-A failed publication reports `ENCODE`, `CREATE_TEMP`, `WRITE_TEMP`, \
-`FLUSH_TEMP`, `REPLACE_TARGET`, or `FLUSH_DIRECTORY`. `CREATE_TEMP` includes \
-directory acquire and temporary-file open; `FLUSH_TEMP` includes flush and \
-close; `FLUSH_DIRECTORY` includes directory flush and close. \
+A failed publication reports `ENCODE`, `CREATE_TEMP`, `WRITE_TEMP`, or \
+`REPLACE_TARGET`. `CREATE_TEMP` includes directory acquire and temporary-file \
+open; `WRITE_TEMP` includes write and temporary-file close. \
 `replacement_state = NOT_REPLACED` means replacement was not invoked and a \
 prior target, if any, stays authoritative. `REPLACED` means replacement \
 returned successfully and later finalization failed. `UNKNOWN` means the \
@@ -284,10 +285,10 @@ check = "uv run pytest -q tests/document_directory/test_directory.py tests/docum
 title = "Sidecar finalization reports stored-byte accounting"
 statement = """
 A sidecar writer retains bytes under caller-supplied head and tail caps and, \
-on successful finalization, flushes and closes its file descriptor before \
-returning stored segment lengths, produced and dropped byte counts, and the \
-SHA-256 hash of exactly the stored bytes. Finalization does not flush the \
-directory entry or impose ordering on manifest publication."""
+on successful finalization, flushes userspace buffers and closes its file \
+descriptor before returning stored segment lengths, produced and dropped byte \
+counts, and the SHA-256 hash of exactly the stored bytes. Finalization does not \
+flush the directory entry or impose ordering on manifest publication."""
 rationale = """
 The summary makes truncation and the verified byte sequence explicit while \
 avoiding stronger persistence or publication-order claims. A caller abandons \

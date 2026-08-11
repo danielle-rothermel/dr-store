@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dr_store.core.errors import AllocationError, SidecarVerificationError
-from dr_store.core.filesystem import flush_descriptor
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -127,7 +126,6 @@ class SidecarWriter:
         try:
             self._handle.write(tail)
             self._handle.flush()
-            flush_descriptor(self._handle.fileno())
         except (OSError, ValueError) as exc:
             raise AllocationError(
                 f"could not flush sidecar {str(self._path)!r}"

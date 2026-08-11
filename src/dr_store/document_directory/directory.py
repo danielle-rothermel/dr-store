@@ -116,10 +116,8 @@ class DocumentDirectory:
         """Replace the Manifest in the same directory with canonical JSON.
 
         Atomic visibility depends on filesystem same-directory replace
-        semantics.
-        A post-replace directory-flush failure raises even though the new
-        Manifest may be visible; no rollback occurs. Flush success does not
-        guarantee power-loss durability.
+        semantics. A post-replace directory-close failure raises even though
+        the new Manifest may be visible; no rollback occurs.
         """
         try:
             self._manifest.publish(manifest)
