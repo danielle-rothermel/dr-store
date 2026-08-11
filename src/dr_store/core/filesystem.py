@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dr_store.core.errors import AllocationError, DocumentDirectoryError
+from dr_store.core.errors import AllocationError
 
 _UNSAFE_NAME_CHARACTERS = frozenset({"/", "\\", "\x00"})
 _RESERVED_NAMES = frozenset({"", ".", ".."})

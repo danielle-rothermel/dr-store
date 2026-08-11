@@ -15,7 +15,6 @@ from dr_store import (
     SidecarVerificationReason,
 )
 from dr_store.core import verified_read as verified_read_module
-from dr_store.document_directory import sidecar as sidecar_module
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -144,6 +143,7 @@ def test_verify_sidecar_missing_file_is_typed(tmp_path: Path) -> None:
 )
 def test_verify_sidecar_rejects_unsafe_and_reserved_names_before_open(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     name: str,
 ) -> None:
     directory = _allocate(tmp_path)
