@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Removed
 
 - Removed the artifact-bundle public API and package.
+- Removed the unused `pydantic` runtime dependency left after the bundle cutover.
 
 ## [0.2.0] - 2026-08-08
 

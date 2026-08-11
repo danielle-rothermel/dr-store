@@ -148,11 +148,15 @@ class SidecarWriter:
         )
 
 
-def _open_failure_reason(exc: BaseException) -> SidecarVerificationReason:
+def _open_failure_reason(
+    exc: BaseException,
+    *,
+    child_open: bool,
+) -> SidecarVerificationReason:
     if isinstance(exc, OSError):
         if exc.errno == errno.ENOENT:
             return SidecarVerificationReason.MISSING
-        if exc.errno == errno.ELOOP:
+        if child_open and exc.errno == errno.ELOOP:
             return SidecarVerificationReason.NOT_REGULAR
     return SidecarVerificationReason.MISMATCH
 
@@ -203,6 +207,12 @@ def verify_sidecar(
     child_descriptor: int | None = None
     try:
         directory_descriptor = os.open(directory, directory_flags)
+    except (NotImplementedError, OSError) as exc:
+        raise SidecarVerificationError(
+            sidecar_path,
+            _open_failure_reason(exc, child_open=False),
+        ) from exc
+    try:
         child_descriptor = os.open(
             name,
             child_flags,
@@ -218,7 +228,7 @@ def verify_sidecar(
     except (NotImplementedError, OSError) as exc:
         raise SidecarVerificationError(
             sidecar_path,
-            _open_failure_reason(exc),
+            _open_failure_reason(exc, child_open=True),
         ) from exc
     finally:
         if child_descriptor is not None:
