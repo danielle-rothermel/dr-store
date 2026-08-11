@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Added typed `DocumentReadError` reporting with `ReadStage` and `ReadReason`.
+- Added `RecordCacheStats` and corruption logging on unverifiable cache reads.
+
 ### Changed
 
 - Hard-cut the PostgreSQL backend from `asyncpg` to SQLAlchemy async with
@@ -19,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Exposed `batch_chunk_size` on `PostgresBackend.open` and `busy_timeout_ms` on
   `SqliteBackend.open` and `SqliteRecordCache.open` as constructor knobs with
   documented defaults.
+- Hard-cut document publication to visibility-only same-directory replacement
+  without `F_FULLFSYNC`, `fsync`, or directory flush.
+- Removed `FLUSH_TEMP` and `FLUSH_DIRECTORY` from `PublicationStage`.
+
+### Removed
+
+- Removed the artifact-bundle public API and package.
 
 ## [0.2.0] - 2026-08-08
 
