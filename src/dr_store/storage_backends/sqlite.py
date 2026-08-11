@@ -67,16 +67,16 @@ def _persistent_database_path(path: str | Path) -> str:
     return str(Path(raw_path).absolute())
 
 
-def _open_connection(path: str) -> sqlite3.Connection:
+def _open_connection(path: str, *, busy_timeout_ms: int) -> sqlite3.Connection:
     connection = sqlite3.connect(
         path,
-        timeout=_BUSY_TIMEOUT_MS / 1000,
+        timeout=busy_timeout_ms / 1000,
         isolation_level=None,
     )
     try:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=NORMAL")
-        connection.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        connection.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
         connection.executescript(_SCHEMA)
     except BaseException:
         with suppress(Exception):
@@ -118,14 +118,29 @@ class SqliteBackend:
         raise TypeError("use 'await SqliteBackend.open(path)'")
 
     @classmethod
-    async def open(cls, path: str | Path) -> Self:
+    async def open(
+        cls,
+        path: str | Path,
+        *,
+        busy_timeout_ms: int = _BUSY_TIMEOUT_MS,
+    ) -> Self:
+        """Open a persistent SQLite backend on ``path``.
+
+        ``busy_timeout_ms`` configures SQLite lock waiting; when the bound
+        expires, SQLite raises ``OperationalError`` rather than retrying
+        indefinitely.
+        """
         database_path = _persistent_database_path(path)
         loop = asyncio.get_running_loop()
         worker = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="dr-store-sqlite",
         )
-        concurrent = worker.submit(_open_connection, database_path)
+        concurrent = worker.submit(
+            _open_connection,
+            database_path,
+            busy_timeout_ms=busy_timeout_ms,
+        )
         ready = asyncio.wrap_future(concurrent, loop=loop)
         try:
             connection = await _await_settled(ready)

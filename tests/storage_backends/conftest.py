@@ -3,8 +3,9 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-import asyncpg
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -12,8 +13,14 @@ if TYPE_CHECKING:
 _DEDICATED_DATABASE = "dr_store_test"
 
 
+def _async_dsn(dsn: str) -> str:
+    if dsn.startswith("postgresql://"):
+        return "postgresql+psycopg://" + dsn.removeprefix("postgresql://")
+    return dsn
+
+
 @pytest.fixture
-async def postgres_pool() -> AsyncIterator[asyncpg.Pool]:
+async def postgres_engine() -> AsyncIterator[AsyncEngine]:
     dsn = os.environ.get("DR_STORE_POSTGRES_DSN")
     if dsn is None:
         if os.environ.get("DR_STORE_REQUIRE_POSTGRES") == "1":
@@ -22,17 +29,17 @@ async def postgres_pool() -> AsyncIterator[asyncpg.Pool]:
             )
         pytest.skip("DR_STORE_POSTGRES_DSN is not configured")
 
-    pool = await asyncpg.create_pool(
-        dsn,
-        min_size=1,
-        max_size=4,
-        server_settings={"search_path": "pg_catalog"},
+    engine = create_async_engine(
+        _async_dsn(dsn),
+        pool_size=4,
+        max_overflow=0,
+        connect_args={"options": "-c search_path=pg_catalog"},
     )
     dedicated_database_verified = False
     try:
-        async with pool.acquire() as connection:
-            database = await connection.fetchval(
-                "SELECT pg_catalog.current_database()"
+        async with engine.connect() as connection:
+            database = await connection.scalar(
+                text("SELECT pg_catalog.current_database()")
             )
             if database != _DEDICATED_DATABASE:
                 pytest.fail(
@@ -41,22 +48,30 @@ async def postgres_pool() -> AsyncIterator[asyncpg.Pool]:
                     f"{database!r}"
                 )
             dedicated_database_verified = True
-            await connection.execute("DROP SCHEMA IF EXISTS dr_store CASCADE")
+            await connection.execute(
+                text("DROP SCHEMA IF EXISTS dr_store CASCADE")
+            )
+            await connection.commit()
 
-        yield pool
+        yield engine
     finally:
-        if not pool.is_closing():
-            if dedicated_database_verified:
-                async with pool.acquire() as connection:
-                    database = await connection.fetchval(
-                        "SELECT pg_catalog.current_database()"
+        if dedicated_database_verified:
+            async with engine.connect() as connection:
+                database = await connection.scalar(
+                    text("SELECT pg_catalog.current_database()")
+                )
+                if database != _DEDICATED_DATABASE:
+                    pytest.fail(
+                        "Refusing PostgreSQL integration cleanup outside "
+                        f"{_DEDICATED_DATABASE!r}"
                     )
-                    if database != _DEDICATED_DATABASE:
-                        pytest.fail(
-                            "Refusing PostgreSQL integration cleanup outside "
-                            f"{_DEDICATED_DATABASE!r}"
-                        )
-                    await connection.execute(
-                        "DROP SCHEMA IF EXISTS dr_store CASCADE"
-                    )
-            await pool.close()
+                await connection.execute(
+                    text("DROP SCHEMA IF EXISTS dr_store CASCADE")
+                )
+                await connection.commit()
+        await engine.dispose()
+
+
+@pytest.fixture
+async def postgres_pool(postgres_engine: AsyncEngine) -> AsyncEngine:
+    return postgres_engine

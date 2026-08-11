@@ -22,7 +22,7 @@ document artifacts:
   supply the Object Store's atomic, append-only point and batch operations.
   `MemoryBackend` is process-local; `SqliteBackend` persists committed data for
   cross-process use; `PostgresBackend` shares committed data through a
-  caller-owned asynchronous PostgreSQL pool.
+  caller-owned SQLAlchemy asynchronous engine.
 - **[Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)**
   memoizes records under opaque caller-owned keys. Reads return typed hits;
   absent, missing, or unverifiable stored values are misses, while invalid
@@ -49,44 +49,60 @@ dr-store requires Python 3.12 or newer.
 python -m pip install dr-store
 ```
 
-PostgreSQL 16 through 18 installations use required `asyncpg` and an explicit,
-absent-only schema installation step. The caller creates and owns the pool;
-dr-store neither accepts a DSN nor closes the pool:
+PostgreSQL 16 through 18 installations use SQLAlchemy async with psycopg and an
+explicit, absent-only schema installation step. The caller creates and owns the
+engine; dr-store neither accepts a DSN nor disposes the engine:
 
 ```python
 import asyncio
 import os
 
-import asyncpg
+from sqlalchemy.ext.asyncio import create_async_engine
 
-from dr_store import ObjectStore, PostgresBackend, install_postgres
+from dr_store import (
+    ObjectStore,
+    POSTGRES_METADATA,
+    PostgresBackend,
+    install_postgres,
+)
 
 
 async def main() -> None:
-    pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
+    engine = create_async_engine(
+        os.environ["DATABASE_URL"].replace(
+            "postgresql://",
+            "postgresql+psycopg://",
+            1,
+        )
+    )
     try:
-        await install_postgres(pool)
-        backend = await PostgresBackend.open(pool)
+        await install_postgres(engine)
+        backend = await PostgresBackend.open(engine)
         store = ObjectStore(backend)
         reference, _ = await store.put(
             "example.note.v1", {"title": "hello"}
         )
         assert await store.get(reference) == {"title": "hello"}
     finally:
-        await pool.close()
+        await engine.dispose()
 
 
 asyncio.run(main())
 ```
 
-`install_postgres` is a one-time deployment operation that creates the fixed
-`dr_store` namespace, its tables, and the exact
+`POSTGRES_METADATA` exports the fixed `dr_store` table definitions for platform
+Alembic ownership. `install_postgres` is a one-time deployment operation that
+creates the namespace, its tables, and the exact
 `dr-store-postgresql-v1` schema-format marker in one transaction on a UTF-8
 database. Repeating installation is an error.
-`await PostgresBackend.open(pool)` validates that marker before returning a
+`await PostgresBackend.open(engine)` validates that marker before returning a
 backend for the same awaited point and batch operations as the other backends;
-it acquires and releases connections without closing the pool. Opening never
-installs, alters, adopts, or upgrades storage.
+it acquires and releases connections without disposing the engine. PostgreSQL
+backend methods accept an optional explicit SQLAlchemy Core connection so
+evidence reads and writes can join a caller-owned transaction; when provided,
+dr-store never commits that connection. Enlisted `get_bound_objects` observes
+one caller-transaction snapshot. Opening never installs, alters, adopts, or
+upgrades storage.
 
 ## Usage
 
@@ -110,7 +126,8 @@ asyncio.run(main())
 
 `await SqliteRecordCache.open(path)` is the paved persistent Record Cache. It
 returns only after its dedicated worker, connection, and schema are ready and
-closes those resources on normal or exceptional async context exit. When
+forwards optional `busy_timeout_ms` to the owned SQLite backend. It closes those
+resources on normal or exceptional async context exit. When
 cleanup succeeds, an exception from the context body is not suppressed;
 cleanup failure raises
 `SqliteRecordCacheCloseError`:
@@ -339,11 +356,59 @@ class Backend(Protocol):
 class MemoryBackend: ...
 class PostgresBackend:
     @classmethod
-    async def open(cls, pool: asyncpg.Pool) -> PostgresBackend: ...
+    async def open(
+        cls,
+        engine: AsyncEngine,
+        *,
+        batch_chunk_size: int = 512,
+    ) -> PostgresBackend: ...
+    async def put_object(
+        self,
+        *,
+        schema: str,
+        content_hash: str,
+        canonical: str,
+        connection: AsyncConnection | None = None,
+    ) -> PutOutcome: ...
+    async def bind(
+        self,
+        *,
+        key: str,
+        schema: str,
+        content_hash: str,
+        connection: AsyncConnection | None = None,
+    ) -> BindOutcome: ...
+    async def put_bound_objects(
+        self,
+        *,
+        entries: tuple[BoundObjectWrite, ...],
+        connection: AsyncConnection | None = None,
+    ) -> dict[str, BindOutcome]: ...
+    async def get_object(
+        self,
+        *,
+        schema: str,
+        content_hash: str,
+        connection: AsyncConnection | None = None,
+    ) -> tuple[str, str] | None: ...
+    async def get_binding(
+        self,
+        *,
+        key: str,
+        connection: AsyncConnection | None = None,
+    ) -> tuple[str, str] | None: ...
+    async def get_bound_objects(
+        self,
+        *,
+        keys: tuple[str, ...],
+        connection: AsyncConnection | None = None,
+    ) -> dict[str, BoundObjectRow]: ...
 
 class SqliteBackend:
     @classmethod
-    async def open(cls, path: str | Path) -> SqliteBackend: ...
+    async def open(
+        cls, path: str | Path, *, busy_timeout_ms: int = 30_000
+    ) -> SqliteBackend: ...
     async def aclose(self) -> None: ...
 ```
 
@@ -356,7 +421,7 @@ the backend does not promise power-loss durability.
 PostgreSQL batches deduplicate objects and keys, use bounded set-based
 statements, and fetch bindings separately from distinct referenced objects.
 Every non-empty PostgreSQL write batch uses one transaction. The backend owns
-neither installation nor pool lifecycle, validates the fixed schema format
+neither installation nor engine lifecycle, validates the fixed schema format
 during awaited open, and uses the fixed `dr_store` namespace regardless of the
 connection's search path.
 
@@ -396,7 +461,9 @@ class RecordCache:
 
 class SqliteRecordCache(RecordCache):
     @classmethod
-    async def open(cls, path: str | Path) -> SqliteRecordCache: ...
+    async def open(
+        cls, path: str | Path, *, busy_timeout_ms: int = 30_000
+    ) -> SqliteRecordCache: ...
     async def aclose(self) -> None: ...
 ```
 

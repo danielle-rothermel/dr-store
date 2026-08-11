@@ -82,7 +82,12 @@ def test_backend_public_surfaces_are_exact() -> None:
 
 
 def test_postgresql_public_surface_is_exact() -> None:
-    from dr_store import PostgresBackend, install_postgres
+    from dr_store import (
+        POSTGRES_METADATA,
+        POSTGRES_SCHEMA_FORMAT,
+        PostgresBackend,
+        install_postgres,
+    )
     from dr_store.storage_backends import (
         PostgresBackend as BackendType,
     )
@@ -95,10 +100,15 @@ def test_postgresql_public_surface_is_exact() -> None:
 
     assert backend_install is install_postgres
     assert BackendType is PostgresBackend
-    assert postgresql.__all__ == ["PostgresBackend", "install_postgres"]
+    assert postgresql.__all__ == [
+        "POSTGRES_METADATA",
+        "POSTGRES_SCHEMA_FORMAT",
+        "PostgresBackend",
+        "install_postgres",
+    ]
     assert inspect.iscoroutinefunction(install_postgres)
-    assert list(inspect.signature(install_postgres).parameters) == ["pool"]
-    assert list(inspect.signature(PostgresBackend).parameters) == ["pool"]
+    assert list(inspect.signature(install_postgres).parameters) == ["engine"]
+    assert list(inspect.signature(PostgresBackend).parameters) == ["engine"]
     public = {
         name for name in dir(PostgresBackend) if not name.startswith("_")
     }
@@ -116,7 +126,37 @@ def test_postgresql_public_surface_is_exact() -> None:
         inspect.iscoroutinefunction(getattr(PostgresBackend, name))
         for name in expected
     )
-    assert list(inspect.signature(PostgresBackend.open).parameters) == ["pool"]
+    open_parameters = list(inspect.signature(PostgresBackend.open).parameters)
+    assert open_parameters == ["engine", "batch_chunk_size"]
+    assert POSTGRES_SCHEMA_FORMAT == "dr-store-postgresql-v1"
+    assert POSTGRES_METADATA is postgresql.POSTGRES_METADATA
+
+
+def test_sqlite_backend_open_exposes_busy_timeout_knob() -> None:
+    from dr_store import SqliteBackend
+
+    assert (
+        "busy_timeout_ms" in inspect.signature(SqliteBackend.open).parameters
+    )
+
+
+def test_sqlite_record_cache_open_exposes_busy_timeout_knob() -> None:
+    from dr_store import SqliteRecordCache
+
+    assert (
+        "busy_timeout_ms"
+        in inspect.signature(SqliteRecordCache.open).parameters
+    )
+
+
+def test_postgres_backend_read_methods_expose_connection_kwarg() -> None:
+    from dr_store import PostgresBackend
+
+    for name in ("get_object", "get_binding", "get_bound_objects"):
+        assert (
+            "connection"
+            in inspect.signature(getattr(PostgresBackend, name)).parameters
+        )
 
 
 def test_record_cache_public_surface_is_exact() -> None:

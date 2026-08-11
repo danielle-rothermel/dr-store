@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
-import asyncpg
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    create_async_engine,
+)
 
 from dr_store import (
     BindOutcome,
@@ -14,6 +20,10 @@ from dr_store import (
     install_postgres,
 )
 from dr_store.storage_backends import postgresql
+from tests.storage_backends.conftest import _async_dsn
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 SCHEMA = "example.record"
 CONTENT_HASH = "a" * 64
@@ -23,49 +33,65 @@ WATCHDOG_SECONDS = 15
 
 @pytest.fixture
 async def postgres_backend(
-    postgres_pool: asyncpg.Pool,
+    postgres_engine: AsyncEngine,
 ) -> PostgresBackend:
-    await install_postgres(postgres_pool)
-    return await PostgresBackend.open(postgres_pool)
+    await install_postgres(postgres_engine)
+    return await PostgresBackend.open(postgres_engine)
 
 
 def test_direct_construction_is_not_public() -> None:
     with pytest.raises(
-        TypeError, match=r"use 'await PostgresBackend\.open\(pool\)'"
+        TypeError, match=r"use 'await PostgresBackend\.open\(engine\)'"
     ):
-        PostgresBackend(cast("asyncpg.Pool", object()))
+        PostgresBackend(cast("AsyncEngine", object()))
 
 
-async def test_open_rejects_non_pool_without_connection_work() -> None:
-    with pytest.raises(TypeError, match=r"pool must be an asyncpg\.Pool"):
-        await PostgresBackend.open(cast("asyncpg.Pool", object()))
+async def test_open_rejects_non_engine_without_connection_work() -> None:
+    with pytest.raises(
+        TypeError,
+        match=r"engine must be a sqlalchemy\.ext\.asyncio\.AsyncEngine",
+    ):
+        await PostgresBackend.open(cast("AsyncEngine", object()))
 
 
-async def test_direct_construction_rejects_a_real_pool(
-    postgres_pool: asyncpg.Pool,
+async def test_direct_construction_rejects_a_real_engine(
+    postgres_engine: AsyncEngine,
 ) -> None:
     with pytest.raises(
-        TypeError, match=r"use 'await PostgresBackend\.open\(pool\)'"
+        TypeError, match=r"use 'await PostgresBackend\.open\(engine\)'"
     ):
-        PostgresBackend(postgres_pool)
+        PostgresBackend(postgres_engine)
+
+
+async def test_open_rejects_nonpositive_batch_chunk_size(
+    postgres_engine: AsyncEngine,
+) -> None:
+    await install_postgres(postgres_engine)
+    with pytest.raises(ValueError, match="batch_chunk_size must be positive"):
+        await PostgresBackend.open(postgres_engine, batch_chunk_size=0)
+    with pytest.raises(ValueError, match="batch_chunk_size must be positive"):
+        await PostgresBackend.open(postgres_engine, batch_chunk_size=-1)
 
 
 async def test_missing_namespace_fails_without_implicit_installation(
-    postgres_pool: asyncpg.Pool,
+    postgres_engine: AsyncEngine,
 ) -> None:
-    with pytest.raises(asyncpg.UndefinedTableError):
-        await PostgresBackend.open(postgres_pool)
+    with pytest.raises(DBAPIError):
+        await PostgresBackend.open(postgres_engine)
 
-    async with postgres_pool.acquire() as connection:
-        assert not await connection.fetchval(
-            """
-            SELECT EXISTS(
-                SELECT 1
-                FROM pg_catalog.pg_namespace
-                WHERE pg_namespace.nspname = 'dr_store'
+    async with postgres_engine.connect() as connection:
+        present = await connection.scalar(
+            text(
+                """
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM pg_catalog.pg_namespace
+                    WHERE pg_namespace.nspname = 'dr_store'
+                )
+                """
             )
-            """
         )
+        assert present is False
 
 
 @pytest.mark.parametrize(
@@ -100,47 +126,52 @@ def test_schema_format_validation_requires_one_exact_marker(
     ],
 )
 async def test_open_rejects_incompatible_marker_without_modifying_storage(
-    postgres_pool: asyncpg.Pool,
+    postgres_engine: AsyncEngine,
     mutate_sql: str,
     stored_format: str | None,
 ) -> None:
-    await install_postgres(postgres_pool)
-    async with postgres_pool.acquire() as connection:
-        await connection.execute(mutate_sql)
+    await install_postgres(postgres_engine)
+    async with postgres_engine.begin() as connection:
+        await connection.execute(text(mutate_sql))
 
     with pytest.raises(
         RuntimeError,
         match="schema format marker is missing, malformed, or unsupported",
     ):
-        await PostgresBackend.open(postgres_pool)
+        await PostgresBackend.open(postgres_engine)
 
-    async with postgres_pool.acquire() as connection:
-        formats = await connection.fetch(
-            "SELECT format FROM dr_store.schema_format"
-        )
-        assert [row["format"] for row in formats] == (
-            [] if stored_format is None else [stored_format]
-        )
+    async with postgres_engine.connect() as connection:
+        formats = [
+            row["format"]
+            for row in (
+                await connection.execute(
+                    text("SELECT format FROM dr_store.schema_format")
+                )
+            ).mappings()
+        ]
+        assert formats == ([] if stored_format is None else [stored_format])
         assert (
-            await connection.fetchval(
-                "SELECT pg_catalog.count(*) FROM dr_store.objects"
+            await connection.scalar(
+                text("SELECT pg_catalog.count(*) FROM dr_store.objects")
             )
             == 0
         )
         assert (
-            await connection.fetchval(
-                "SELECT pg_catalog.count(*) FROM dr_store.bindings"
+            await connection.scalar(
+                text("SELECT pg_catalog.count(*) FROM dr_store.bindings")
             )
             == 0
         )
 
 
 async def test_backend_uses_qualified_tables_under_nondefault_search_path(
-    postgres_pool: asyncpg.Pool,
+    postgres_engine: AsyncEngine,
     postgres_backend: PostgresBackend,
 ) -> None:
-    async with postgres_pool.acquire() as connection:
-        assert await connection.fetchval("SHOW search_path") == "pg_catalog"
+    async with postgres_engine.connect() as connection:
+        assert (
+            await connection.scalar(text("SHOW search_path")) == "pg_catalog"
+        )
 
     outcome = await postgres_backend.put_object(
         schema=SCHEMA,
@@ -154,22 +185,24 @@ async def test_backend_uses_qualified_tables_under_nondefault_search_path(
     ) == (SCHEMA, CANONICAL)
 
 
-async def test_backend_does_not_stringify_retain_or_close_pool(
-    postgres_pool: asyncpg.Pool,
+async def test_backend_does_not_stringify_retain_or_dispose_engine(
+    postgres_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    await install_postgres(postgres_pool)
+    await install_postgres(postgres_engine)
 
-    def fail_stringification(_pool: asyncpg.Pool) -> str:
-        pytest.fail("backend stringified the caller-owned pool")
+    def fail_stringification(_engine: AsyncEngine) -> str:
+        pytest.fail("backend stringified the caller-owned engine")
 
-    monkeypatch.setattr(asyncpg.Pool, "__str__", fail_stringification)
-    backend = await PostgresBackend.open(postgres_pool)
-    assert backend.__dict__ == {"_pool": postgres_pool}
+    monkeypatch.setattr(AsyncEngine, "__str__", fail_stringification)
+    backend = await PostgresBackend.open(postgres_engine)
+    assert backend.__dict__ == {
+        "_engine": postgres_engine,
+        "_batch_chunk_size": 512,
+    }
     assert await backend.get_binding(key="missing") is None
-    assert not postgres_pool.is_closing()
-    async with postgres_pool.acquire() as connection:
-        assert await connection.fetchval("SELECT 1") == 1
+    async with postgres_engine.connect() as connection:
+        assert await connection.scalar(text("SELECT 1")) == 1
 
 
 async def test_exact_text_identity_through_backend(
@@ -198,18 +231,17 @@ async def test_exact_text_identity_through_backend(
     } == {value: (value, value, f'{{"schema":"{value}"}}') for value in values}
 
 
-async def test_committed_rows_are_visible_through_independent_pools(
+async def test_committed_rows_are_visible_through_independent_engines(
     postgres_backend: PostgresBackend,
 ) -> None:
-    connection_string = os.environ["DR_STORE_POSTGRES_DSN"]
-    independent_pool = await asyncpg.create_pool(
-        connection_string,
-        min_size=1,
-        max_size=2,
-        server_settings={"search_path": "public"},
+    independent_engine = create_async_engine(
+        _async_dsn(os.environ["DR_STORE_POSTGRES_DSN"]),
+        pool_size=2,
+        max_overflow=0,
+        connect_args={"options": "-c search_path=public"},
     )
     try:
-        second = await PostgresBackend.open(independent_pool)
+        second = await PostgresBackend.open(independent_engine)
         assert (
             await postgres_backend.bind(
                 key="shared",
@@ -233,39 +265,72 @@ async def test_committed_rows_are_visible_through_independent_pools(
             CONTENT_HASH,
         )
     finally:
-        await independent_pool.close()
+        await independent_engine.dispose()
 
 
 async def _wait_until_insert_is_lock_blocked(
-    connection: asyncpg.Connection,
+    connection: AsyncConnection,
 ) -> None:
     async def observe() -> None:
-        while not await connection.fetchval(
-            """
-            SELECT pg_catalog.bool_or(
-                activity.wait_event_type = 'Lock'
+        while not await connection.scalar(
+            text(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_locks AS locks
+                    WHERE locks.relation = 'dr_store.objects'::regclass
+                        AND NOT locks.granted
+                )
+                """
             )
-            FROM pg_catalog.pg_stat_activity AS activity
-            WHERE activity.datname = pg_catalog.current_database()
-                AND activity.query LIKE
-                    '%INSERT INTO dr_store.objects%'
-                AND activity.pid <> pg_catalog.pg_backend_pid()
-            """
         ):
             continue
 
     await asyncio.wait_for(observe(), WATCHDOG_SECONDS)
 
 
-async def test_cancelled_locked_write_releases_connection_for_pool_reuse(
-    postgres_pool: asyncpg.Pool,
+async def test_cancelled_open_releases_connection_for_engine_reuse(
+    postgres_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await install_postgres(postgres_engine)
+    gate = asyncio.Event()
+    gated_calls = 0
+
+    original_fetch = postgresql._fetch
+
+    async def gated_fetch(
+        connection: AsyncConnection,
+        query: str,
+        parameters: dict[str, object] | None = None,
+    ) -> list[Mapping[str, object]]:
+        nonlocal gated_calls
+        if "schema_format" in query:
+            gated_calls += 1
+            if gated_calls == 1:
+                await gate.wait()
+        return await original_fetch(connection, query, parameters)
+
+    monkeypatch.setattr(postgresql, "_fetch", gated_fetch)
+    operation = asyncio.create_task(PostgresBackend.open(postgres_engine))
+    await asyncio.sleep(0)
+    operation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+
+    assert gated_calls == 1
+    backend = await PostgresBackend.open(postgres_engine)
+    assert await backend.get_binding(key="missing") is None
+
+
+async def test_cancelled_locked_write_releases_connection_for_engine_reuse(
+    postgres_engine: AsyncEngine,
     postgres_backend: PostgresBackend,
 ) -> None:
-    async with postgres_pool.acquire() as blocker:
-        transaction = blocker.transaction()
-        await transaction.start()
+    async with postgres_engine.connect() as blocker:
+        await blocker.execute(text("BEGIN"))
         await blocker.execute(
-            "LOCK TABLE dr_store.objects IN ACCESS EXCLUSIVE MODE"
+            text("LOCK TABLE dr_store.objects IN ACCESS EXCLUSIVE MODE")
         )
         operation = asyncio.create_task(
             postgres_backend.put_object(
@@ -274,14 +339,13 @@ async def test_cancelled_locked_write_releases_connection_for_pool_reuse(
                 canonical=CANONICAL,
             )
         )
-        async with postgres_pool.acquire() as observer:
+        async with postgres_engine.connect() as observer:
             await _wait_until_insert_is_lock_blocked(observer)
         operation.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(operation, WATCHDOG_SECONDS)
-        await transaction.rollback()
+        await blocker.execute(text("ROLLBACK"))
 
-    assert postgres_pool.get_idle_size() == postgres_pool.get_size()
     assert (
         await postgres_backend.put_object(
             schema=SCHEMA,
@@ -291,164 +355,164 @@ async def test_cancelled_locked_write_releases_connection_for_pool_reuse(
     ).inserted
 
 
-async def test_cancellation_waits_for_connection_release_before_terminating(
-    postgres_pool: asyncpg.Pool,
+async def test_enlisted_write_is_not_visible_before_caller_commits(
+    postgres_engine: AsyncEngine,
+    postgres_backend: PostgresBackend,
 ) -> None:
-    await install_postgres(postgres_pool)
-    release_started = asyncio.Event()
-    allow_release = asyncio.Event()
-    gate_enabled = False
-
-    async def gated_reset(_connection: asyncpg.Connection) -> None:
-        if gate_enabled:
-            release_started.set()
-            await allow_release.wait()
-
-    pool = await asyncpg.create_pool(
-        os.environ["DR_STORE_POSTGRES_DSN"],
-        min_size=1,
-        max_size=1,
-        reset=gated_reset,
-        server_settings={"search_path": "pg_catalog"},
-    )
-    try:
-        gate_enabled = True
-        operation = asyncio.create_task(PostgresBackend.open(pool))
-        await asyncio.wait_for(release_started.wait(), WATCHDOG_SECONDS)
-
-        operation.cancel()
-        cancellation_observed = asyncio.Event()
-        asyncio.get_running_loop().call_soon(cancellation_observed.set)
-        await cancellation_observed.wait()
-        assert not operation.done()
-
-        operation.cancel()
-        repeated_cancellation_observed = asyncio.Event()
-        asyncio.get_running_loop().call_soon(
-            repeated_cancellation_observed.set
+    async with postgres_engine.connect() as connection, connection.begin():
+        outcome = await postgres_backend.put_object(
+            schema=SCHEMA,
+            content_hash=CONTENT_HASH,
+            canonical=CANONICAL,
+            connection=connection,
         )
-        await repeated_cancellation_observed.wait()
-        assert not operation.done()
+        assert outcome.inserted
+        assert (
+            await postgres_backend.get_object(
+                schema=SCHEMA,
+                content_hash=CONTENT_HASH,
+            )
+            is None
+        )
+        assert await postgres_backend.get_object(
+            schema=SCHEMA,
+            content_hash=CONTENT_HASH,
+            connection=connection,
+        ) == (SCHEMA, CANONICAL)
+        row = await connection.scalar(
+            text(
+                """
+                    SELECT canonical
+                    FROM dr_store.objects
+                    WHERE content_hash = :content_hash
+                        AND schema = :schema
+                    """
+            ),
+            {
+                "content_hash": CONTENT_HASH,
+                "schema": SCHEMA,
+            },
+        )
+        assert row == CANONICAL
 
-        allow_release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(operation, WATCHDOG_SECONDS)
-        assert pool.get_idle_size() == 1
-        gate_enabled = False
-        backend = await PostgresBackend.open(pool)
-        assert await backend.get_binding(key="missing") is None
-    finally:
-        allow_release.set()
-        await pool.close()
+    assert await postgres_backend.get_object(
+        schema=SCHEMA,
+        content_hash=CONTENT_HASH,
+    ) == (SCHEMA, CANONICAL)
 
 
-async def test_release_failure_is_cause_of_postgresql_cancellation(
-    postgres_pool: asyncpg.Pool,
+async def test_enlisted_write_does_not_commit_or_close_caller_connection(
+    postgres_engine: AsyncEngine,
+    postgres_backend: PostgresBackend,
 ) -> None:
-    await install_postgres(postgres_pool)
-    release_started = asyncio.Event()
-    allow_release = asyncio.Event()
-    reset_failure = RuntimeError("injected reset failure")
-    gate_enabled = False
+    async with postgres_engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            await postgres_backend.bind(
+                key="enlisted",
+                schema=SCHEMA,
+                content_hash=CONTENT_HASH,
+                connection=connection,
+            )
+            assert await postgres_backend.get_binding(key="enlisted") is None
+            assert await postgres_backend.get_binding(
+                key="enlisted",
+                connection=connection,
+            ) == (SCHEMA, CONTENT_HASH)
+            await transaction.rollback()
+        finally:
+            assert not connection.closed
+            await connection.close()
 
-    async def failing_reset(_connection: asyncpg.Connection) -> None:
-        if gate_enabled:
-            release_started.set()
-            await allow_release.wait()
-            raise reset_failure
+    assert await postgres_backend.get_binding(key="enlisted") is None
 
-    pool = await asyncpg.create_pool(
-        os.environ["DR_STORE_POSTGRES_DSN"],
-        min_size=1,
-        max_size=1,
-        reset=failing_reset,
-        server_settings={"search_path": "pg_catalog"},
+
+async def test_enlisted_batch_read_sees_snapshot_before_caller_commits(
+    postgres_engine: AsyncEngine,
+    postgres_backend: PostgresBackend,
+) -> None:
+    entry = BoundObjectWrite(
+        key="batch-enlisted",
+        schema=SCHEMA,
+        content_hash=CONTENT_HASH,
+        canonical=CANONICAL,
     )
-    try:
-        backend = await PostgresBackend.open(pool)
-        gate_enabled = True
-        operation = asyncio.create_task(backend.get_binding(key="missing"))
-        await asyncio.wait_for(release_started.wait(), WATCHDOG_SECONDS)
-        operation.cancel()
-        cancellation_observed = asyncio.Event()
-        asyncio.get_running_loop().call_soon(cancellation_observed.set)
-        await cancellation_observed.wait()
-        assert not operation.done()
-
-        allow_release.set()
-        with pytest.raises(asyncio.CancelledError) as caught:
-            await asyncio.wait_for(operation, WATCHDOG_SECONDS)
-        assert caught.value.__cause__ is reset_failure
-
-        gate_enabled = False
-        assert await backend.get_binding(key="missing") is None
-    finally:
-        gate_enabled = False
-        allow_release.set()
-        await pool.close()
-
-
-async def test_settlement_preserves_simultaneous_failure() -> None:
-    started = asyncio.Event()
-    release = asyncio.Event()
-    failure = RuntimeError("inner task failed")
-
-    async def fail() -> None:
-        started.set()
-        await release.wait()
-        raise failure
-
-    inner = asyncio.create_task(fail())
-    waiter: asyncio.Task[postgresql._Settled[None]]
-
-    def cancel_waiter(_completed: asyncio.Task[None]) -> None:
-        waiter.cancel()
-
-    inner.add_done_callback(cancel_waiter)
-    waiter = asyncio.create_task(
-        postgresql._settle_task(
-            inner,
-            cancel_on_cancellation=False,
+    async with postgres_engine.connect() as connection, connection.begin():
+        await postgres_backend.put_bound_objects(
+            entries=(entry,),
+            connection=connection,
         )
-    )
-    await started.wait()
-    release.set()
+        assert (
+            await postgres_backend.get_bound_objects(keys=("batch-enlisted",))
+            == {}
+        )
+        rows = await postgres_backend.get_bound_objects(
+            keys=("batch-enlisted",),
+            connection=connection,
+        )
+        assert rows["batch-enlisted"].canonical == CANONICAL
+        assert rows["batch-enlisted"].binding_content_hash == CONTENT_HASH
 
-    settled = await waiter
-    assert isinstance(settled.cancellation, asyncio.CancelledError)
-    assert settled.failure is failure
+
+async def test_enlisted_read_does_not_close_caller_connection(
+    postgres_engine: AsyncEngine,
+    postgres_backend: PostgresBackend,
+) -> None:
+    async with postgres_engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            await postgres_backend.put_object(
+                schema=SCHEMA,
+                content_hash=CONTENT_HASH,
+                canonical=CANONICAL,
+                connection=connection,
+            )
+            assert await postgres_backend.get_object(
+                schema=SCHEMA,
+                content_hash=CONTENT_HASH,
+                connection=connection,
+            ) == (SCHEMA, CANONICAL)
+            await transaction.rollback()
+        finally:
+            assert not connection.closed
+            await connection.close()
 
 
 async def test_batch_statements_scale_with_chunks_and_distinct_objects(
-    postgres_backend: PostgresBackend,
+    postgres_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    await install_postgres(postgres_engine)
+    backend = await PostgresBackend.open(
+        postgres_engine,
+        batch_chunk_size=512,
+    )
     statements: list[str] = []
     fetched_object_rows: list[int] = []
-    execute = postgres_backend._execute
-    fetch = postgres_backend._fetch
+    execute = postgresql._execute
+    fetch = postgresql._fetch
 
     async def counted_execute(
-        connection: asyncpg.Connection,
+        connection: AsyncConnection,
         query: str,
-        *args: object,
-    ) -> str:
+        parameters: dict[str, object] | None = None,
+    ) -> None:
         statements.append(query)
-        return await execute(connection, query, *args)
+        await execute(connection, query, parameters)
 
     async def counted_fetch(
-        connection: asyncpg.Connection,
+        connection: AsyncConnection,
         query: str,
-        *args: object,
-    ) -> list[asyncpg.Record]:
+        parameters: dict[str, object] | None = None,
+    ) -> list[Mapping[str, object]]:
         statements.append(query)
-        rows = await fetch(connection, query, *args)
+        rows = await fetch(connection, query, parameters)
         if query == postgresql._FETCH_OBJECTS_SQL:
             fetched_object_rows.append(len(rows))
         return rows
 
-    monkeypatch.setattr(postgres_backend, "_execute", counted_execute)
-    monkeypatch.setattr(postgres_backend, "_fetch", counted_fetch)
+    monkeypatch.setattr(postgresql, "_execute", counted_execute)
+    monkeypatch.setattr(postgresql, "_fetch", counted_fetch)
 
     repeated = BoundObjectWrite(
         key="repeated-0",
@@ -471,14 +535,14 @@ async def test_batch_statements_scale_with_chunks_and_distinct_objects(
             canonical='{"value":"other"}',
         ),
     )
-    assert len(await postgres_backend.put_bound_objects(entries=small)) == 3
+    assert len(await backend.put_bound_objects(entries=small)) == 3
     assert len(statements) == 4
 
     statements.clear()
     fetched_object_rows.clear()
     assert (
         len(
-            await postgres_backend.get_bound_objects(
+            await backend.get_bound_objects(
                 keys=tuple(entry.key for entry in small)
             )
         )
@@ -488,7 +552,7 @@ async def test_batch_statements_scale_with_chunks_and_distinct_objects(
     assert fetched_object_rows == [2]
 
     statements.clear()
-    count = postgresql._BATCH_CHUNK_SIZE + 1
+    count = 513
     many = tuple(
         BoundObjectWrite(
             key=f"many-{index}",
@@ -498,7 +562,7 @@ async def test_batch_statements_scale_with_chunks_and_distinct_objects(
         )
         for index in range(count)
     )
-    outcomes = await postgres_backend.put_bound_objects(entries=many)
+    outcomes = await backend.put_bound_objects(entries=many)
     assert len(outcomes) == count
     assert len(statements) == 8
 

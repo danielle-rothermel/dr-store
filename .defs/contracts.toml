@@ -365,13 +365,19 @@ check = "uv run pytest -q tests/record_cache/test_sqlite_cache.py tests/storage_
 [[contracts]]
 title = "PostgreSQL preserves the asynchronous backend contract"
 statement = """
-`PostgresBackend.open(pool)` validates the installed schema format before \
+`PostgresBackend.open(engine)` validates the installed schema format before \
 returning a backend that supplies the awaited point and batch object and \
 binding operations with the same typed outcomes and shared schema and key text \
 domains as every other backend. Each non-empty write batch uses one database \
-transaction, preserves the backend cancellation and exact-replay contract, and \
-makes committed rows available to independently running clients without \
-exposing a PostgreSQL-specific object-store or record-cache API."""
+transaction on the auto-commit path, preserves exact replay, releases \
+connections acquired on that path before the operation completes, and makes \
+committed rows available to independently running clients without exposing a \
+PostgreSQL-specific object-store or record-cache API. An optional explicit Core \
+connection on any backend operation runs on the caller-owned transaction \
+boundary without commit, rollback, or connection release. Enlisted \
+`get_bound_objects` reads bindings and objects on that connection and observes \
+one caller-transaction snapshot, including uncommitted writes in that \
+transaction."""
 rationale = """
 A shared deployment changes persistence scope and contention mechanism, not the \
 observable storage model. One conformance suite across every backend prevents \
@@ -595,46 +601,52 @@ check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bu
 title = "PostgreSQL schema installation is explicit"
 statement = """
 PostgreSQL schema installation occurs only through the public asynchronous \
-`install_postgres(pool)` operation against a caller-owned `asyncpg.Pool`. It \
-supports PostgreSQL 16 through 18 databases whose server encoding is UTF-8, \
-requires the fixed `dr_store` namespace to be absent, and creates that namespace \
-and all storage tables together with exactly one schema-format marker row in \
-one transaction. The marker is exactly `dr-store-postgresql-v1`, and its \
-persisted literal is pinned by a golden contract test. A repeated installation \
-fails visibly rather than adopting or verifying existing objects. Direct \
-`PostgresBackend(...)` construction is unsupported; \
-`await PostgresBackend.open(pool)` returns only after reading and exactly \
-validating the marker. A missing, malformed, or unsupported marker fails before \
-the backend can perform ordinary storage work. Opening and ordinary operations \
-never create, alter, adopt, or upgrade storage. The namespace is not \
-configurable, and the storage contract defines no schema inspection framework, \
+`install_postgres(engine)` operation against a caller-owned SQLAlchemy \
+`AsyncEngine`. It supports PostgreSQL 16 through 18 databases whose server \
+encoding is UTF-8, requires the fixed `dr_store` namespace to be absent, and \
+creates that namespace and all storage tables together with exactly one \
+schema-format marker row in one transaction from exported SQLAlchemy metadata. \
+The marker is exactly `dr-store-postgresql-v1`, and its persisted literal is \
+pinned by a golden contract test. A repeated installation fails visibly rather \
+than adopting or verifying existing objects. Direct `PostgresBackend(...)` \
+construction is unsupported; `await PostgresBackend.open(engine)` returns only \
+after reading and exactly validating the marker. A missing, malformed, or \
+unsupported marker fails before the backend can perform ordinary storage work. \
+Opening and ordinary operations never create, alter, adopt, or upgrade \
+storage. The namespace is not configurable, dr-store ships no migration chain \
+of its own, and the storage contract defines no schema inspection framework, \
 compatibility negotiation, migration, or upgrade path."""
 rationale = """
 Explicit installation keeps deployment privileges and failure recovery outside \
 arbitrary application startup. One absent-only namespace gives installation a \
 deterministic ownership boundary, while one exact persisted marker prevents an \
-incompatible schema from being used silently. Migration machinery remains \
-outside this capability until an actual schema evolution requires a separately \
-reviewed contract."""
+incompatible schema from being used silently. Exported metadata lets platform \
+Alembic own migration orchestration without dr-store carrying a second chain."""
 date = "2026-08-08"
 check = "scripts/test-postgres.sh"
 
 [[contracts]]
-title = "PostgreSQL uses one concrete caller-owned async pool"
+title = "PostgreSQL uses one caller-owned engine and optional enlisted connections"
 statement = """
-`asyncpg>=0.31.0` is a required runtime dependency. `PostgresBackend` accepts a \
-concrete caller-owned `asyncpg.Pool` only through its awaited `open` operation \
-as its sole connection source. It awaits release of every connection it \
-acquires during opening or an ordinary operation but never closes the \
-caller-owned pool or governs resources owned by another backend instance or \
-process. The backend defines no custom connection-source Protocol, optional \
-import or dependency path, DSN acceptance or ownership, synchronous source, \
-second ownership mode, or source-lifecycle API."""
+`sqlalchemy[asyncio]` and `psycopg` are required runtime dependencies. \
+`PostgresBackend` accepts a caller-owned SQLAlchemy `AsyncEngine` only through \
+its awaited `open` operation as its default connection source. Backend \
+operations optionally accept one explicit SQLAlchemy Core `AsyncConnection`; \
+when provided, the operation runs on it and never commits, rolls back, or \
+releases it. Enlisted `get_bound_objects` fetches bindings and referenced \
+objects on that connection and observes one caller-transaction snapshot, \
+including uncommitted writes in that transaction. When absent, the backend \
+acquires a connection, uses one transaction for non-empty writes, and releases \
+the connection before the operation completes. The backend never closes or \
+disposes the caller-owned engine. It defines no custom connection-source \
+Protocol, DSN acceptance or ownership, synchronous source, managed-source \
+lifecycle API, ambient transaction context, ORM Session surface, or \
+distributed-transaction machinery."""
 rationale = """
-A single concrete caller-owned boundary avoids freezing an adapter abstraction \
-before a second implementation exists and avoids parallel import, construction, \
-shutdown, and failure semantics for an optional or managed source."""
-date = "2026-08-08"
+One engine boundary matches platform ownership while a narrow per-call enlisted \
+connection supports ledger-coordinated evidence reads and writes without \
+inventing a general adapter framework or a second managed lifecycle."""
+date = "2026-08-11"
 check = "scripts/test-postgres.sh"
 
 [[contracts]]
@@ -677,7 +689,7 @@ check = "scripts/test-postgres.sh"
 [[contracts]]
 title = "PostgreSQL credentials remain at the connection boundary"
 statement = """
-The PostgreSQL API accepts only the caller-owned pool and never accepts, \
+The PostgreSQL API accepts only the caller-owned engine and never accepts, \
 stringifies, or retains a DSN or other credential-bearing connection value. It \
 does not include one in representations, messages, logs, storage identities, or \
 metadata that dr-store constructs. Driver exceptions remain available as causes \
