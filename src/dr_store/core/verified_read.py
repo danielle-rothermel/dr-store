@@ -89,48 +89,59 @@ def _require_descriptor_support() -> None:
         )
 
 
-def _read_pinned_child(
-    directory: Path,
-    name: str,
-    *,
-    child_path: Path,
-    max_bytes: int,
-) -> tuple[bytearray, hashlib._Hash]:
-    directory_descriptor: int | None = None
-    child_descriptor: int | None = None
-    digest = hashlib.sha256()
+def _read_bounded_descriptor(child_descriptor: int, max_bytes: int) -> bytes:
     chunks = bytearray()
+    limit = max_bytes + 1
     try:
-        directory_descriptor = os.open(directory, _directory_flags())
-        child_descriptor = os.open(
-            name,
-            _child_flags(),
-            dir_fd=directory_descriptor,
-        )
-        metadata = os.fstat(child_descriptor)
-        _require_regular_file(metadata, child_path=child_path)
-        limit = max_bytes + 1
         while len(chunks) < limit:
             requested = min(_READ_CHUNK_BYTES, limit - len(chunks))
             chunk = os.read(child_descriptor, requested)
             if not chunk:
                 break
             chunks.extend(chunk)
-            digest.update(chunk)
-    except VerifiedRegularChildReadError:
-        raise
     except (NotImplementedError, OSError) as exc:
         raise VerifiedRegularChildReadError(
-            f"could not read child {str(child_path)!r}"
+            "could not read bounded child descriptor"
         ) from exc
-    finally:
-        if child_descriptor is not None:
-            with suppress(OSError):
-                os.close(child_descriptor)
-        if directory_descriptor is not None:
-            with suppress(OSError):
-                os.close(directory_descriptor)
-    return chunks, digest
+    if len(chunks) > max_bytes:
+        raise VerifiedRegularChildReadError(
+            f"bounded read exceeds the {max_bytes}-byte limit"
+        )
+    return bytes(chunks)
+
+
+def _verify_bounded_descriptor(
+    child_descriptor: int,
+    *,
+    max_bytes: int,
+    expected_byte_length: int,
+    expected_sha256: str,
+    child_path: Path | None = None,
+) -> bytes:
+    _validate_read_arguments(
+        max_bytes=max_bytes,
+        expected_byte_length=expected_byte_length,
+        expected_sha256=expected_sha256,
+    )
+    raw = _read_bounded_descriptor(child_descriptor, max_bytes)
+    actual_length = len(raw)
+    subject = (
+        f"child {str(child_path)!r}"
+        if child_path is not None
+        else "bounded read"
+    )
+    if actual_length != expected_byte_length:
+        raise VerifiedRegularChildReadError(
+            f"{subject} length mismatch: expected "
+            f"{expected_byte_length} bytes, stored {actual_length}"
+        )
+    actual_sha256 = hashlib.sha256(raw).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise VerifiedRegularChildReadError(
+            f"{subject} hash mismatch: expected "
+            f"{expected_sha256}, computed {actual_sha256}"
+        )
+    return raw
 
 
 def read_verified_regular_child(
@@ -154,27 +165,43 @@ def read_verified_regular_child(
         error=VerifiedRegularChildReadError,
     )
     _require_descriptor_support()
-    chunks, digest = _read_pinned_child(
-        directory,
-        name,
-        child_path=child_path,
-        max_bytes=max_bytes,
-    )
-    actual_length = len(chunks)
-    if actual_length > max_bytes:
-        raise VerifiedRegularChildReadError(
-            f"child {str(child_path)!r} exceeds the "
-            f"{max_bytes}-byte read bound"
+    directory_descriptor: int | None = None
+    child_descriptor: int | None = None
+    try:
+        directory_descriptor = os.open(directory, _directory_flags())
+        child_descriptor = os.open(
+            name,
+            _child_flags(),
+            dir_fd=directory_descriptor,
         )
-    if actual_length != expected_byte_length:
-        raise VerifiedRegularChildReadError(
-            f"child {str(child_path)!r} length mismatch: expected "
-            f"{expected_byte_length} bytes, stored {actual_length}"
+        metadata = os.fstat(child_descriptor)
+        _require_regular_file(metadata, child_path=child_path)
+        return _verify_bounded_descriptor(
+            child_descriptor,
+            max_bytes=max_bytes,
+            expected_byte_length=expected_byte_length,
+            expected_sha256=expected_sha256,
+            child_path=child_path,
         )
-    actual_sha256 = digest.hexdigest()
-    if actual_sha256 != expected_sha256:
+    except VerifiedRegularChildReadError as exc:
+        if str(exc).startswith("bounded read exceeds the"):
+            raise VerifiedRegularChildReadError(
+                f"child {str(child_path)!r} exceeds the "
+                f"{max_bytes}-byte read bound"
+            ) from exc
+        if str(exc) == "could not read bounded child descriptor":
+            raise VerifiedRegularChildReadError(
+                f"could not read child {str(child_path)!r}"
+            ) from exc.__cause__
+        raise
+    except (NotImplementedError, OSError) as exc:
         raise VerifiedRegularChildReadError(
-            f"child {str(child_path)!r} hash mismatch: expected "
-            f"{expected_sha256}, computed {actual_sha256}"
-        )
-    return bytes(chunks)
+            f"could not read child {str(child_path)!r}"
+        ) from exc
+    finally:
+        if child_descriptor is not None:
+            with suppress(OSError):
+                os.close(child_descriptor)
+        if directory_descriptor is not None:
+            with suppress(OSError):
+                os.close(directory_descriptor)
