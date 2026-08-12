@@ -92,6 +92,39 @@ class ObjectStore:
             content_hash=reference.content_hash,
         )
 
+    def _verified_hits_from_bound_rows(
+        self,
+        *,
+        validated_schema: str,
+        distinct: tuple[str, ...],
+        rows: Mapping[str, BoundObjectRow],
+    ) -> dict[str, StoreHit | None]:
+        results: dict[str, StoreHit | None] = {}
+        for key in distinct:
+            row = rows.get(key)
+            if row is None:
+                results[key] = None
+                continue
+            reference = ObjectReference(
+                schema=row.binding_schema,
+                content_hash=row.binding_content_hash,
+            )
+            if reference.schema != validated_schema:
+                raise SchemaMismatchError(
+                    expected=validated_schema,
+                    actual=reference.schema,
+                )
+            if row.canonical is None:
+                raise ObjectNotFoundError(reference=reference)
+            results[key] = StoreHit(
+                record=self.verify_stored_record(
+                    reference=reference,
+                    stored_schema=row.binding_schema,
+                    canonical=row.canonical,
+                )
+            )
+        return results
+
     async def put(
         self,
         schema: str,
@@ -142,6 +175,27 @@ class ObjectStore:
         stored = await self._backend.get_object(
             schema=reference.schema,
             content_hash=reference.content_hash,
+        )
+        if stored is None:
+            raise ObjectNotFoundError(reference=reference)
+        stored_schema, canonical = stored
+        return self.verify_stored_record(
+            reference=reference,
+            stored_schema=stored_schema,
+            canonical=canonical,
+        )
+
+    def get_enlisted(
+        self,
+        connection: Connection,
+        reference: ObjectReference,
+    ) -> Jsonable:
+        """Read and verify one object on a caller-owned connection."""
+        backend = self._require_postgres_backend()
+        stored = backend.get_object_enlisted(
+            schema=reference.schema,
+            content_hash=reference.content_hash,
+            connection=connection,
         )
         if stored is None:
             raise ObjectNotFoundError(reference=reference)
@@ -212,31 +266,28 @@ class ObjectStore:
         validated_schema = validate_reference_schema(schema)
         distinct = tuple(dict.fromkeys(keys))
         rows = await self.get_bound_objects(distinct)
-        results: dict[str, StoreHit | None] = {}
-        for key in distinct:
-            row = rows.get(key)
-            if row is None:
-                results[key] = None
-                continue
-            reference = ObjectReference(
-                schema=row.binding_schema,
-                content_hash=row.binding_content_hash,
-            )
-            if reference.schema != validated_schema:
-                raise SchemaMismatchError(
-                    expected=validated_schema,
-                    actual=reference.schema,
-                )
-            if row.canonical is None:
-                raise ObjectNotFoundError(reference=reference)
-            results[key] = StoreHit(
-                record=self.verify_stored_record(
-                    reference=reference,
-                    stored_schema=row.binding_schema,
-                    canonical=row.canonical,
-                )
-            )
-        return results
+        return self._verified_hits_from_bound_rows(
+            validated_schema=validated_schema,
+            distinct=distinct,
+            rows=rows,
+        )
+
+    def get_many_enlisted(
+        self,
+        connection: Connection,
+        keys: Iterable[str],
+        *,
+        schema: str,
+    ) -> dict[str, StoreHit | None]:
+        """Return verified hits or unbound ``None`` per key on a connection."""
+        validated_schema = validate_reference_schema(schema)
+        distinct = tuple(dict.fromkeys(keys))
+        rows = self.get_bound_objects_enlisted(connection, distinct)
+        return self._verified_hits_from_bound_rows(
+            validated_schema=validated_schema,
+            distinct=distinct,
+            rows=rows,
+        )
 
     async def put_many(
         self,
@@ -392,6 +443,19 @@ class ObjectStore:
     async def resolve(self, key: str) -> ObjectReference | None:
         validate_binding_key(key)
         bound = await self._backend.get_binding(key=key)
+        if bound is None:
+            return None
+        return ObjectReference(schema=bound[0], content_hash=bound[1])
+
+    def resolve_enlisted(
+        self,
+        connection: Connection,
+        key: str,
+    ) -> ObjectReference | None:
+        """Resolve one binding on a caller-owned connection."""
+        validate_binding_key(key)
+        backend = self._require_postgres_backend()
+        bound = backend.get_binding_enlisted(key=key, connection=connection)
         if bound is None:
             return None
         return ObjectReference(schema=bound[0], content_hash=bound[1])

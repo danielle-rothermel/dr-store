@@ -16,8 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   caller-owned SQLAlchemy Core `Connection` without commit, rollback, or
   release.
 - Added sync `ObjectStore` enlisted helpers (`put_enlisted`, `bind_enlisted`,
-  `put_many_enlisted`, `get_bound_objects_enlisted`) for ledger-coordinated
-  checkpoint writes.
+  `put_many_enlisted`, `get_bound_objects_enlisted`, `get_enlisted`,
+  `get_many_enlisted`, `resolve_enlisted`) for ledger-coordinated checkpoint
+  writes and caller-owned sync reads.
 - Added pinned object-reference wire format via `OBJECT_REFERENCE_PREFIX`,
   `format_object_reference`, and `parse_object_reference`.
 

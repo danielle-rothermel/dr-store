@@ -127,8 +127,10 @@ database. Repeating installation is an error.
 `PostgresBackend.open_sync(engine)` or `await PostgresBackend.open(engine)`
 validates that marker before returning a backend. Backends opened with
 ``open_sync`` support sync enlisted methods and raise on awaited auto-acquire
-operations; backends opened with ``open`` support both paths.
-PostgreSQL sync enlisted methods accept an explicit SQLAlchemy Core
+operations; backends opened with ``open`` support both paths. Sync enlisted
+read helpers (`get_enlisted`, `get_many_enlisted`, `resolve_enlisted`) mirror
+the async Object Store read surface on a caller-opened connection, including
+outside checkpoint transactions. PostgreSQL sync enlisted methods accept an
 ``Connection`` so evidence reads and writes can join a caller-owned checkpoint
 transaction; dr-store never commits that connection. Enlisted
 ``get_bound_objects_enlisted`` observes one caller-transaction snapshot.
@@ -331,6 +333,15 @@ class ObjectStore:
     def get_bound_objects_enlisted(
         self, connection: Connection, keys: Iterable[str]
     ) -> Mapping[str, BoundObjectRow]: ...
+    def get_enlisted(
+        self, connection: Connection, reference: ObjectReference
+    ) -> Jsonable: ...
+    def get_many_enlisted(
+        self, connection: Connection, keys: Iterable[str], *, schema: str
+    ) -> dict[str, StoreHit | None]: ...
+    def resolve_enlisted(
+        self, connection: Connection, key: str
+    ) -> ObjectReference | None: ...
 ```
 
 `get_bound_objects` deduplicates requested keys and returns joined binding/object

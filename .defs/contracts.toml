@@ -431,12 +431,13 @@ PostgreSQL-specific record-cache API or async enlisted auto-acquire hooks. Sync 
 enlisted methods accept one explicit SQLAlchemy Core ``Connection`` and run on \
 the caller-owned transaction boundary without commit, rollback, or connection \
 release. ``ObjectStore`` exposes sync enlisted helpers that require \
-``PostgresBackend`` as the checkpoint integration surface. Enlisted \
-``get_bound_objects_enlisted`` reads bindings and objects on that connection \
-and observes one caller-transaction snapshot, including uncommitted writes in \
-that transaction. Enlisted writes share the caller transaction; dr-store \
-defines no savepoint API, so an evidence persistence failure aborts the \
-enclosing checkpoint transaction."""
+``PostgresBackend`` as the checkpoint integration surface, including verified \
+read helpers that mirror ``get``, ``get_many``, and ``resolve`` on a \
+caller-owned connection. Enlisted ``get_bound_objects_enlisted`` reads \
+bindings and objects on that connection and observes one caller-transaction \
+snapshot, including uncommitted writes in that transaction. Enlisted writes \
+share the caller transaction; dr-store defines no savepoint API, so an evidence \
+persistence failure aborts the enclosing checkpoint transaction."""
 rationale = """
 A shared deployment changes persistence scope and contention mechanism, not the \
 observable storage model. One conformance suite across every backend prevents \

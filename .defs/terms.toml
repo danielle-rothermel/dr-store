@@ -187,7 +187,8 @@ checkpoint-first assembly; ``await PostgresBackend.open`` validates it on an \
 use the awaited backend protocol. Sync enlisted methods accept an explicit \
 SQLAlchemy Core ``Connection`` so evidence writes can join a caller-owned \
 checkpoint transaction; ``ObjectStore`` sync enlisted helpers require \
-``PostgresBackend`` as the checkpoint integration surface. Enlisted \
+``PostgresBackend`` as the checkpoint integration surface and include verified \
+read helpers on a caller-owned connection. Enlisted \
 ``get_bound_objects_enlisted`` observes one caller-transaction snapshot. \
 Opening validates the marker before independently running clients observe the \
 same backend semantics, without PostgreSQL-specific behavior entering the \

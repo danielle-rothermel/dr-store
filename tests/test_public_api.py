@@ -60,12 +60,15 @@ def test_object_store_public_surface_is_exact() -> None:
         "get",
         "get_bound_objects",
         "get_bound_objects_enlisted",
+        "get_enlisted",
         "get_many",
+        "get_many_enlisted",
         "put",
         "put_enlisted",
         "put_many",
         "put_many_enlisted",
         "resolve",
+        "resolve_enlisted",
         "verify_stored_record",
     }
 
@@ -219,6 +222,9 @@ def test_object_store_enlisted_methods_are_sync() -> None:
         "bind_enlisted",
         "put_many_enlisted",
         "get_bound_objects_enlisted",
+        "get_enlisted",
+        "get_many_enlisted",
+        "resolve_enlisted",
     ):
         assert not inspect.iscoroutinefunction(getattr(ObjectStore, name))
 
