@@ -2,6 +2,48 @@
 
 set -euo pipefail
 
+usage() {
+    cat <<'USAGE'
+Usage:
+  scripts/test-postgres.sh [PYTEST_ARG...]
+  scripts/test-postgres.sh -- COMMAND [ARG...]
+
+Starts a scratch password-authenticated PostgreSQL server, exports
+DR_STORE_POSTGRES_DSN and DR_STORE_REQUIRE_POSTGRES, then runs work against it
+and tears the server down on success, failure, and interrupt.
+
+A leading '--' selects command mode: the rest of the line is a command run
+against the scratch server in the caller's working directory, and its exit code
+is propagated. This lets consumer repositories reuse the scratch-server
+mechanics without duplicating them, for example:
+
+  scripts/test-postgres.sh -- uv run pytest tests/evaluation -q
+
+Otherwise the arguments are dr-store's own suite: 'uv run pytest -q' over the
+given paths, or over 'tests' when no arguments are supplied. Every argument
+reaches pytest verbatim, including a later '--' and pytest's own '-h'; this
+usage text prints only when '-h' or '--help' is the sole argument.
+USAGE
+}
+
+command_mode=0
+declare -a supplied_command=()
+if [[ "$#" -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
+    usage
+    exit 0
+fi
+if [[ "$#" -gt 0 && "$1" == "--" ]]; then
+    command_mode=1
+    shift
+    supplied_command=("$@")
+    if [[ "${#supplied_command[@]}" -eq 0 ]]; then
+        printf '%s\n' 'A command is required after "--".' >&2
+        usage >&2
+        exit 2
+    fi
+    set --
+fi
+
 script_directory="$(
     cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
     pwd -P
@@ -148,6 +190,14 @@ encoded_socket="$(
 )"
 export DR_STORE_POSTGRES_DSN="postgresql://postgres@/dr_store_test?host=${encoded_socket}"
 export DR_STORE_REQUIRE_POSTGRES=1
+
+if [[ "${command_mode}" -eq 1 ]]; then
+    # Command mode runs in the caller's directory: a consumer repository's
+    # relative paths and project discovery must resolve against that
+    # repository, not against dr-store.
+    "${supplied_command[@]}"
+    exit
+fi
 
 cd -- "${repository_root}"
 if [[ "$#" -eq 0 ]]; then

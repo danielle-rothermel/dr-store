@@ -159,6 +159,29 @@ async def test_batch_put_get_and_conflict_rollback(
     )
 
 
+async def test_delete_bindings_reports_deleted_and_keeps_objects(
+    backend: Backend,
+) -> None:
+    other_key = "second-key"
+    await backend.put_object(
+        schema=SCHEMA,
+        content_hash=CONTENT_HASH,
+        canonical=CANONICAL,
+    )
+    await backend.bind(key=KEY, schema=SCHEMA, content_hash=CONTENT_HASH)
+    await backend.bind(key=other_key, schema=SCHEMA, content_hash=CONTENT_HASH)
+
+    assert await backend.delete_bindings(keys=(KEY, "unbound")) == {KEY}
+    assert await backend.get_binding(key=KEY) is None
+    assert await backend.get_binding(key=other_key) == (SCHEMA, CONTENT_HASH)
+    assert await backend.get_object(
+        schema=SCHEMA, content_hash=CONTENT_HASH
+    ) == (SCHEMA, CANONICAL)
+
+    assert await backend.delete_bindings(keys=(KEY,)) == set()
+    assert await backend.delete_bindings(keys=()) == set()
+
+
 @pytest.mark.parametrize(
     "value",
     ["\0", "schema\0tail", "\ud800", "head\udffftail"],
@@ -191,6 +214,7 @@ async def test_every_key_path_rejects_invalid_text(
         ),
         lambda: backend.get_binding(key=value),
         lambda: backend.get_bound_objects(keys=(value,)),
+        lambda: backend.delete_bindings(keys=(value,)),
         lambda: backend.put_bound_objects(
             entries=(BoundObjectWrite(value, SCHEMA, CONTENT_HASH, CANONICAL),)
         ),

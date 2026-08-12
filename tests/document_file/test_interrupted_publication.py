@@ -7,9 +7,9 @@ import subprocess
 import sys
 from typing import TYPE_CHECKING
 
-from dr_store.document_file import CanonicalJsonFile
-from dr_store.document_file.canonical_json import (
-    _is_reserved_document_temp_name,
+from dr_store.document_file import (
+    CanonicalJsonFile,
+    is_reserved_document_temp_name,
 )
 
 if TYPE_CHECKING:
@@ -77,7 +77,7 @@ def test_process_death_before_replace_preserves_target_and_owned_orphan(
         event: dict[str, object] = json.loads(line)
         assert event["event"] == "before-replace"
         temporary_name = str(event["temporary_name"])
-        assert _is_reserved_document_temp_name(temporary_name)
+        assert is_reserved_document_temp_name(temporary_name)
 
         process.send_signal(signal.SIGKILL)
         assert process.wait(timeout=WATCHDOG_SECONDS) == -signal.SIGKILL

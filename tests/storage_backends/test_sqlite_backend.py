@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from dr_store import SqliteBackend
+from dr_store.storage_backends import sqlite as sqlite_module
+from dr_store.storage_backends.sqlite import MINIMUM_SQLITE_VERSION
 
 if TYPE_CHECKING:
     from multiprocessing.queues import Queue
@@ -55,6 +57,25 @@ def test_direct_construction_is_private(tmp_path: Path) -> None:
 async def test_open_rejects_transient_paths(path: str) -> None:
     with pytest.raises(ValueError, match="persistent filesystem path"):
         await SqliteBackend.open(path)
+
+
+def test_minimum_sqlite_version_is_the_returning_floor() -> None:
+    # `DELETE ... RETURNING`, which binding deletion depends on, landed in
+    # SQLite 3.35.
+    assert MINIMUM_SQLITE_VERSION == (3, 35, 0)
+    assert sqlite3.sqlite_version_info >= MINIMUM_SQLITE_VERSION
+
+
+async def test_open_refuses_a_library_below_the_minimum_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        sqlite_module.sqlite3, "sqlite_version_info", (3, 34, 1)
+    )
+    monkeypatch.setattr(sqlite_module.sqlite3, "sqlite_version", "3.34.1")
+    expected = r"requires SQLite 3\.35\.0 or later"
+    with pytest.raises(RuntimeError, match=expected):
+        await SqliteBackend.open(tmp_path / "store.db")
 
 
 async def test_open_captures_relative_path_and_is_ready(

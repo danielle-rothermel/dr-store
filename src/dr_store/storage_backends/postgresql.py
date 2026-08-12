@@ -131,6 +131,12 @@ FROM dr_store.bindings
 WHERE key = ANY(CAST(:keys AS pg_catalog.text[]))
 """
 
+_DELETE_BINDINGS_SQL = """
+DELETE FROM dr_store.bindings
+WHERE key = ANY(CAST(:keys AS pg_catalog.text[]))
+RETURNING key
+"""
+
 
 def _validate_database(*, version_num: int, server_encoding: str) -> None:
     major = version_num // 10_000
@@ -311,6 +317,29 @@ def _get_bound_objects_on_connection(
             canonical=objects.get((schema, content_hash)),
         )
     return results
+
+
+def _delete_bindings_on_connection(
+    connection: Connection,
+    *,
+    keys: tuple[str, ...],
+    batch_chunk_size: int,
+) -> set[str]:
+    # This helper takes a sync ``Connection`` like the enlisted helpers do, but
+    # it is deliberately reachable only from the awaited ``delete_bindings``.
+    # Do not add a ``delete_bindings_enlisted`` wrapper: the enlisted surface
+    # carries no destructive verb, and the public-API surface pin enforces
+    # that. Consult the contract "Binding eviction is cache-grade and removes
+    # resolvability only" in .defs/contracts.toml before changing this.
+    deleted: set[str] = set()
+    for chunk in _chunked(keys, batch_chunk_size=batch_chunk_size):
+        rows = _fetch_sync(
+            connection,
+            _DELETE_BINDINGS_SQL,
+            {"keys": list(chunk)},
+        )
+        deleted.update(row["key"] for row in rows)
+    return deleted
 
 
 def _put_bound_objects_on_connection(
@@ -749,6 +778,28 @@ class PostgresBackend:
             _validate_enlisted_connection(connection),
             keys=distinct_keys,
             batch_chunk_size=self._batch_chunk_size,
+        )
+
+    async def delete_bindings(self, *, keys: tuple[str, ...]) -> set[str]:
+        for key in keys:
+            validate_binding_key(key)
+        distinct_keys = tuple(dict.fromkeys(keys))
+        if not distinct_keys:
+            return set()
+
+        async def delete(conn: AsyncConnection) -> set[str]:
+            return await conn.run_sync(
+                lambda sync_connection: _delete_bindings_on_connection(
+                    sync_connection,
+                    keys=distinct_keys,
+                    batch_chunk_size=self._batch_chunk_size,
+                )
+            )
+
+        return await _run_connection_operation(
+            self._require_async_engine(),
+            delete,
+            write=True,
         )
 
     async def put_bound_objects(

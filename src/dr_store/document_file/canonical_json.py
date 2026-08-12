@@ -52,13 +52,19 @@ _COMMON_OPEN_FLAGS = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW")
 _PUBLICATION_OPEN_FLAGS = ("O_CREAT", "O_EXCL", "O_WRONLY")
 
 
-def _is_reserved_document_temp_name(name: str) -> bool:
+def is_reserved_document_temp_name(name: str) -> bool:
+    """Report whether a name belongs to the reserved temporary namespace.
+
+    Publication creates its same-directory temporary documents in this
+    case-insensitive namespace, so every layer that creates children beside a
+    canonical document file refuses caller-chosen names within it.
+    """
     return name.casefold().startswith(_RESERVED_TEMP_PREFIX.casefold())
 
 
 def _validate_name(name: str) -> None:
     validate_safe_name(name, role="name", error=DocumentFileError)
-    if _is_reserved_document_temp_name(name):
+    if is_reserved_document_temp_name(name):
         raise DocumentFileError(
             f"name {name!r} belongs to the reserved publication namespace"
         )

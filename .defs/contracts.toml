@@ -88,13 +88,21 @@ replaying the same reference is idempotent, and requesting a different \
 reference raises a typed conflict that preserves the existing winner. Binding \
 keys may be empty and contain any text except NUL or unpaired surrogate code \
 points. Every public backend and facade binding path validates that domain \
-before storage work begins, and the object-store surface exposes no clear, \
-overwrite, or rebind operation."""
+before storage work begins, and the object-store surface exposes no overwrite \
+or rebind operation. Cache-grade ``evict_bindings`` is the only operation that \
+removes a binding; it never rewrites one in place, so a bound key changes \
+reference only by passing back through its unbound state. That path is \
+available to cache-grade keys only: evidence keys are never evicted, because a \
+requeued run takes new attempt keys, and binding an evidence key to a divergent \
+reference raises ``BindingConflictError`` whether or not eviction exists. See \
+"Binding eviction is cache-grade and removes resolvability only"."""
 rationale = """
 Single assignment makes a successful key resolution stable while allowing \
 concurrent contenders to observe one correlated winner. One shared permissive \
 text domain preserves opaque caller-owned keys without letting backend-specific \
-string constraints select different winners."""
+string constraints select different winners. Confining removal to an unbind \
+step keeps that winner rule intact for every key that is never evicted, so \
+evidence identity stays as stable as it was before caches gained a bust."""
 date = "2026-08-08"
 check = "uv run pytest -q tests/object_store/test_binding.py tests/storage_backends/test_contract.py tests/record_cache/test_cache.py"
 
@@ -103,26 +111,28 @@ title = "Backends own atomicity and declare persistence scope"
 statement = """
 Every backend supplies awaited atomic insert-if-absent operations for object \
 rows and bindings, exact-key reads that return bindings with their referenced \
-object rows, and atomic write batches that store prepared objects and establish \
-each key's first-writer binding. An operation releases no transaction or shared \
-connection until driver cleanup makes that resource reusable. Cancellation is \
-an operational failure and does not prove whether a write committed; storage \
-performs no automatic retry, while exact immutable replay remains supported. The \
-in-memory backend is process-local. Each SQLite backend owns one dedicated \
-worker and one connection and admits at most one submitted or running worker \
-operation. Other callers await an async admission gate before work is submitted. \
-The worker executes complete operations outside the event-loop thread, chunks \
-exact-key reads into joined queries without promising one batch-wide snapshot, \
-and uses one immediate transaction for each non-empty write batch. Cancellation \
-while awaiting admission starts no SQLite work. A cancelled admitted operation \
-does not abandon its worker work: the caller waits until the operation and its \
-cleanup settle, then cancellation wins. If that worker path also fails, its \
-failure remains the cause of the cancellation. SQLite requires a non-transient \
-filesystem path, captures its lexical absolute path during open, retains \
-committed rows across reopen, and supports cross-process contention without \
-claiming power-loss durability. Empty and `:memory:` paths are rejected; the \
-captured absolute path prevents later working-directory redirection but does not \
-freeze symlink targets."""
+object rows, atomic write batches that store prepared objects and establish \
+each key's first-writer binding, and an exact-key binding delete that reports \
+which rows existed and leaves object rows untouched. An operation releases no \
+transaction or shared connection until driver cleanup makes that resource \
+reusable. Cancellation is an operational failure and does not prove whether a \
+write committed; storage performs no automatic retry, while exact immutable \
+replay remains supported. The in-memory backend is process-local. Each SQLite \
+backend owns one dedicated worker and one connection and admits at most one \
+submitted or running worker operation. Other callers await an async admission \
+gate before work is submitted. The worker executes complete operations outside \
+the event-loop thread, chunks exact-key reads into joined queries without \
+promising one batch-wide snapshot, and uses one immediate transaction for each \
+non-empty write batch. Cancellation while awaiting admission starts no SQLite \
+work. A cancelled admitted operation does not abandon its worker work: the \
+caller waits until the operation and its cleanup settle, then cancellation \
+wins. If that worker path also fails, its failure remains the cause of the \
+cancellation. SQLite requires a non-transient filesystem path, captures its \
+lexical absolute path during open, retains committed rows across reopen, and \
+supports cross-process contention without claiming power-loss durability. \
+Empty and `:memory:` paths are rejected; the captured absolute path prevents \
+later working-directory redirection but does not freeze symlink targets.
+"""
 rationale = """
 The object store owns hashing, verification, idempotency, and typed conflicts, \
 while each asynchronous backend owns the atomic storage and resource-cleanup \
@@ -175,6 +185,38 @@ barrier for every small commit while matching the deliberately bounded \
 persistence claim."""
 date = "2026-08-08"
 check = "uv run pytest -q tests/storage_backends/test_sqlite_backend.py"
+
+[[contracts]]
+title = "Binding eviction is cache-grade and removes resolvability only"
+statement = """
+``ObjectStore.evict_bindings`` deduplicates its input keys, validates that key \
+text domain before storage work begins, and returns exactly one \
+``EvictStatus`` for every distinct requested key: ``EVICTED`` when a binding \
+row existed and was deleted, ``ABSENT`` otherwise. It deletes binding rows for \
+those exact keys only and never deletes, rewrites, or reference-counts object \
+rows, so evicted content stays retrievable through ``get`` and bindings on \
+other keys to the same reference keep resolving. Replaying an eviction is \
+idempotent, there is no prefix or wildcard form, and no enlisted variant \
+exists on ``ObjectStore`` or any backend. A batch commits atomically across \
+every chunk it is split into, so no caller observes a partially evicted batch. \
+Restricting eviction to cache-grade keys is caller-owned discipline: dr-store \
+does not distinguish cache keys from evidence keys and rejects no key on \
+grade. The SQLite backend reports per-key outcomes from `DELETE ... \
+RETURNING` and therefore requires SQLite 3.35 or later, checked once when the \
+backend opens rather than when an eviction is attempted."""
+rationale = """
+Cache consumers need their memoized bindings to be bustable, while evidence \
+keeps its identity: a new attempt gets new binding keys rather than rebinding \
+old ones, so eviction never becomes a mutation path. Keeping content addressed \
+and shared means resolvability is the only safe thing to remove without \
+ownership tracking storage does not have. The sync enlisted surface \
+deliberately omits eviction and the public-API surface pin enforces that \
+omission, so no destructive verb reaches an evidence transaction through the \
+enlisted path; which keys the awaited path is pointed at remains the caller's \
+responsibility, since a namespace-aware storage layer would put domain meaning \
+where this package refuses to hold it."""
+date = "2026-08-12"
+check = "scripts/test-postgres.sh -- uv run pytest -q tests/object_store/test_eviction.py tests/test_public_api.py"
 
 [[contracts]]
 title = "Callers own domain meaning"
@@ -437,7 +479,9 @@ caller-owned connection. Enlisted ``get_bound_objects_enlisted`` reads \
 bindings and objects on that connection and observes one caller-transaction \
 snapshot, including uncommitted writes in that transaction. Enlisted writes \
 share the caller transaction; dr-store defines no savepoint API, so an evidence \
-persistence failure aborts the enclosing checkpoint transaction."""
+persistence failure aborts the enclosing checkpoint transaction. Binding \
+deletion is available only on the awaited path, so the enlisted surface carries \
+no destructive verb."""
 rationale = """
 A shared deployment changes persistence scope and contention mechanism, not the \
 observable storage model. One conformance suite across every backend prevents \
@@ -449,14 +493,263 @@ check = "scripts/test-postgres.sh"
 title = "Document directories represent one publication"
 statement = """
 One document directory represents one task, run, or result publication and is \
-never a per-event record or packed execution-record backend. Callers own \
-partitioned allocation roots and retention."""
+never a per-event record or packed execution-record backend. An artifact bundle \
+is one such publication packaged over a document directory, so it inherits this \
+granularity rather than relaxing it. Callers own partitioned allocation roots \
+and retention."""
 rationale = """
 A document directory groups one manifest with sidecars for one publication \
-unit. Keeping that granularity explicit prevents the format from being mistaken \
-for a high-volume record or retention system."""
+unit. Keeping that granularity explicit prevents the format, and every layer \
+packaged over it, from being mistaken for a high-volume record or retention \
+system."""
 date = "2026-08-11"
-check = "uv run pytest -q tests/document_directory/test_directory.py"
+check = "uv run pytest -q tests/document_directory/test_directory.py tests/artifact_bundle/test_publication.py::test_allocate_creates_one_fresh_prefixed_directory"
+
+[[contracts]]
+title = "The bundle manifest is a closed versioned format"
+statement = """
+Every artifact bundle uses the regular direct-child filename \
+`manifest.json`. Its canonical strict JSON value contains exactly the top-level \
+keys `format`, `artifacts`, and `payload`; `format` is exactly \
+`dr-store-artifact-bundle-v1`. Each artifact descriptor contains exactly \
+`name`, `sha256`, and `byte_length`, and descriptors are ordered by exact \
+artifact name. Public `ArtifactDescriptor` and `BundleManifest` are strict \
+frozen `BaseModel` boundary models. Writers emit no unknown fields; readers \
+reject duplicate keys, unknown fields, unsupported format markers, unsorted or \
+duplicate descriptors, non-strict JSON, and non-canonical bytes. Persisted wire \
+literals are explicit constants rather than values derived from model field \
+names."""
+rationale = """
+A closed self-identifying envelope separates storage integrity from caller \
+meaning. Explicit literals and golden tests make every persisted-format change \
+a visible contract change rather than an incidental code rename. Golden tests \
+pin the stored manifest bytes so a bundle recorded by an earlier release stays \
+readable. Golden tests pin those bytes from inside one installed version, so \
+`scripts/check-compatibility.sh` exchanges bundles with an actually-installed \
+earlier release to confirm the claim across versions."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_reading.py::test_invalid_terminal_manifest_is_incomplete && scripts/check-compatibility.sh"
+
+[[contracts]]
+title = "Artifact bundle publication is manifest-committed"
+statement = """
+`ArtifactBundlePublication.allocate(...)` owns one collision-safe fresh \
+document-directory allocation. `open_artifact(...)` admits multiple active \
+synchronous `BundleArtifactWriter` instances only for distinct exact names; \
+each writer's `write(...)` accepts caller-supplied bytes incrementally, and \
+`finalize()` completes its descriptor. Name reservation and writer-state changes \
+are thread-safe; each writer owns one file and incremental SHA-256 state, while \
+the publication schedules no tasks and multiplexes no bytes. A duplicate \
+rejection before admission does not poison the publication, while any admitted \
+create, write, or finalize failure permanently prevents publication. \
+`publish(payload)` is non-waiting: an active writer, a failed writer, or an \
+invalid payload produces a visible precondition refusal before any manifest \
+operation. Refusal for an active writer or invalid payload is nonterminal. Only \
+a valid publish call after every admitted writer finalized successfully begins \
+the one deterministic manifest attempt and makes the publication terminal. That \
+attempt orders descriptors by exact name, runs as one document-directory \
+Manifest publication, and exposes no retry, replacement, append, truncation, \
+retention, or later mutation operation. Publication bounds the encoded manifest \
+by one fixed package ceiling of 1 GiB rather than a caller-supplied limit, and \
+an encoded manifest above that ceiling is refused at `encode_manifest` with \
+`ReplacementState.NOT_REPLACED`. Readers bound the manifest by their own \
+`BundleReadLimits.manifest_max_bytes`, so a caller whose payload exceeds the \
+read limit it later supplies publishes a bundle it cannot read back."""
+rationale = """
+One API-level terminal transition distinguishes interrupted work from a \
+completed publication without claiming a durable cross-process once-only lock. \
+Independent distinct-name writers support concurrent producers without making \
+the bundle a scheduler, and delegating the terminal attempt keeps exactly one \
+atomic same-directory replacement implementation in the package. A fixed \
+publication ceiling keeps the publisher from accepting a manifest no bounded \
+reader could recover, while leaving read bounds with the caller who owns the \
+payload."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_failures.py"
+
+[[contracts]]
+title = "Bundle descriptors define verified contents"
+statement = """
+The bundle manifest contains exactly one artifact descriptor for every bundle \
+artifact and no duplicate exact artifact name. Each descriptor pins the \
+artifact's relative name, full lowercase SHA-256 hash, and non-negative byte \
+length. Files not named by the manifest are outside the bundle, are ignored by \
+bundle verification, and are never returned as bundle artifacts."""
+rationale = """
+The manifest remains authoritative for every byte the bundle claims without \
+requiring a coherent snapshot or lock over unrelated directory entries. Hash \
+and length distinguish modification from truncation without assigning domain \
+meaning to raw bytes."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_models.py tests/artifact_bundle/test_reading.py::test_audit_verifies_every_declared_artifact_and_ignores_other_files"
+
+[[contracts]]
+title = "Bundle artifact names are safe exact direct children"
+statement = """
+Every artifact name is one non-empty relative path segment. Publication and \
+reading both reject absolute paths, dot segments, separators, \
+`manifest.json`, and the `.dr-store-artifact-bundle-` prefix. Admission is \
+stricter than the recorded format by exactly one rule: publication also \
+refuses the case-insensitive `.dr-store-document-` temporary namespace that \
+manifest publication reserves, while reading admits descriptor names within \
+it. Descriptor names are unique by exact string, and artifact creation is \
+exclusive and never replaces an existing child. The format defines no \
+cross-platform case-folding or Unicode-normalization profile."""
+rationale = """
+Restricting artifacts to exclusively created direct children prevents lexical \
+traversal and replacement without introducing a portable-filename subsystem \
+merely to predict every filesystem's aliasing rules. Reserving the document \
+temporary namespace through the document layer's own public predicate keeps \
+one source of truth for the names publication may create, and reserving the \
+bundle prefix keeps every name an earlier release refused refused, so bundle \
+names stay symmetric across releases. That document-namespace reservation \
+binds admission only: an earlier release recorded such names legitimately, so \
+applying it to reads would make already-recorded bundles unreadable, which \
+name hygiene for new writers does not justify."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_reading.py && scripts/check-compatibility.sh"
+
+[[contracts]]
+title = "Artifact bundle reads are layered over storage primitives"
+statement = """
+`ArtifactBundleReader(path, *, limits)` accepts frozen public \
+`BundleReadLimits` with `manifest_max_bytes`, `manifest_max_depth`, \
+`max_artifacts`, `max_bytes_per_artifact`, and `max_total_artifact_bytes`. \
+Every read validates the terminal manifest as one bounded canonical \
+document-directory Manifest, then checks all declared bounds before any \
+artifact work. Every declared or selected artifact is recovered by exactly one \
+`read_verified_regular_child` call, so each recovery is bounded, no-follow, \
+directory-relative, descriptor-pinned, and verified against the descriptor's \
+byte length and SHA-256 before its bytes are returned. The package contains no \
+second verified-read and no second atomic-replacement implementation. \
+Descriptor pinning holds within each primitive call rather than across a whole \
+read operation, and results describe bytes verified at read time without \
+claiming that external actors cannot later mutate a path. Missing platform \
+support, an exceeded bound, or any declared-file mismatch fails through a typed \
+read error."""
+rationale = """
+Reusing the storage-owned read-and-verify primitive keeps one audited \
+descriptor-pinned recovery path for every bundle artifact and removes a parallel \
+implementation that could drift from it. The point-in-time guarantee remains no \
+stronger than the bytes the reader actually recovered and does not claim \
+ancestor-path containment."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_reading.py"
+
+[[contracts]]
+title = "Artifact bundle integrity audits verify every declared file"
+statement = """
+Each `audit()` validates one regular direct-child canonical manifest, checks \
+all declared bounds before artifact work, then recovers and verifies every \
+declared regular direct-child artifact. It returns the verified \
+`BundleManifest` only after every declared file has the exact descriptor byte \
+length and SHA-256. Files outside the manifest are not inspected."""
+rationale = """
+Eager bounded verification gives integrity-audit callers one accepted state for \
+the whole bundle, while ignoring undeclared entries keeps the manifest \
+authoritative without locking unrelated directory contents."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_reading.py::test_audit_verifies_every_declared_artifact_and_ignores_other_files tests/artifact_bundle/test_reading.py::test_audit_reports_exact_artifact_verification_reason"
+
+[[contracts]]
+title = "Verified artifact consumption delivers only verified bytes"
+statement = """
+`ArtifactBundleReader.consume_and_verify_artifact(...)` validates one canonical \
+manifest under its limits, recovers one selected declared artifact by a single \
+bounded verified whole-read, and only then invokes one synchronous consumer \
+callback with a package-owned `VerifyingArtifactReader`. A selected artifact \
+must therefore fit within `max_bytes_per_artifact` and \
+`max_total_artifact_bytes`, and bytes that fail descriptor verification are \
+never delivered. The facade exposes only `read(...)` while hashing and counting \
+the exact bytes it delivered. `read(0)` is not EOF, and consuming exactly the \
+declared length without a later empty read is incomplete. The operation \
+succeeds only after observed EOF and exact descriptor hash and byte-length \
+agreement, returns the verified `ArtifactDescriptor`, and invalidates the \
+facade before returning. It makes no claim about a later path read."""
+rationale = """
+Recovering through the shared verified-read primitive removes the package's \
+bespoke streaming reader while keeping consumption-coupled verification \
+observable to callers. Refusing unverified bytes is the stricter behavior and \
+costs only the residency bound the limits already declare."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_reading.py::test_verified_consumption_reads_selected_content_once tests/artifact_bundle/test_reading.py::test_verified_consumption_requires_observed_eof tests/artifact_bundle/test_reading.py::test_consumer_is_called_once_and_facade_is_invalid_after_callback tests/artifact_bundle/test_reading.py::test_consumption_refuses_mutated_bytes_before_delivering_them"
+
+[[contracts]]
+title = "Artifact bundle failures use one small typed hierarchy"
+statement = """
+`ArtifactBundleError` is the common base. `BundleAllocationError` reports fresh \
+allocation and artifact-writer admission failures. `BundlePublishError` reports \
+a publication precondition or terminal-manifest phase through public \
+`phase: BundlePublicationPhase` and \
+`replacement_state: ReplacementState | None` fields. Replacement state is \
+absent for a precondition refusal and uses the existing public \
+`ReplacementState` for a terminal manifest attempt. The manifest temporary \
+descriptor is closed within the document-directory write stage, so a close \
+failure reports `write_temp`; `close_temp` remains a public member of \
+`BundlePublicationPhase` that no path emits. `BundleReadError` reports \
+manifest, filesystem, or consumer failure; `BundleIncompleteError` and \
+`BundleVerificationError` specialize it for a missing valid terminal manifest \
+and a selected or declared artifact mismatch or incomplete consumption. \
+Verification failures expose public `artifact_name: str` and \
+`reason: BundleVerificationReason` fields. Bundle failures raised over a \
+storage primitive report the primitive's own underlying serialization, model, \
+consumer, or operating-system exception as their cause rather than the \
+intermediate primitive error."""
+rationale = """
+These categories distinguish recovery-relevant allocation, refusal, and \
+terminal-manifest outcomes without freezing one public exception type for every \
+low-level writer step. Reporting the originating cause keeps the layering an \
+implementation detail rather than a change to what callers can diagnose."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_failures.py tests/artifact_bundle/test_reading.py tests/test_public_api.py::test_artifact_bundle_public_surfaces_are_exact"
+
+[[contracts]]
+title = "Completed bundles claim visibility without crash durability"
+statement = """
+Each artifact writer hashes the exact supplied bytes, flushes userspace buffers, \
+and closes its descriptor. Manifest publication writes and closes one \
+same-directory temporary document and atomically replaces `manifest.json`. The \
+path does not call `F_FULLFSYNC`, `fsync`, or a directory flush and defines no \
+configurable durability mode. Successful publication is terminal and \
+process-visible, without claiming protection from external filesystem mutation \
+or survival across process, machine, filesystem, or power failure."""
+rationale = """
+Close and same-directory replacement support the intended process-visible \
+terminal boundary. A future crash-durable publication requires its own design \
+rather than an option on this capability."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_failures.py::test_publication_never_uses_file_or_directory_sync tests/artifact_bundle/test_failures.py::test_manifest_replacement_is_same_directory tests/artifact_bundle/test_reading.py::test_directory_is_pinned_within_one_verified_child_read"
+
+[[contracts]]
+title = "Artifact bundle operations remain synchronous and offloadable"
+statement = """
+Artifact writer, manifest publication, integrity-audit, and verified-consumption \
+operations are synchronous, and the package owns no event loop, executor, \
+scheduler, or async filesystem twin. An async caller offloads one complete \
+bundle operation rather than running package hashing or filesystem I/O on its \
+event-loop thread or splitting one operation across independently scheduled \
+per-chunk calls."""
+rationale = """
+Keeping file ownership and the terminal transition inside synchronous operations \
+makes the boundary deterministic while leaving executor policy with async \
+applications."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_reading.py tests/test_public_api.py::test_artifact_bundle_public_surfaces_are_exact"
+
+[[contracts]]
+title = "Artifact bundles do not own domain meaning"
+statement = """
+The bundle format owns artifact names, byte lengths, hashes, completeness, \
+verification, and terminal publication. The bundle manifest carries a separate \
+opaque strict JSON payload; \
+evaluation, provider, corpus, experiment, and other caller packages own that \
+payload's schema and all interpretation of the described artifacts."""
+rationale = """
+Separating a general integrity envelope from caller-owned metadata lets one \
+publication primitive serve unrelated domains without making dr-store an owner \
+of their evidence, identity, or analysis models."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_publication.py::test_publish_orders_descriptors_and_writes_pinned_manifest tests/artifact_bundle/test_reading.py"
 
 [[contracts]]
 title = "PostgreSQL schema installation is explicit"
@@ -588,10 +881,18 @@ When ``put_bound_objects_enlisted`` runs on a caller-supplied enlisted \
 connection and raises ``ObjectConflictError`` after inserting one or more \
 object rows, those object inserts remain visible on that same open connection \
 until the caller commits or rolls back. Binding inserts that follow the failed \
-conflict check are not performed."""
+conflict check are not performed. Above that backend operation, \
+``ObjectStore.put_many_enlisted`` is first-writer-wins per key: a key already \
+bound keeps its existing binding, and the reference returned for that key is \
+the existing winner rather than the rejected reference just offered. The \
+losing record is still stored content-addressed; only the binding refuses to \
+move. The whole batch is visible or absent with the caller's transaction."""
 rationale = """
 Platform ledger enlistment may compose several storage steps in one caller \
 transaction. Conflict after partial progress must not erase already-executed \
-object inserts from the enlisted snapshot the caller is coordinating."""
+object inserts from the enlisted snapshot the caller is coordinating. \
+Returning the existing winner rather than the offered reference is what lets a \
+caller detect that its own write lost and reconcile, so it is pinned against a \
+real database rather than inferred from a fake."""
 date = "2026-08-12"
-check = "scripts/test-postgres.sh"
+check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_backend.py::test_enlisted_batch_conflict_retains_object_inserts tests/object_store/test_enlisted.py"

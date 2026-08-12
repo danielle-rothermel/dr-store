@@ -200,8 +200,10 @@ def test_schema_format_validation_requires_one_exact_marker(
     [
         ("DELETE FROM dr_store.schema_format", None),
         (
-            "UPDATE dr_store.schema_format "
-            "SET format = 'dr-store-postgresql-v2'",
+            (
+                "UPDATE dr_store.schema_format "
+                "SET format = 'dr-store-postgresql-v2'"
+            ),
             "dr-store-postgresql-v2",
         ),
     ],

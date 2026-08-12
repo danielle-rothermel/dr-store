@@ -6,6 +6,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-12
+
+### Changed
+
+- Toolchain refreshed to current releases: ruff 0.16, ty 0.0.70, pre-commit
+  4.6.2, tombi 1.3.2; runtime floors raised to the tested minimums
+  (pydantic 2.13, psycopg 3.3). Runtime resolutions were already latest.
+
+### Added
+
+- Added `ObjectStore.evict_bindings(keys)` and the `EvictStatus` enum
+  (`EVICTED`, `ABSENT`), the cache-grade operation that makes memoized
+  bindings bustable. It deletes binding rows for the given exact keys and
+  never touches object rows, so evicted content stays retrievable by reference
+  and other keys bound to it keep resolving. Absent keys report `ABSENT`
+  instead of raising, so replay is idempotent, and a batch commits atomically
+  however the backend chunks it. There is no prefix form and, deliberately, no
+  enlisted variant: the sync enlisted surface carries no destructive verb, so
+  eviction is unreachable from inside an evidence transaction. Which keys the
+  awaited path is pointed at stays caller-owned discipline — evidence keys are
+  never evicted, since a requeued run takes new keys. Backends gained the
+  matching `delete_bindings` operation on all three implementations.
+
+- Added a command mode to `scripts/test-postgres.sh`: a **leading** `--` makes
+  the rest of the line a command run against the scratch server instead of
+  dr-store's own pytest, with `DR_STORE_POSTGRES_DSN` exported, the exit code
+  propagated, and the same teardown on success, failure, and interrupt.
+  Consumer repositories can reuse the scratch-server mechanics without
+  duplicating them. The command runs in the caller's working directory, so a
+  consumer's relative test paths and project discovery resolve against that
+  repository. Every other invocation reaches pytest verbatim exactly as
+  before, including a `--` that follows pytest arguments; the one behavior
+  change is that `-h` or `--help` as the sole argument now prints the script's
+  usage instead of being forwarded.
+
+- Added real-PostgreSQL coverage for `ObjectStore.put_many_enlisted`, which
+  previously had no behavioral test against a live server: every entry stored
+  and bound, first-writer-wins per key returning the **existing** winner rather
+  than the rejected reference just offered (with the losing record still stored
+  content-addressed), rollback and commit moving the whole batch with the
+  caller's transaction, and an empty batch writing nothing. The enlisted batch
+  contract now states those winner semantics and names these tests.
+
+- Added `scripts/check-compatibility.sh`, which verifies the working tree
+  against an already-released dr-store in both directions by installing that
+  release into a throwaway virtual environment and exchanging artifact bundles
+  between the two: bundles this tree writes stay readable by the baseline,
+  bundles the baseline wrote still read here (including artifact names the
+  baseline admitted but current publication refuses), and every public name the
+  baseline exported is still present. A test suite imports exactly one
+  `dr_store`, so these checks need two versions resident at once and cannot be
+  expressed in-tree. It runs outside CI and the hooks because it reaches PyPI.
+  `--consumer PATH` also validates a consumer checkout that resolves this tree.
+
+- Declared the SQLite backend's library floor: opening `SqliteBackend` against
+  a library older than SQLite 3.35 now raises `RuntimeError` naming the
+  requirement, instead of the backend opening and only failing later when
+  `delete_bindings` reaches `DELETE ... RETURNING`. The floor is exported as
+  `dr_store.storage_backends.sqlite.MINIMUM_SQLITE_VERSION`.
+
+- Added the `dr_store.artifact_bundle` package and its fifteen public names
+  (`ArtifactBundlePublication`, `ArtifactBundleReader`, `BundleManifest`,
+  `ArtifactDescriptor`, `BundleArtifactWriter`, `VerifyingArtifactReader`,
+  `BundleReadLimits`, and the `ArtifactBundleError` hierarchy) for terminal
+  manifest-committed publication and bounded verified reads of one task, run,
+  or result directory. The on-disk `dr-store-artifact-bundle-v1` manifest
+  format is byte-identical to the one written by 0.2.0, so bundles recorded by
+  that release read unchanged.
+- Added `.defs` contract and term entries covering the bundle manifest format,
+  manifest-committed publication, layered bundle reads, verified consumption,
+  and the bundle failure taxonomy.
+- Added `pydantic>=2.0` as a declared runtime dependency; the bundle boundary
+  models import it directly rather than relying on a transitive resolution.
+- Added `dr_store.document_file.is_reserved_document_temp_name(name)`, the
+  public predicate for the case-insensitive `.dr-store-document-` namespace
+  that manifest publication reserves. Names a caller asks a layer to create —
+  bundle artifact admission, document-directory sidecar names, and canonical
+  document names — are all refused through it, so one source of truth covers
+  every layer that creates children beside a published document. Reading does
+  not apply the reservation: a bundle recorded by 0.2.0 carrying such an
+  artifact name stays readable.
+
+### Changed
+
+- Artifact bundles are a thin packaging layer over existing storage
+  primitives. Manifest publication runs as one `DocumentDirectory` manifest
+  publication, and every declared artifact is recovered by exactly one
+  `read_verified_regular_child` call, so the package holds no second
+  atomic-replacement and no second verified-read implementation.
+- `ArtifactBundleReader.consume_and_verify_artifact` performs one bounded
+  verified whole-read before invoking its consumer, so a selected artifact
+  must fit within `max_bytes_per_artifact` and `max_total_artifact_bytes` and
+  bytes that fail descriptor verification are never delivered.
+- The document-directory granularity contract now names artifact bundles as
+  one publication packaged over a document directory.
+- Bundle publication bounds the encoded manifest by a fixed 1 GiB package
+  ceiling and refuses a larger manifest at `encode_manifest` with
+  `ReplacementState.NOT_REPLACED`, while readers keep bounding the manifest by
+  their own `BundleReadLimits.manifest_max_bytes`.
+
 ## [0.2.2] - 2026-08-12
 
 ### Added

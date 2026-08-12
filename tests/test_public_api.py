@@ -5,6 +5,8 @@ import pkgutil
 import re
 from dataclasses import fields
 
+import pytest
+
 import dr_store
 
 # Naming is only a heuristic for observable vocabulary, not domain neutrality.
@@ -51,12 +53,17 @@ def test_public_module_vocabulary_tripwire() -> None:
 
 
 def test_object_store_public_surface_is_exact() -> None:
+    # `evict_bindings` is the only destructive verb here and it is
+    # awaited-only. Consult the contract "Binding eviction is cache-grade and
+    # removes resolvability only" in .defs/contracts.toml before adding any
+    # destructive name to this set.
     from dr_store import ObjectStore
 
     public = {name for name in dir(ObjectStore) if not name.startswith("_")}
     assert public == {
         "bind",
         "bind_enlisted",
+        "evict_bindings",
         "get",
         "get_bound_objects",
         "get_bound_objects_enlisted",
@@ -74,10 +81,15 @@ def test_object_store_public_surface_is_exact() -> None:
 
 
 def test_backend_public_surfaces_are_exact() -> None:
+    # `delete_bindings` is the only destructive verb here and it is
+    # awaited-only. Consult the contract "Binding eviction is cache-grade and
+    # removes resolvability only" in .defs/contracts.toml before adding any
+    # destructive name to this set.
     from dr_store import Backend, MemoryBackend
 
     expected = {
         "bind",
+        "delete_bindings",
         "get_binding",
         "get_bound_objects",
         "get_object",
@@ -139,6 +151,7 @@ def test_postgresql_public_surface_is_exact() -> None:
     expected = {
         "bind",
         "bind_enlisted",
+        "delete_bindings",
         "get_binding",
         "get_binding_enlisted",
         "get_bound_objects",
@@ -155,6 +168,7 @@ def test_postgresql_public_surface_is_exact() -> None:
     assert public == expected
     async_methods = {
         "bind",
+        "delete_bindings",
         "get_binding",
         "get_bound_objects",
         "get_object",
@@ -229,6 +243,111 @@ def test_object_store_enlisted_methods_are_sync() -> None:
         assert not inspect.iscoroutinefunction(getattr(ObjectStore, name))
 
 
+DESTRUCTIVE_VERBS = frozenset(
+    {
+        "evict",
+        "delete",
+        "unbind",
+        "purge",
+        "drop",
+        "remove",
+        "clear",
+        "expire",
+    }
+)
+
+# The enlisted read/write surface, pinned positively: every ObjectStore method
+# whose first non-self parameter is a caller-owned Connection. Consult the
+# contract "Binding eviction is cache-grade and removes resolvability only" in
+# .defs/contracts.toml before adding a destructive name to this set.
+ENLISTED_OBJECT_STORE_METHODS = frozenset(
+    {
+        "bind_enlisted",
+        "get_bound_objects_enlisted",
+        "get_enlisted",
+        "get_many_enlisted",
+        "put_enlisted",
+        "put_many_enlisted",
+        "resolve_enlisted",
+    }
+)
+
+
+def _connection_first_methods(surface: type) -> set[str]:
+    found = set()
+    for name in dir(surface):
+        if name.startswith("_"):
+            continue
+        attribute = getattr(surface, name)
+        if not callable(attribute):
+            continue
+        try:
+            parameters = list(inspect.signature(attribute).parameters.values())
+        except (TypeError, ValueError):
+            continue
+        positional = [
+            parameter
+            for parameter in parameters
+            if parameter.name not in {"self", "cls"}
+        ]
+        if positional and positional[0].name == "connection":
+            found.add(name)
+    return found
+
+
+def test_eviction_is_async_only_and_never_enlisted() -> None:
+    from dr_store import (
+        Backend,
+        EvictStatus,
+        MemoryBackend,
+        ObjectStore,
+        PostgresBackend,
+        SqliteBackend,
+    )
+
+    assert inspect.iscoroutinefunction(ObjectStore.evict_bindings)
+    assert list(inspect.signature(ObjectStore.evict_bindings).parameters) == [
+        "self",
+        "keys",
+    ]
+    assert [(status.name, status.value) for status in EvictStatus] == [
+        ("EVICTED", "evicted"),
+        ("ABSENT", "absent"),
+    ]
+
+    # Positive invariant: the enlisted surface is exactly the known
+    # connection-taking read/write set, so a new enlisted method cannot appear
+    # without failing here.
+    assert _connection_first_methods(ObjectStore) == set(
+        ENLISTED_OBJECT_STORE_METHODS
+    )
+
+    # No destructive verb appears in the enlisted surface, nor as any sync
+    # method on a backend: eviction is structurally unreachable from an
+    # evidence transaction rather than merely discouraged.
+    for surface in (
+        ObjectStore,
+        Backend,
+        MemoryBackend,
+        SqliteBackend,
+        PostgresBackend,
+    ):
+        destructive_sync = {
+            name
+            for name in dir(surface)
+            if not name.startswith("_")
+            and _tokens(name) & DESTRUCTIVE_VERBS
+            and (
+                name.endswith("_enlisted")
+                or not inspect.iscoroutinefunction(getattr(surface, name))
+            )
+        }
+        assert destructive_sync == set(), (
+            f"{surface.__name__} exposes destructive sync/enlisted surface: "
+            f"{destructive_sync}"
+        )
+
+
 def test_record_cache_public_surface_is_exact() -> None:
     from dr_store import RecordCache
 
@@ -248,6 +367,7 @@ def test_sqlite_backend_public_surface_is_exact() -> None:
     expected = {
         "aclose",
         "bind",
+        "delete_bindings",
         "get_binding",
         "get_bound_objects",
         "get_object",
@@ -303,4 +423,108 @@ def test_sidecar_hash_public_surface_is_exact() -> None:
         "expected_sidecar_hash",
         "expected_head_length",
         "expected_tail_length",
+    ]
+
+
+def test_artifact_bundle_public_surfaces_are_exact() -> None:
+    from pydantic import BaseModel
+
+    from dr_store import (
+        ArtifactBundlePublication,
+        ArtifactBundleReader,
+        ArtifactDescriptor,
+        BundleArtifactWriter,
+        BundleIncompleteError,
+        BundleManifest,
+        BundlePublicationPhase,
+        BundlePublishError,
+        BundleReadError,
+        BundleReadLimits,
+        BundleVerificationError,
+        BundleVerificationReason,
+        VerifyingArtifactReader,
+    )
+    from dr_store.artifact_bundle import __all__ as bundle_exports
+
+    assert bundle_exports == [
+        "ArtifactBundleError",
+        "ArtifactBundlePublication",
+        "ArtifactBundleReader",
+        "ArtifactDescriptor",
+        "BundleAllocationError",
+        "BundleArtifactWriter",
+        "BundleIncompleteError",
+        "BundleManifest",
+        "BundlePublicationPhase",
+        "BundlePublishError",
+        "BundleReadError",
+        "BundleReadLimits",
+        "BundleVerificationError",
+        "BundleVerificationReason",
+        "VerifyingArtifactReader",
+    ]
+    assert issubclass(ArtifactDescriptor, BaseModel)
+    assert issubclass(BundleManifest, BaseModel)
+    assert ArtifactDescriptor.model_config["strict"] is True
+    assert ArtifactDescriptor.model_config["frozen"] is True
+    assert BundleManifest.model_config["strict"] is True
+    assert BundleManifest.model_config["frozen"] is True
+    assert {
+        name
+        for name in dir(ArtifactBundlePublication)
+        if not name.startswith("_")
+    } == {"allocate", "open_artifact", "path", "publish"}
+    assert {
+        name for name in dir(BundleArtifactWriter) if not name.startswith("_")
+    } == {"finalize", "write"}
+    assert {
+        name for name in dir(ArtifactBundleReader) if not name.startswith("_")
+    } == {"audit", "consume_and_verify_artifact"}
+    assert {
+        name
+        for name in dir(VerifyingArtifactReader)
+        if not name.startswith("_")
+    } == {"read"}
+    assert tuple(field.name for field in fields(BundleReadLimits)) == (
+        "manifest_max_bytes",
+        "manifest_max_depth",
+        "max_artifacts",
+        "max_bytes_per_artifact",
+        "max_total_artifact_bytes",
+    )
+    assert issubclass(BundleIncompleteError, BundleReadError)
+    assert issubclass(BundleVerificationError, BundleReadError)
+    assert [reason.value for reason in BundleVerificationReason] == [
+        "missing",
+        "not_regular",
+        "mismatch",
+        "bounds_exceeded",
+        "incomplete_consumption",
+    ]
+    assert [(phase.name, phase.value) for phase in BundlePublicationPhase] == [
+        ("PRECONDITION", "precondition"),
+        ("ENCODE_MANIFEST", "encode_manifest"),
+        ("CREATE_TEMP", "create_temp"),
+        ("WRITE_TEMP", "write_temp"),
+        ("CLOSE_TEMP", "close_temp"),
+        ("REPLACE_MANIFEST", "replace_manifest"),
+    ]
+    assert list(inspect.signature(BundlePublishError).parameters) == [
+        "path",
+        "phase",
+        "replacement_state",
+        "detail",
+    ]
+    assert list(inspect.signature(ArtifactBundleReader).parameters) == [
+        "path",
+        "limits",
+    ]
+    assert list(inspect.signature(VerifyingArtifactReader).parameters) == []
+    with pytest.raises(TypeError, match="provided only during"):
+        VerifyingArtifactReader()
+    assert list(inspect.signature(BundleVerificationError).parameters) == [
+        "path",
+        "artifact_name",
+        "reason",
+        "detail",
     ]
