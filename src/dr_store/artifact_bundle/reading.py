@@ -219,13 +219,13 @@ def _read_verified_artifact(
             raise BundleReadError(
                 path,
                 detail=f"artifact {descriptor.name!r} could not be read",
-            ) from exc
+            ) from underlying_cause(exc)
         raise BundleVerificationError(
             path,
             descriptor.name,
             reason,
             detail="the declared child did not verify against the manifest",
-        ) from exc
+        ) from underlying_cause(exc)
 
 
 class VerifyingArtifactReader:

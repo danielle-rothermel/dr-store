@@ -817,6 +817,40 @@ def test_consumption_fails_closed_without_required_descriptor_support(
     assert isinstance(caught.value.__cause__, OSError)
 
 
+def test_artifact_read_failure_reports_the_originating_os_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = _publish(tmp_path)
+    os_error = PermissionError("open refused")
+
+    def _raise_wrapped(*_args: object, **_kwargs: object) -> bytes:
+        try:
+            raise os_error
+        except PermissionError as exc:
+            raise VerifiedRegularChildReadError(
+                "the declared child could not be opened",
+                reason=RegularChildFailureReason.NOT_REGULAR,
+            ) from exc
+
+    monkeypatch.setattr(
+        reading_module,
+        "read_verified_regular_child",
+        _raise_wrapped,
+    )
+    with pytest.raises((BundleReadError, BundleVerificationError)) as caught:
+        reading_module._read_verified_artifact(
+            publication.path,
+            ArtifactDescriptor(
+                name="stdout.bin",
+                sha256=hashlib.sha256(b"output").hexdigest(),
+                byte_length=len(b"output"),
+            ),
+            max_bytes=LIMITS.max_bytes_per_artifact,
+        )
+    assert caught.value.__cause__ is os_error
+
+
 def test_unsupported_platform_artifact_read_is_not_a_verification_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
