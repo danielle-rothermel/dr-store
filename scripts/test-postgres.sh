@@ -2,6 +2,59 @@
 
 set -euo pipefail
 
+usage() {
+    cat <<'USAGE'
+Usage:
+  scripts/test-postgres.sh [PYTEST_ARG...]
+  scripts/test-postgres.sh -- COMMAND [ARG...]
+
+Starts a scratch password-authenticated PostgreSQL server, exports
+DR_STORE_POSTGRES_DSN and DR_STORE_REQUIRE_POSTGRES, then runs work against it
+and tears the server down on success, failure, and interrupt.
+
+Without '--', runs dr-store's own suite: 'uv run pytest -q' over the given
+paths, or over 'tests' when no arguments are supplied.
+
+After '--', runs the supplied command instead and propagates its exit code.
+This lets consumer repositories reuse the scratch-server mechanics without
+duplicating them, for example:
+
+  scripts/test-postgres.sh -- uv run pytest tests/evaluation -q
+USAGE
+}
+
+command_mode=0
+declare -a supplied_command=()
+for argument in "$@"; do
+    if [[ "${argument}" == "--" ]]; then
+        command_mode=1
+        break
+    fi
+    if [[ "${argument}" == "-h" || "${argument}" == "--help" ]]; then
+        usage
+        exit 0
+    fi
+done
+
+if [[ "${command_mode}" -eq 1 ]]; then
+    while [[ "$#" -gt 0 ]]; do
+        if [[ "$1" == "--" ]]; then
+            shift
+            supplied_command=("$@")
+            break
+        fi
+        printf 'Unexpected argument before "--": %s\n' "$1" >&2
+        usage >&2
+        exit 2
+    done
+    if [[ "${#supplied_command[@]}" -eq 0 ]]; then
+        printf '%s\n' 'A command is required after "--".' >&2
+        usage >&2
+        exit 2
+    fi
+    set --
+fi
+
 script_directory="$(
     cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
     pwd -P
@@ -150,6 +203,11 @@ export DR_STORE_POSTGRES_DSN="postgresql://postgres@/dr_store_test?host=${encode
 export DR_STORE_REQUIRE_POSTGRES=1
 
 cd -- "${repository_root}"
+if [[ "${command_mode}" -eq 1 ]]; then
+    "${supplied_command[@]}"
+    exit
+fi
+
 if [[ "$#" -eq 0 ]]; then
     set -- tests
 fi

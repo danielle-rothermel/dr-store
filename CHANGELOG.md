@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   inside an evidence transaction. Backends gained the matching
   `delete_bindings` operation on all three implementations.
 
+- Added a command mode to `scripts/test-postgres.sh`: everything after a `--`
+  separator runs against the scratch server instead of dr-store's own pytest,
+  with `DR_STORE_POSTGRES_DSN` exported, the exit code propagated, and the same
+  teardown on success, failure, and interrupt. Consumer repositories can reuse
+  the scratch-server mechanics without duplicating them. Invocation without
+  `--` is unchanged.
+
 - Added the `dr_store.artifact_bundle` package and its fifteen public names
   (`ArtifactBundlePublication`, `ArtifactBundleReader`, `BundleManifest`,
   `ArtifactDescriptor`, `BundleArtifactWriter`, `VerifyingArtifactReader`,
