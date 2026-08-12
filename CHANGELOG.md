@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-12
+
+### Added
+
+- Added sync `install_postgres_sync(engine)` and `PostgresBackend.open_sync(engine)`
+  for sync-first platform assembly without an `AsyncEngine`.
+- Added sync PostgreSQL enlisted methods (`*_enlisted`) that run on a
+  caller-owned SQLAlchemy Core `Connection` without commit, rollback, or
+  release.
+- Added sync `ObjectStore` enlisted helpers (`put_enlisted`, `bind_enlisted`,
+  `put_many_enlisted`, `get_bound_objects_enlisted`, `get_enlisted`,
+  `get_many_enlisted`, `resolve_enlisted`) for ledger-coordinated checkpoint
+  writes and caller-owned sync reads.
+- Added pinned object-reference wire format via `OBJECT_REFERENCE_PREFIX`,
+  `format_object_reference`, and `parse_object_reference`.
+
+### Changed
+
+- Hard-cut PostgreSQL enlistment from async `AsyncConnection` to sync Core
+  `Connection` for platform checkpoint composition.
+- Async `install_postgres` and `PostgresBackend.open` remain for awaited
+  auto-acquire operations; backends opened via `open_sync` raise on those paths.
+
+### Removed
+
+- Removed the optional async `connection=` kwarg from PostgreSQL backend
+  auto-acquire methods.
+
 ## [0.2.1] - 2026-08-12
 
 ### Added

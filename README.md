@@ -22,7 +22,7 @@ document artifacts:
   supply the Object Store's atomic, append-only point and batch operations.
   `MemoryBackend` is process-local; `SqliteBackend` persists committed data for
   cross-process use; `PostgresBackend` shares committed data through a
-  caller-owned SQLAlchemy asynchronous engine.
+  caller-owned SQLAlchemy engine opened synchronously or asynchronously.
 - **[Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)**
   memoizes records under opaque caller-owned keys. Reads return typed hits;
   absent, missing, or unverifiable stored values are misses, while invalid
@@ -48,9 +48,49 @@ dr-store requires Python 3.12 or newer.
 python -m pip install dr-store
 ```
 
-PostgreSQL 16 through 18 installations use SQLAlchemy async with psycopg and an
+PostgreSQL 16 through 18 installations use SQLAlchemy with psycopg and an
 explicit, absent-only schema installation step. The caller creates and owns the
-engine; dr-store neither accepts a DSN nor disposes the engine:
+engine; dr-store neither accepts a DSN nor disposes the engine.
+
+Sync-first platform assembly (checkpoint enlistment and enlisted reads/writes
+on a caller-owned connection):
+
+```python
+import os
+
+from sqlalchemy import create_engine
+
+from dr_store import (
+    ObjectStore,
+    POSTGRES_METADATA,
+    PostgresBackend,
+    format_object_reference,
+    install_postgres_sync,
+)
+
+engine = create_engine(
+    os.environ["DATABASE_URL"].replace(
+        "postgresql://",
+        "postgresql+psycopg://",
+        1,
+    )
+)
+install_postgres_sync(engine)
+backend = PostgresBackend.open_sync(engine)
+store = ObjectStore(backend)
+
+# Checkpoint write (inside a DBOS transaction):
+# with connection.begin():
+#     ref, _ = store.put_enlisted(connection, "example.note.v1", {"title": "hello"})
+#     evidence_reference = format_object_reference(ref)
+
+# Read outside a checkpoint (caller opens the connection):
+# with engine.connect() as connection:
+#     record = store.get_enlisted(connection, ref)
+```
+
+Awaited auto-acquire operations such as ``await store.put(...)`` require a
+backend opened with ``await PostgresBackend.open(async_engine)``:
 
 ```python
 import asyncio
@@ -90,18 +130,22 @@ asyncio.run(main())
 ```
 
 `POSTGRES_METADATA` exports the fixed `dr_store` table definitions for platform
-Alembic ownership. `install_postgres` is a one-time deployment operation that
-creates the namespace, its tables, and the exact
+Alembic ownership. `install_postgres_sync` and `install_postgres` are one-time
+deployment operations that create the namespace, its tables, and the exact
 `dr-store-postgresql-v1` schema-format marker in one transaction on a UTF-8
 database. Repeating installation is an error.
-`await PostgresBackend.open(engine)` validates that marker before returning a
-backend for the same awaited point and batch operations as the other backends;
-it acquires and releases connections without disposing the engine. PostgreSQL
-backend methods accept an optional explicit SQLAlchemy Core connection so
-evidence reads and writes can join a caller-owned transaction; when provided,
-dr-store never commits that connection. Enlisted `get_bound_objects` observes
-one caller-transaction snapshot. Opening never installs, alters, adopts, or
-upgrades storage.
+`PostgresBackend.open_sync(engine)` or `await PostgresBackend.open(engine)`
+validates that marker before returning a backend. Backends opened with
+``open_sync`` support sync enlisted methods and raise on awaited auto-acquire
+operations; backends opened with ``open`` support both paths. Sync enlisted
+read helpers (`get_enlisted`, `get_many_enlisted`, `resolve_enlisted`) mirror
+the async Object Store read surface on a caller-opened connection, including
+outside checkpoint transactions. PostgreSQL sync enlisted methods accept an
+``Connection`` so evidence reads and writes can join a caller-owned checkpoint
+transaction; dr-store never commits that connection. Enlisted
+``get_bound_objects_enlisted`` observes one caller-transaction snapshot.
+Enlisted writes share the caller transaction; dr-store defines no savepoint
+API. Opening never installs, alters, adopts, or upgrades storage.
 
 ## Testing
 
@@ -234,7 +278,15 @@ class ObjectReference:
 
 def compute_content_hash(record: Jsonable) -> str: ...
 def is_content_hash(value: str) -> bool: ...
+
+OBJECT_REFERENCE_PREFIX = "dr-store-object:v1"
+
+def format_object_reference(reference: ObjectReference) -> str: ...
+def parse_object_reference(value: str) -> ObjectReference: ...
 ```
+
+``format_object_reference`` and ``parse_object_reference`` pin the opaque wire
+string that platform consumers store as evidence or output references.
 
 ## Object Store
 
@@ -277,6 +329,29 @@ class ObjectStore:
         self, key: str, reference: ObjectReference
     ) -> BindStatus: ...
     async def resolve(self, key: str) -> ObjectReference | None: ...
+    def put_enlisted(
+        self, connection: Connection, schema: str, record: Jsonable
+    ) -> tuple[ObjectReference, PutStatus]: ...
+    def bind_enlisted(
+        self, connection: Connection, key: str, reference: ObjectReference
+    ) -> BindStatus: ...
+    def put_many_enlisted(
+        self,
+        connection: Connection,
+        entries: Mapping[str, tuple[str, Jsonable]],
+    ) -> dict[str, ObjectReference]: ...
+    def get_bound_objects_enlisted(
+        self, connection: Connection, keys: Iterable[str]
+    ) -> Mapping[str, BoundObjectRow]: ...
+    def get_enlisted(
+        self, connection: Connection, reference: ObjectReference
+    ) -> Jsonable: ...
+    def get_many_enlisted(
+        self, connection: Connection, keys: Iterable[str], *, schema: str
+    ) -> dict[str, StoreHit | None]: ...
+    def resolve_enlisted(
+        self, connection: Connection, key: str
+    ) -> ObjectReference | None: ...
 ```
 
 `get_bound_objects` deduplicates requested keys and returns joined binding/object
@@ -350,6 +425,13 @@ class Backend(Protocol):
 class MemoryBackend: ...
 class PostgresBackend:
     @classmethod
+    def open_sync(
+        cls,
+        engine: Engine,
+        *,
+        batch_chunk_size: int = 512,
+    ) -> PostgresBackend: ...
+    @classmethod
     async def open(
         cls,
         engine: AsyncEngine,
@@ -357,45 +439,55 @@ class PostgresBackend:
         batch_chunk_size: int = 512,
     ) -> PostgresBackend: ...
     async def put_object(
+        self, *, schema: str, content_hash: str, canonical: str
+    ) -> PutOutcome: ...
+    def put_object_enlisted(
         self,
         *,
         schema: str,
         content_hash: str,
         canonical: str,
-        connection: AsyncConnection | None = None,
+        connection: Connection,
     ) -> PutOutcome: ...
     async def bind(
+        self, *, key: str, schema: str, content_hash: str
+    ) -> BindOutcome: ...
+    def bind_enlisted(
         self,
         *,
         key: str,
         schema: str,
         content_hash: str,
-        connection: AsyncConnection | None = None,
+        connection: Connection,
     ) -> BindOutcome: ...
     async def put_bound_objects(
+        self, *, entries: tuple[BoundObjectWrite, ...]
+    ) -> dict[str, BindOutcome]: ...
+    def put_bound_objects_enlisted(
         self,
         *,
         entries: tuple[BoundObjectWrite, ...],
-        connection: AsyncConnection | None = None,
+        connection: Connection,
     ) -> dict[str, BindOutcome]: ...
     async def get_object(
+        self, *, schema: str, content_hash: str
+    ) -> tuple[str, str] | None: ...
+    def get_object_enlisted(
         self,
         *,
         schema: str,
         content_hash: str,
-        connection: AsyncConnection | None = None,
+        connection: Connection,
     ) -> tuple[str, str] | None: ...
-    async def get_binding(
-        self,
-        *,
-        key: str,
-        connection: AsyncConnection | None = None,
+    async def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
+    def get_binding_enlisted(
+        self, *, key: str, connection: Connection
     ) -> tuple[str, str] | None: ...
     async def get_bound_objects(
-        self,
-        *,
-        keys: tuple[str, ...],
-        connection: AsyncConnection | None = None,
+        self, *, keys: tuple[str, ...]
+    ) -> dict[str, BoundObjectRow]: ...
+    def get_bound_objects_enlisted(
+        self, *, keys: tuple[str, ...], connection: Connection
     ) -> dict[str, BoundObjectRow]: ...
 
 class SqliteBackend:

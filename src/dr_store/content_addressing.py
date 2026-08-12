@@ -17,6 +17,7 @@ from dr_store.core.errors import (
 
 CONTENT_HASH_LENGTH = 64
 _HEX_DIGITS = frozenset("0123456789abcdef")
+OBJECT_REFERENCE_PREFIX = "dr-store-object:v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +109,34 @@ class ObjectReference:
                 schema=self.schema,
                 reason=ContentMismatchReason.HASH_MISMATCH,
             )
+
+
+def format_object_reference(reference: ObjectReference) -> str:
+    """Format a validated reference as its pinned opaque wire string."""
+    return (
+        f"{OBJECT_REFERENCE_PREFIX}:{reference.schema}:"
+        f"{reference.content_hash}"
+    )
+
+
+def parse_object_reference(value: str) -> ObjectReference:
+    """Parse a pinned opaque wire string into a validated reference."""
+    if not isinstance(value, str):
+        raise ReferenceValidationError(
+            "object reference wire string must be a string"
+        )
+    prefix = f"{OBJECT_REFERENCE_PREFIX}:"
+    if not value.startswith(prefix):
+        raise ReferenceValidationError(
+            "object reference wire string has an unsupported prefix"
+        )
+    remainder = value.removeprefix(prefix)
+    schema, separator, content_hash = remainder.rpartition(":")
+    if not separator or not schema or not content_hash:
+        raise ReferenceValidationError(
+            "object reference wire string is malformed"
+        )
+    return ObjectReference(schema=schema, content_hash=content_hash)
 
 
 import dr_store.core.store_errors as _store_errors_module  # noqa: E402

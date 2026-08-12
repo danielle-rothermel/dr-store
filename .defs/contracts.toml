@@ -427,12 +427,17 @@ domains as every other backend. Each non-empty write batch uses one database \
 transaction on the auto-commit path, preserves exact replay, releases \
 connections acquired on that path before the operation completes, and makes \
 committed rows available to independently running clients without exposing a \
-PostgreSQL-specific object-store or record-cache API. An optional explicit Core \
-connection on any backend operation runs on the caller-owned transaction \
-boundary without commit, rollback, or connection release. Enlisted \
-`get_bound_objects` reads bindings and objects on that connection and observes \
-one caller-transaction snapshot, including uncommitted writes in that \
-transaction."""
+PostgreSQL-specific record-cache API or async enlisted auto-acquire hooks. Sync \
+enlisted methods accept one explicit SQLAlchemy Core ``Connection`` and run on \
+the caller-owned transaction boundary without commit, rollback, or connection \
+release. ``ObjectStore`` exposes sync enlisted helpers that require \
+``PostgresBackend`` as the checkpoint integration surface, including verified \
+read helpers that mirror ``get``, ``get_many``, and ``resolve`` on a \
+caller-owned connection. Enlisted ``get_bound_objects_enlisted`` reads \
+bindings and objects on that connection and observes one caller-transaction \
+snapshot, including uncommitted writes in that transaction. Enlisted writes \
+share the caller transaction; dr-store defines no savepoint API, so an evidence \
+persistence failure aborts the enclosing checkpoint transaction."""
 rationale = """
 A shared deployment changes persistence scope and contention mechanism, not the \
 observable storage model. One conformance suite across every backend prevents \
@@ -456,22 +461,24 @@ check = "uv run pytest -q tests/document_directory/test_directory.py"
 [[contracts]]
 title = "PostgreSQL schema installation is explicit"
 statement = """
-PostgreSQL schema installation occurs only through the public asynchronous \
-`install_postgres(engine)` operation against a caller-owned SQLAlchemy \
-`AsyncEngine`. It supports PostgreSQL 16 through 18 databases whose server \
-encoding is UTF-8, requires the fixed `dr_store` namespace to be absent, and \
-creates that namespace and all storage tables together with exactly one \
-schema-format marker row in one transaction from exported SQLAlchemy metadata. \
-The marker is exactly `dr-store-postgresql-v1`, and its persisted literal is \
-pinned by a golden contract test. A repeated installation fails visibly rather \
-than adopting or verifying existing objects. Direct `PostgresBackend(...)` \
-construction is unsupported; `await PostgresBackend.open(engine)` returns only \
-after reading and exactly validating the marker. A missing, malformed, or \
-unsupported marker fails before the backend can perform ordinary storage work. \
-Opening and ordinary operations never create, alter, adopt, or upgrade \
-storage. The namespace is not configurable, dr-store ships no migration chain \
-of its own, and the storage contract defines no schema inspection framework, \
-compatibility negotiation, migration, or upgrade path."""
+PostgreSQL schema installation occurs only through the public synchronous \
+`install_postgres_sync(engine)` or asynchronous `install_postgres(engine)` \
+operations against a caller-owned SQLAlchemy `Engine` or `AsyncEngine`. It \
+supports PostgreSQL 16 through 18 databases whose server encoding is UTF-8, \
+requires the fixed `dr_store` namespace to be absent, and creates that \
+namespace and all storage tables together with exactly one schema-format marker \
+row in one transaction from exported SQLAlchemy metadata. The marker is exactly \
+`dr-store-postgresql-v1`, and its persisted literal is pinned by a golden \
+contract test. A repeated installation fails visibly rather than adopting or \
+verifying existing objects. Direct `PostgresBackend(...)` construction is \
+unsupported; `PostgresBackend.open_sync(engine)` or \
+`await PostgresBackend.open(engine)` returns only after reading and exactly \
+validating the marker. A missing, malformed, or unsupported marker fails before \
+the backend can perform ordinary storage work. Opening and ordinary operations \
+never create, alter, adopt, or upgrade storage. The namespace is not \
+configurable, dr-store ships no migration chain of its own, and the storage \
+contract defines no schema inspection framework, compatibility negotiation, \
+migration, or upgrade path."""
 rationale = """
 Explicit installation keeps deployment privileges and failure recovery outside \
 arbitrary application startup. One absent-only namespace gives installation a \
@@ -482,22 +489,24 @@ date = "2026-08-08"
 check = "scripts/test-postgres.sh"
 
 [[contracts]]
-title = "PostgreSQL uses one caller-owned engine and optional enlisted connections"
+title = "PostgreSQL uses one caller-owned engine and sync enlisted connections"
 statement = """
 `sqlalchemy[asyncio]` and `psycopg` are required runtime dependencies. \
-`PostgresBackend` accepts a caller-owned SQLAlchemy `AsyncEngine` only through \
-its awaited `open` operation as its default connection source. Backend \
-operations optionally accept one explicit SQLAlchemy Core `AsyncConnection`; \
-when provided, the operation runs on it and never commits, rolls back, or \
-releases it. Enlisted `get_bound_objects` fetches bindings and referenced \
-objects on that connection and observes one caller-transaction snapshot, \
-including uncommitted writes in that transaction. When absent, the backend \
-acquires a connection, uses one transaction for non-empty writes, and releases \
-the connection before the operation completes. The backend never closes or \
-disposes the caller-owned engine. It defines no custom connection-source \
-Protocol, DSN acceptance or ownership, synchronous source, managed-source \
-lifecycle API, ambient transaction context, ORM Session surface, or \
-distributed-transaction machinery."""
+`PostgresBackend` accepts a caller-owned SQLAlchemy `Engine` through \
+`open_sync` or an `AsyncEngine` through its awaited `open` operation as its \
+connection source. Backends opened with `open_sync` support sync enlisted \
+methods and raise on awaited auto-acquire operations; backends opened with \
+`open` support both paths. Sync enlisted methods accept one explicit \
+SQLAlchemy Core ``Connection``; when provided, the operation runs on it and \
+never commits, rolls back, or releases it. Enlisted \
+``get_bound_objects_enlisted`` fetches bindings and referenced objects on that \
+connection and observes one caller-transaction snapshot, including uncommitted \
+writes in that transaction. Auto-acquire operations acquire a connection, use \
+one transaction for non-empty writes, and release the connection before the \
+operation completes. The backend never closes or disposes the caller-owned \
+engine. It defines no custom connection-source Protocol, DSN acceptance or \
+ownership, second managed-source lifecycle API, ambient transaction context, \
+ORM Session surface, savepoint API, or distributed-transaction machinery."""
 rationale = """
 One engine boundary matches platform ownership while a narrow per-call enlisted \
 connection supports ledger-coordinated evidence reads and writes without \
@@ -559,13 +568,27 @@ date = "2026-08-08"
 check = "scripts/test-postgres.sh"
 
 [[contracts]]
+title = "Object reference wire strings use a pinned prefix"
+statement = """
+An object reference may be formatted as one opaque wire string whose prefix is \
+exactly ``dr-store-object:v1`` followed by the validated schema and \
+64-character lowercase content hash separated by colons. \
+``format_object_reference`` and ``parse_object_reference`` round-trip that \
+shape and reject malformed input before storage work begins."""
+rationale = """
+Platform references remain opaque strings at the ledger boundary while dr-store \
+owns the object identity encoding that becomes an evidence or output reference."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/content_addressing/test_content_addressing.py"
+
+[[contracts]]
 title = "Enlisted PostgreSQL batch writes leave executed object inserts in the caller transaction on conflict"
 statement = """
-When ``put_bound_objects`` runs on a caller-supplied enlisted connection and \
-raises ``ObjectConflictError`` after inserting one or more object rows, those \
-object inserts remain visible on that same open connection until the caller \
-commits or rolls back. Binding inserts that follow the failed conflict check \
-are not performed."""
+When ``put_bound_objects_enlisted`` runs on a caller-supplied enlisted \
+connection and raises ``ObjectConflictError`` after inserting one or more \
+object rows, those object inserts remain visible on that same open connection \
+until the caller commits or rolls back. Binding inserts that follow the failed \
+conflict check are not performed."""
 rationale = """
 Platform ledger enlistment may compose several storage steps in one caller \
 transaction. Conflict after partial progress must not erase already-executed \
