@@ -16,6 +16,7 @@ from dr_store import (
     VerifiedRegularChildReadError,
 )
 from dr_store.core import descriptor_io as descriptor_io_module
+from dr_store.core import filesystem as filesystem_module
 from dr_store.core import verified_read as verified_read_module
 
 if TYPE_CHECKING:
@@ -376,7 +377,9 @@ def test_verify_sidecar_streams_bounded_reads_from_the_inspected_descriptor(
     assert inspected_descriptors == child_descriptors
     assert len(reads) >= 4
     assert {descriptor for descriptor, _ in reads} == set(child_descriptors)
-    assert all(size <= 1 << 16 for _, size in reads)
+    assert all(
+        size <= filesystem_module._READ_CHUNK_BYTES for _, size in reads
+    )
     assert sidecar_path.read_bytes() == replacement
     for descriptor in directory_descriptors + child_descriptors:
         with pytest.raises(
@@ -423,7 +426,7 @@ def test_verify_sidecar_fails_closed_without_no_follow_support(
 ) -> None:
     directory = _allocate(tmp_path)
     (directory.path / SIDECAR_NAME).write_bytes(b"stored")
-    monkeypatch.delattr(verified_read_module.os, "O_NOFOLLOW")
+    monkeypatch.delattr(filesystem_module.os, "O_NOFOLLOW")
 
     with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(

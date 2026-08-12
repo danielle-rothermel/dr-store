@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from dr_store.core import descriptor_io as descriptor_io_module
+from dr_store.core import filesystem as filesystem_module
 from dr_store.document_file import (
     CanonicalJsonFile,
     DocumentPublishError,
@@ -198,6 +200,7 @@ def test_read_fails_closed_without_descriptor_support(
     document_file = _file(tmp_path)
     document_file.publish(FIRST)
     monkeypatch.setattr(file_module, "_OPEN_SUPPORTS_DIR_FD", False)
+    monkeypatch.setattr(filesystem_module, "_OPEN_SUPPORTS_DIR_FD", False)
 
     with pytest.raises(DocumentReadError) as caught:
         document_file.read()
@@ -258,7 +261,7 @@ def test_read_cleanup_failure_does_not_mask_primary_failure(
     def fail_read(*_args: object) -> bytes:
         raise primary
 
-    monkeypatch.setattr(file_module.os, "read", fail_read)
+    monkeypatch.setattr(descriptor_io_module.os, "read", fail_read)
     _fail_selected_close(monkeypatch, lambda _descriptor: True)
 
     with pytest.raises(DocumentReadError) as caught:

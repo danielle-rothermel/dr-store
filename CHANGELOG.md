@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   message-based failure classification in sidecar verification and canonical
   JSON decode. Added `check_safe_name`, shared `descriptor_io` helpers, and
   collapsed duplicate sidecar lexical name validation on the verify path.
+- Consolidated safe-name validation and pinned-read support probes into
+  `core/filesystem.py`; canonical document byte-bound failures now report
+  `ReadStage.READ_BYTES` rather than `ReadStage.DECODE`.
 
 ### Added
 
@@ -33,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Consolidated safe-name validation and pinned-read internals into
+  `core/filesystem.py`; canonical document byte-bound failures now report
+  `ReadStage.READ_BYTES` rather than `ReadStage.DECODE`.
 - Hard-cut the PostgreSQL backend from `asyncpg` to SQLAlchemy async with
   psycopg. `install_postgres(engine)` and `PostgresBackend.open(engine)` accept
   a caller-owned `AsyncEngine`; exported `POSTGRES_METADATA` defines the fixed

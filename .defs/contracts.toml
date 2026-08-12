@@ -273,7 +273,9 @@ no-follow, directory-relative flags, reads no more than one \
 byte beyond the caller-supplied byte bound from the child descriptor it \
 inspected, and accepts only one complete UTF-8 strict JSON value within the \
 configured nesting-depth bound whose stored bytes exactly equal its canonical \
-JSON bytes. Every open, read, close, decoding, bounds, or canonicality failure \
+JSON bytes. Byte-bound failures raise `DocumentReadError` at `ReadStage.READ_BYTES` \
+with `ReadReason.BOUNDS_EXCEEDED`; nesting-depth bound failures raise at \
+`ReadStage.DECODE`. Every other open, read, close, or canonicality failure \
 raises `DocumentReadError` with `ReadStage` and `ReadReason`. `MISSING` means \
 the selected document is absent; every other reason means the document is \
 present but invalid. Unsupported platforms fail closed."""

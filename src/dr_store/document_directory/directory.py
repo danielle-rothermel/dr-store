@@ -152,6 +152,8 @@ class DocumentDirectory:
         *,
         error: type[DocumentDirectoryError],
     ) -> None:
+        # Verify-path name failures use BOUNDS_EXCEEDED as one coarse bucket
+        # for pre-open input rejection alongside byte and segment limits.
         sidecar_path = self._path / name
         if error is SidecarVerificationError:
             if (
