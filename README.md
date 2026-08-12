@@ -103,6 +103,34 @@ dr-store never commits that connection. Enlisted `get_bound_objects` observes
 one caller-transaction snapshot. Opening never installs, alters, adopts, or
 upgrades storage.
 
+## Testing
+
+`scripts/pre-check.sh` is the canonical developer check: lint, types, the full
+test suite, and built-wheel layout verification. Without a PostgreSQL DSN the
+backend-parametrized tests run against the memory and SQLite backends only and
+every PostgreSQL-gated test is skipped.
+
+`scripts/test-postgres.sh` runs the full test suite with the PostgreSQL
+backend enabled. It needs no configuration and no existing server: it
+provisions a throwaway password-authenticated PostgreSQL server under `/tmp`
+(unix socket only, no TCP listener), creates the dedicated `dr_store_test`
+database, exports `DR_STORE_POSTGRES_DSN` and `DR_STORE_REQUIRE_POSTGRES=1`
+(so PostgreSQL tests fail rather than skip), runs pytest, and tears the server
+down. It requires PostgreSQL 16-18 client and server tools, located from
+`PATH`, from a Homebrew `postgresql@16`-`18` installation, or from an explicit
+`DR_STORE_POSTGRES_BIN=<bin directory>`. Arguments pass through to pytest:
+
+```console
+scripts/test-postgres.sh                            # full suite
+scripts/test-postgres.sh tests/storage_backends -q  # any pytest selection
+```
+
+To use an existing server instead, set `DR_STORE_POSTGRES_DSN` to a
+`postgresql://` URL whose database is literally named `dr_store_test`: the
+test fixtures `DROP SCHEMA dr_store CASCADE` around every test and refuse to
+run against any other database name. Set `DR_STORE_REQUIRE_POSTGRES=1` to turn
+missing-DSN skips into failures.
+
 ## Usage
 
 ```python
@@ -229,7 +257,7 @@ class ObjectStore:
         self, schema: str, record: Jsonable
     ) -> tuple[ObjectReference, PutStatus]: ...
     async def get(self, reference: ObjectReference) -> Jsonable: ...
-    async def get_bound_rows(
+    async def get_bound_objects(
         self, keys: Iterable[str]
     ) -> Mapping[str, BoundObjectRow]: ...
     async def get_many(
@@ -251,7 +279,7 @@ class ObjectStore:
     async def resolve(self, key: str) -> ObjectReference | None: ...
 ```
 
-`get_bound_rows` deduplicates requested keys and returns joined binding/object
+`get_bound_objects` deduplicates requested keys and returns joined binding/object
 rows without verification. `verify_stored_record` applies the same checks as
 `get` to one stored row. `get_many` composes those steps for evidence-grade
 bulk reads: deduplicated keys, one verified hit or unbound `None` for every
@@ -262,6 +290,10 @@ reporting cache-style misses. `put_many` validates, canonicalizes, and hashes
 every proposed entry before one backend write batch, then returns the first
 binding winner for each input key. A batch read claims no single snapshot
 across backend read chunks.
+
+Verified object reads raise `ContentHashMismatchError` with
+`ContentMismatchReason`. `actual` carries the observed hash only for
+`HASH_MISMATCH`; other reasons leave `actual` unset.
 
 ## Storage backends
 
@@ -274,7 +306,6 @@ objects carry prepared writes and joined binding/object read results:
 @dataclass(frozen=True, slots=True)
 class PutOutcome:
     inserted: bool
-    stored_schema: str
     stored_canonical: str
 
 @dataclass(frozen=True, slots=True)
@@ -294,7 +325,6 @@ class BoundObjectWrite:
 class BoundObjectRow:
     binding_schema: str
     binding_content_hash: str
-    object_schema: str | None
     canonical: str | None
 ```
 
@@ -465,6 +495,9 @@ does not close a separate instance or coordinate another process, even when
 both use the same database path. These persistence semantics do not promise
 power-loss durability.
 
+Unverifiable stored cache values still report a miss, but increment
+`RecordCache.stats.corruption_count` and log the corrupted key.
+
 ## Canonical JSON document files
 
 A [canonical JSON document file](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)
@@ -507,7 +540,7 @@ class ReadStage(StrEnum):
     VERIFY_CANONICALITY = "verify_canonicality"
 
 @verify(UNIQUE)
-class ReadReason(StrEnum):
+class RegularChildFailureReason(StrEnum):
     MISSING = "missing"
     NOT_REGULAR = "not_regular"
     MISMATCH = "mismatch"
@@ -526,18 +559,11 @@ authoritative. `REPLACED` means replacement returned before later finalization
 failed. `UNKNOWN` means the replacement operation itself failed and cannot
 prove whether the target changed, so callers must inspect or coordinate before
 treating either value as authoritative. `DocumentReadError` reports
-`ReadStage`, `ReadReason`, and the requested path. `MISSING` means the selected
+`ReadStage`, `RegularChildFailureReason`, and the requested path. `MISSING` means the selected
 document is absent; every other reason means the document is present but
 invalid. Both errors derive from `DocumentFileError` and preserve the
 originating failure as their cause. `ManifestPublishError` and
 `ManifestReadError` expose the same structured fields on the directory surface.
-
-Verified object reads raise `ContentHashMismatchError` with
-`ContentMismatchReason`. `actual` carries the observed hash only for
-`HASH_MISMATCH`; other reasons leave `actual` unset.
-
-Unverifiable stored cache values still report a miss, but increment
-`RecordCache.stats.corruption_count` and log the corrupted key.
 
 ## Document Directory
 

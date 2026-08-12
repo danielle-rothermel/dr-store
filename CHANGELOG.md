@@ -6,38 +6,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Changed
-
-- Unified regular direct-child read and sidecar verification failures under
-  `RegularChildFailureReason`, replacing `SidecarVerificationReason` and
-  message-based failure classification in sidecar verification and canonical
-  JSON decode. Added `check_safe_name`, shared `descriptor_io` helpers, and
-  collapsed duplicate sidecar lexical name validation on the verify path.
-- Consolidated safe-name validation and pinned-read support probes into
-  `core/filesystem.py`; canonical document byte-bound failures now report
-  `ReadStage.READ_BYTES` rather than `ReadStage.DECODE`.
+## [0.2.1] - 2026-08-12
 
 ### Added
 
-- Added typed `DocumentReadError` reporting with `ReadStage` and `ReadReason`.
+- Added typed `DocumentReadError` reporting with `ReadStage` and `RegularChildFailureReason`.
 - Added `RecordCacheStats` and corruption logging on unverifiable cache reads.
-- Added `ContentMismatchReason` and `SidecarVerificationReason` for typed
-  object and sidecar verification failures.
+- Added `ContentMismatchReason` for typed object verification failures.
 - Added `read_verified_regular_child` and `VerifiedRegularChildReadError` as the
   storage-owned bounded descriptor-pinned read-and-verify primitive for regular
   direct children.
 - Added public `ObjectStore.get_many` and `ObjectStore.put_many` for
-  evidence-grade bulk reads and prepared bulk writes. Bulk hits use
-  `StoreHit` so bound strict-JSON `null` records are distinct from unbound
-  keys.
-- Added public `ObjectStore.get_bound_rows` and `ObjectStore.verify_stored_record`
-  so callers can join binding/object rows and verify stored content through
-  separate steps.
+  evidence-grade bulk reads and prepared bulk writes. Bulk hits use `StoreHit`
+  so bound strict-JSON `null` records are distinct from unbound keys.
+- Added public `ObjectStore.verify_stored_record` so callers can verify stored
+  content separately from joined reads.
+- Added shared `descriptor_io` helpers and consolidated safe-name validation in
+  `core/filesystem.py`.
+- Added `@verify(UNIQUE)` on `ContentMismatchReason` and
+  `RegularChildFailureReason`.
+- Added a DB-free golden pin for `POSTGRES_METADATA` table layout.
+- Added the `unbudgeted` term and renamed the shared vocabulary entry to
+  `canonical JSON text`.
 
 ### Changed
 
-- Consolidated safe-name validation and pinned-read internals into
-  `core/filesystem.py`; canonical document byte-bound failures now report
+- Unified regular direct-child read and sidecar verification failures under
+  `RegularChildFailureReason`, replacing message-based failure classification.
+- Consolidated pinned-read internals into `core/filesystem.py` and
+  `core/descriptor_io.py`; canonical document byte-bound failures now report
   `ReadStage.READ_BYTES` rather than `ReadStage.DECODE`.
 - Hard-cut the PostgreSQL backend from `asyncpg` to SQLAlchemy async with
   psycopg. `install_postgres(engine)` and `PostgresBackend.open(engine)` accept
@@ -57,22 +54,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   structured fields as delegated document-file errors.
 - Typed `ContentHashMismatchError` with `ContentMismatchReason`; removed
   diagnostic sentinel strings from `actual`.
-- Typed `SidecarVerificationError` with `path` and `SidecarVerificationReason`.
+- Typed `SidecarVerificationError` with `path` and `RegularChildFailureReason`.
 - `DocumentDirectory.verify_sidecar` now delegates to
   `read_verified_regular_child` while preserving its verify-only surface.
-- `RecordCache.put_many` now calls public `ObjectStore.put_many` instead of
-  the former private write batch path.
-- `read_verified_regular_child` now composes private bounded descriptor
-  read/verify helpers internally.
-- `RecordCache` batch misses now call public `ObjectStore.get_bound_rows` and
-  `ObjectStore.verify_stored_record` instead of private Object Store helpers.
-- `ObjectStore.get_many` now composes `get_bound_rows` and
-  `verify_stored_record` internally.
+- Parametrized shared backend conformance tests across memory, sqlite, and
+  optional postgres instead of hand-maintained re-exports.
+- Rewrote `ControlledBackend` test instrumentation as a wrapper over
+  `MemoryBackend`.
+- Renamed cross-package validators to public `validate_binding_key`,
+  `validate_content_hash`, and `validate_reference_schema`.
+- PostgreSQL batch closures now return their results directly instead of mutating
+  outer dicts.
+- Relocated Object Store and Record Cache error semantics in the README to
+  their subsystem sections.
 
 ### Removed
 
+- Removed `PutOutcome.stored_schema` and `BoundObjectRow.object_schema`; callers
+  test `canonical is None` for missing object rows.
+- Removed dead state: `SqliteBackend._path`, duplicate
+  `SqliteRecordCache._active_operations`, discarded publication
+  `directory_close_failed`, and the asyncpg-era `postgres_pool` fixture alias.
+- Removed duplicate `_Lifecycle` and `ReadBoundsExceededMarker`.
 - Removed the artifact-bundle public API and package.
 - Removed the unused `pydantic` runtime dependency left after the bundle cutover.
+
+- Split `core/errors.py` into `core/reasons.py`, `core/store_errors.py`,
+  `core/directory_errors.py`, and `core/verified_read_errors.py`; `core/errors.py`
+  remains a compatibility re-export facade.
+- Renamed internal PostgreSQL `_run_connection_operation(..., transactional=...)`
+  to `write=...` for mutating connection paths.
+
+### Breaking
+
+- Renamed public `ObjectStore.get_bound_rows` to `get_bound_objects`.
+- Removed public `ReadReason`; document read failures now report
+  `RegularChildFailureReason`.
+- Removed redundant protocol fields noted above without compatibility shims.
 
 ## [0.2.0] - 2026-08-08
 

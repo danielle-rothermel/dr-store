@@ -3,9 +3,9 @@ from __future__ import annotations
 import threading
 
 from dr_store.content_addressing import (
-    _validate_binding_key,
-    _validate_content_hash,
-    _validate_reference_schema,
+    validate_binding_key,
+    validate_content_hash,
+    validate_reference_schema,
 )
 from dr_store.core.errors import ObjectConflictError
 from dr_store.storage_backends.contract import (
@@ -31,20 +31,18 @@ class MemoryBackend:
         content_hash: str,
         canonical: str,
     ) -> PutOutcome:
-        _validate_reference_schema(schema)
-        _validate_content_hash(content_hash)
+        validate_reference_schema(schema)
+        validate_content_hash(content_hash)
         with self._lock:
             existing = self._objects.get((schema, content_hash))
             if existing is None:
                 self._objects[(schema, content_hash)] = canonical
                 return PutOutcome(
                     inserted=True,
-                    stored_schema=schema,
                     stored_canonical=canonical,
                 )
             return PutOutcome(
                 inserted=False,
-                stored_schema=schema,
                 stored_canonical=existing,
             )
 
@@ -54,8 +52,8 @@ class MemoryBackend:
         schema: str,
         content_hash: str,
     ) -> tuple[str, str] | None:
-        _validate_reference_schema(schema)
-        _validate_content_hash(content_hash)
+        validate_reference_schema(schema)
+        validate_content_hash(content_hash)
         with self._lock:
             # Alternate schemas distinguish mismatch from missing content.
             exact = self._objects.get((schema, content_hash))
@@ -73,9 +71,9 @@ class MemoryBackend:
         schema: str,
         content_hash: str,
     ) -> BindOutcome:
-        _validate_binding_key(key)
-        _validate_reference_schema(schema)
-        _validate_content_hash(content_hash)
+        validate_binding_key(key)
+        validate_reference_schema(schema)
+        validate_content_hash(content_hash)
         with self._lock:
             existing = self._bindings.get(key)
             if existing is None:
@@ -93,7 +91,7 @@ class MemoryBackend:
             )
 
     async def get_binding(self, *, key: str) -> tuple[str, str] | None:
-        _validate_binding_key(key)
+        validate_binding_key(key)
         with self._lock:
             return self._bindings.get(key)
 
@@ -103,7 +101,7 @@ class MemoryBackend:
         keys: tuple[str, ...],
     ) -> dict[str, BoundObjectRow]:
         for key in keys:
-            _validate_binding_key(key)
+            validate_binding_key(key)
         with self._lock:
             rows: dict[str, BoundObjectRow] = {}
             for key in keys:
@@ -115,7 +113,6 @@ class MemoryBackend:
                 rows[key] = BoundObjectRow(
                     binding_schema=schema,
                     binding_content_hash=content_hash,
-                    object_schema=schema if canonical is not None else None,
                     canonical=canonical,
                 )
             return rows
@@ -126,9 +123,9 @@ class MemoryBackend:
         entries: tuple[BoundObjectWrite, ...],
     ) -> dict[str, BindOutcome]:
         for entry in entries:
-            _validate_binding_key(entry.key)
-            _validate_reference_schema(entry.schema)
-            _validate_content_hash(entry.content_hash)
+            validate_binding_key(entry.key)
+            validate_reference_schema(entry.schema)
+            validate_content_hash(entry.content_hash)
         with self._lock:
             proposed_objects: dict[tuple[str, str], str] = {}
             for entry in entries:

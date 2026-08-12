@@ -12,9 +12,9 @@ from dr_serialize import Jsonable
 
 from dr_store.content_addressing import (
     ObjectReference,
-    _validate_binding_key,
-    _validate_reference_schema,
     compute_content_hash,
+    validate_binding_key,
+    validate_reference_schema,
 )
 from dr_store.core.errors import (
     ContentHashMismatchError,
@@ -34,7 +34,7 @@ def derive_cache_key(namespace: str, payload: Jsonable) -> str:
     if not isinstance(namespace, str):
         raise TypeError("namespace must be a string")
     key = f"{namespace}:{compute_content_hash(payload)}"
-    _validate_binding_key(key)
+    validate_binding_key(key)
     return key
 
 
@@ -94,10 +94,10 @@ class RecordCache:
         *,
         schema: str,
     ) -> dict[str, CacheHit | None]:
-        validated_schema = _validate_reference_schema(schema)
+        validated_schema = validate_reference_schema(schema)
         for key in keys:
-            _validate_binding_key(key)
-        rows = await self._store.get_bound_rows(keys)
+            validate_binding_key(key)
+        rows = await self._store.get_bound_objects(keys)
         results: dict[str, CacheHit | None] = {}
         for key in keys:
             row = rows.get(key)
@@ -112,12 +112,12 @@ class RecordCache:
                 if reference.schema != validated_schema:
                     results[key] = None
                     continue
-                if row.object_schema is None or row.canonical is None:
+                if row.canonical is None:
                     results[key] = None
                     continue
                 record = self._store.verify_stored_record(
                     reference=reference,
-                    stored_schema=row.object_schema,
+                    stored_schema=row.binding_schema,
                     canonical=row.canonical,
                 )
             except (

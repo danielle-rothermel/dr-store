@@ -128,7 +128,7 @@ async def test_close_waits_for_whole_cache_operation_and_rejects_new(
     started = asyncio.Event()
     release = asyncio.Event()
     close_started = asyncio.Event()
-    original = cache._store.get_bound_rows
+    original = cache._store.get_bound_objects
     close_resources = cache._close_resources
 
     async def gated_get(
@@ -142,7 +142,7 @@ async def test_close_waits_for_whole_cache_operation_and_rejects_new(
         close_started.set()
         await close_resources()
 
-    monkeypatch.setattr(cache._store, "get_bound_rows", gated_get)
+    monkeypatch.setattr(cache._store, "get_bound_objects", gated_get)
     monkeypatch.setattr(cache, "_close_resources", observed_close)
     operation = asyncio.create_task(cache.get_many([KEY], schema=SCHEMA))
     await asyncio.wait_for(started.wait(), WATCHDOG_SECONDS)
@@ -165,7 +165,7 @@ async def test_cancelled_close_waiter_does_not_abandon_shared_cleanup(
     started = asyncio.Event()
     release = asyncio.Event()
     close_started = asyncio.Event()
-    original = cache._store.get_bound_rows
+    original = cache._store.get_bound_objects
     close_resources = cache._close_resources
 
     async def gated_get(
@@ -179,7 +179,7 @@ async def test_cancelled_close_waiter_does_not_abandon_shared_cleanup(
         close_started.set()
         await close_resources()
 
-    monkeypatch.setattr(cache._store, "get_bound_rows", gated_get)
+    monkeypatch.setattr(cache._store, "get_bound_objects", gated_get)
     monkeypatch.setattr(cache, "_close_resources", observed_close)
     operation = asyncio.create_task(cache.get(KEY, schema=SCHEMA))
     await asyncio.wait_for(started.wait(), WATCHDOG_SECONDS)
@@ -228,7 +228,7 @@ async def test_close_from_active_operation_fails_without_deadlock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache = await SqliteRecordCache.open(tmp_path / "cache.db")
-    original = cache._store.get_bound_rows
+    original = cache._store.get_bound_objects
     observed: list[SqliteRecordCacheCloseError] = []
 
     async def close_during_get(
@@ -239,7 +239,7 @@ async def test_close_from_active_operation_fails_without_deadlock(
         observed.append(caught.value)
         return await original(keys)
 
-    monkeypatch.setattr(cache._store, "get_bound_rows", close_during_get)
+    monkeypatch.setattr(cache._store, "get_bound_objects", close_during_get)
     assert await cache.get(KEY, schema=SCHEMA) is None
     assert len(observed) == 1
     await cache.aclose()

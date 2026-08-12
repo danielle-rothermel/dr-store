@@ -18,6 +18,8 @@ from dr_store.core.errors import (
     SidecarVerificationError,
 )
 from dr_store.core.filesystem import (
+    UnsafeNameError,
+    check_regular_child_name,
     validate_directory_prefix,
     validate_lexical_sidecar_name,
 )
@@ -152,28 +154,30 @@ class DocumentDirectory:
         *,
         error: type[DocumentDirectoryError],
     ) -> None:
-        # Verify-path name failures use BOUNDS_EXCEEDED as one coarse bucket
-        # for pre-open input rejection alongside byte and segment limits.
         sidecar_path = self._path / name
-        if error is SidecarVerificationError:
-            if (
-                name.casefold() == self._manifest.path.name.casefold()
-                or _is_reserved_document_temp_name(name)
-            ):
-                raise SidecarVerificationError(
-                    sidecar_path,
-                    RegularChildFailureReason.BOUNDS_EXCEEDED,
-                )
-            return
-        validate_lexical_sidecar_name(name, error=error)
         if (
             name.casefold() == self._manifest.path.name.casefold()
             or _is_reserved_document_temp_name(name)
         ):
+            if error is SidecarVerificationError:
+                raise SidecarVerificationError(
+                    sidecar_path,
+                    RegularChildFailureReason.BOUNDS_EXCEEDED,
+                )
             raise error(
                 f"sidecar name {name!r} is reserved by the manifest of "
                 f"{str(self._path)!r}"
             )
+        if error is SidecarVerificationError:
+            try:
+                check_regular_child_name(name)
+            except UnsafeNameError:
+                raise SidecarVerificationError(
+                    sidecar_path,
+                    RegularChildFailureReason.BOUNDS_EXCEEDED,
+                ) from None
+            return
+        validate_lexical_sidecar_name(name, error=error)
 
     def read_manifest(self) -> Jsonable:
         """Read and verify a canonical strict-JSON Manifest."""

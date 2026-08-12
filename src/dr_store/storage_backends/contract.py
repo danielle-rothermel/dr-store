@@ -9,7 +9,6 @@ class PutOutcome:
     """Atomic put result; ``inserted=False`` carries the stored row."""
 
     inserted: bool
-    stored_schema: str
     stored_canonical: str
 
 
@@ -28,7 +27,6 @@ class BoundObjectRow:
 
     binding_schema: str
     binding_content_hash: str
-    object_schema: str | None
     canonical: str | None
 
 

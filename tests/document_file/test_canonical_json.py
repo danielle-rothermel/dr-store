@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from dr_store.core import descriptor_io as descriptor_io_module
+from dr_store.core.errors import RegularChildFailureReason
 from dr_store.document_file import (
     CanonicalJsonFile,
     DocumentFileError,
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
-    ReadReason,
     ReadStage,
     ReplacementState,
 )
@@ -186,7 +186,7 @@ def test_read_rejects_non_strict_or_noncanonical_bytes(
     with pytest.raises(DocumentReadError) as caught:
         document_file.read()
     assert caught.value.path == document_file.path
-    assert caught.value.reason is ReadReason.MISMATCH
+    assert caught.value.reason is RegularChildFailureReason.MISMATCH
     assert caught.value.__cause__ is not None
 
 
@@ -209,7 +209,7 @@ def test_read_consumes_only_the_byte_bound_plus_one(
     monkeypatch.setattr(descriptor_io_module.os, "read", recording_read)
     with pytest.raises(DocumentReadError) as caught:
         oversized.read()
-    assert caught.value.reason is ReadReason.BOUNDS_EXCEEDED
+    assert caught.value.reason is RegularChildFailureReason.BOUNDS_EXCEEDED
     assert caught.value.stage is ReadStage.READ_BYTES
 
     assert requested == [4]
@@ -226,7 +226,7 @@ def test_read_rejects_excessively_nested_documents(tmp_path: Path) -> None:
     nested.path.write_bytes(b"[[null]]")
     with pytest.raises(DocumentReadError) as caught:
         nested.read()
-    assert caught.value.reason is ReadReason.BOUNDS_EXCEEDED
+    assert caught.value.reason is RegularChildFailureReason.BOUNDS_EXCEEDED
 
 
 def test_read_missing_is_typed(tmp_path: Path) -> None:
@@ -234,7 +234,7 @@ def test_read_missing_is_typed(tmp_path: Path) -> None:
     with pytest.raises(DocumentReadError) as caught:
         document_file.read()
     assert caught.value.stage is ReadStage.OPEN_CHILD
-    assert caught.value.reason is ReadReason.MISSING
+    assert caught.value.reason is RegularChildFailureReason.MISSING
     assert isinstance(caught.value.__cause__, OSError)
 
 
@@ -245,7 +245,7 @@ def test_read_rejects_final_symlink_and_directory(tmp_path: Path) -> None:
     link_file.path.symlink_to(target)
     with pytest.raises(DocumentReadError) as caught:
         link_file.read()
-    assert caught.value.reason is ReadReason.NOT_REGULAR
+    assert caught.value.reason is RegularChildFailureReason.NOT_REGULAR
 
     directory_file = CanonicalJsonFile(
         tmp_path,
@@ -255,7 +255,7 @@ def test_read_rejects_final_symlink_and_directory(tmp_path: Path) -> None:
     directory_file.path.mkdir()
     with pytest.raises(DocumentReadError) as caught:
         directory_file.read()
-    assert caught.value.reason is ReadReason.NOT_REGULAR
+    assert caught.value.reason is RegularChildFailureReason.NOT_REGULAR
 
 
 def test_read_rejects_fifo_without_blocking(tmp_path: Path) -> None:
@@ -263,7 +263,7 @@ def test_read_rejects_fifo_without_blocking(tmp_path: Path) -> None:
     os.mkfifo(document_file.path)
     with pytest.raises(DocumentReadError) as caught:
         document_file.read()
-    assert caught.value.reason is ReadReason.NOT_REGULAR
+    assert caught.value.reason is RegularChildFailureReason.NOT_REGULAR
 
 
 def test_partial_writes_are_completed(

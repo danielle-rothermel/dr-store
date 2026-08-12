@@ -18,8 +18,8 @@ from dr_store.content_addressing import (
     ObjectReference,
     _hash_canonical,
     _prepare_record,
-    _validate_binding_key,
-    _validate_reference_schema,
+    validate_binding_key,
+    validate_reference_schema,
 )
 from dr_store.core.errors import (
     BindingConflictError,
@@ -163,9 +163,9 @@ class ObjectStore:
         Invalid requested schemas, schema mismatches, missing referenced
         objects, and unverifiable stored content raise typed errors.
         """
-        validated_schema = _validate_reference_schema(schema)
+        validated_schema = validate_reference_schema(schema)
         distinct = tuple(dict.fromkeys(keys))
-        rows = await self.get_bound_rows(distinct)
+        rows = await self.get_bound_objects(distinct)
         results: dict[str, StoreHit | None] = {}
         for key in distinct:
             row = rows.get(key)
@@ -181,12 +181,12 @@ class ObjectStore:
                     expected=validated_schema,
                     actual=reference.schema,
                 )
-            if row.object_schema is None or row.canonical is None:
+            if row.canonical is None:
                 raise ObjectNotFoundError(reference=reference)
             results[key] = StoreHit(
                 record=self.verify_stored_record(
                     reference=reference,
-                    stored_schema=row.object_schema,
+                    stored_schema=row.binding_schema,
                     canonical=row.canonical,
                 )
             )
@@ -197,25 +197,9 @@ class ObjectStore:
         entries: Mapping[str, tuple[str, Jsonable]],
     ) -> dict[str, ObjectReference]:
         """Store records and return the first binding winner for each key."""
-        return await self._put_bound_records(entries)
-
-    async def get_bound_rows(
-        self,
-        keys: Iterable[str],
-    ) -> Mapping[str, BoundObjectRow]:
-        """Return joined binding/object rows without verification."""
-        distinct = tuple(dict.fromkeys(keys))
-        for key in distinct:
-            _validate_binding_key(key)
-        return await self._backend.get_bound_objects(keys=distinct)
-
-    async def _put_bound_records(
-        self,
-        entries: Mapping[str, tuple[str, Jsonable]],
-    ) -> dict[str, ObjectReference]:
         writes: list[BoundObjectWrite] = []
         for key, (schema, record) in entries.items():
-            _validate_binding_key(key)
+            validate_binding_key(key)
             prepared = _prepare_record(record)
             reference = ObjectReference(
                 schema=schema,
@@ -239,6 +223,16 @@ class ObjectStore:
             for key, outcome in outcomes.items()
         }
 
+    async def get_bound_objects(
+        self,
+        keys: Iterable[str],
+    ) -> Mapping[str, BoundObjectRow]:
+        """Return joined binding/object rows without verification."""
+        distinct = tuple(dict.fromkeys(keys))
+        for key in distinct:
+            validate_binding_key(key)
+        return await self._backend.get_bound_objects(keys=distinct)
+
     async def bind(
         self,
         key: str,
@@ -249,7 +243,7 @@ class ObjectStore:
         Rebinding the same reference is idempotent; a different reference
         raises :class:`BindingConflictError` and preserves the existing one.
         """
-        _validate_binding_key(key)
+        validate_binding_key(key)
         outcome = await self._backend.bind(
             key=key,
             schema=reference.schema,
@@ -270,7 +264,7 @@ class ObjectStore:
         )
 
     async def resolve(self, key: str) -> ObjectReference | None:
-        _validate_binding_key(key)
+        validate_binding_key(key)
         bound = await self._backend.get_binding(key=key)
         if bound is None:
             return None

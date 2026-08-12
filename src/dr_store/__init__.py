@@ -37,7 +37,6 @@ from dr_store.document_file import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
-    ReadReason,
     ReadStage,
     ReplacementState,
 )
@@ -101,7 +100,6 @@ __all__ = [
     "PublicationStage",
     "PutOutcome",
     "PutStatus",
-    "ReadReason",
     "ReadStage",
     "RecordCache",
     "RecordCacheStats",

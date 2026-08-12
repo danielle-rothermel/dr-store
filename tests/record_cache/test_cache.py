@@ -112,7 +112,6 @@ class CorruptBindingBackend(MemoryBackend):
             "bad-binding": BoundObjectRow(
                 binding_schema=SCHEMA,
                 binding_content_hash="not-a-hash",
-                object_schema=None,
                 canonical=None,
             )
         }

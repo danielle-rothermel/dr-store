@@ -64,7 +64,7 @@ statement = """
 verified hit or unbound ``None`` for every distinct requested key. A hit wraps \
 the record so a bound strict-JSON ``null`` value is distinct from an unbound \
 key. It validates the requested schema before awaiting storage and verifies \
-each returned bound object once. ``ObjectStore.get_bound_rows`` performs the \
+each returned bound object once. ``ObjectStore.get_bound_objects`` performs the \
 joined fetch only; verification is separate through ``verify_stored_record`` \
 or evidence-grade ``get_many``. An unbound key reports ``None``; a wrong \
 binding schema, missing referenced object row, and unverifiable stored object \
@@ -274,9 +274,9 @@ byte beyond the caller-supplied byte bound from the child descriptor it \
 inspected, and accepts only one complete UTF-8 strict JSON value within the \
 configured nesting-depth bound whose stored bytes exactly equal its canonical \
 JSON bytes. Byte-bound failures raise `DocumentReadError` at `ReadStage.READ_BYTES` \
-with `ReadReason.BOUNDS_EXCEEDED`; nesting-depth bound failures raise at \
+with `RegularChildFailureReason.BOUNDS_EXCEEDED`; nesting-depth bound failures raise at \
 `ReadStage.DECODE`. Every other open, read, close, or canonicality failure \
-raises `DocumentReadError` with `ReadStage` and `ReadReason`. `MISSING` means \
+raises `DocumentReadError` with `ReadStage` and `RegularChildFailureReason`. `MISSING` means \
 the selected document is absent; every other reason means the document is \
 present but invalid. Unsupported platforms fail closed."""
 rationale = """
@@ -296,7 +296,7 @@ file for both manifest publication and instance reads. It translates \
 standalone configuration, publication, and read failures into its established \
 typed directory errors while preserving the originating error as the cause. \
 `ManifestPublishError` and `ManifestReadError` expose the same \
-`PublicationStage`, `ReplacementState`, `ReadStage`, and `ReadReason` fields \
+`PublicationStage`, `ReplacementState`, `ReadStage`, and `RegularChildFailureReason` fields \
 as the delegated file errors. \
 One lexical absolute directory path is captured and shared by manifest and \
 sidecar operations; symlink targets are not frozen. \
@@ -556,4 +556,19 @@ Shared deployments require secrets that local trust authentication can hide \
 from tests. Constraining dr-store-owned output prevents accidental disclosure \
 without adding a fragile sanitizer for arbitrary third-party exception text."""
 date = "2026-08-08"
+check = "scripts/test-postgres.sh"
+
+[[contracts]]
+title = "Enlisted PostgreSQL batch writes leave executed object inserts in the caller transaction on conflict"
+statement = """
+When ``put_bound_objects`` runs on a caller-supplied enlisted connection and \
+raises ``ObjectConflictError`` after inserting one or more object rows, those \
+object inserts remain visible on that same open connection until the caller \
+commits or rolls back. Binding inserts that follow the failed conflict check \
+are not performed."""
+rationale = """
+Platform ledger enlistment may compose several storage steps in one caller \
+transaction. Conflict after partial progress must not erase already-executed \
+object inserts from the enlisted snapshot the caller is coordinating."""
+date = "2026-08-12"
 check = "scripts/test-postgres.sh"

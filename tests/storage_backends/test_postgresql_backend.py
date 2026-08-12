@@ -16,11 +16,12 @@ from sqlalchemy.ext.asyncio import (
 from dr_store import (
     BindOutcome,
     BoundObjectWrite,
+    ObjectConflictError,
     PostgresBackend,
     install_postgres,
 )
 from dr_store.storage_backends import postgresql
-from tests.storage_backends.conftest import _async_dsn
+from tests.conftest import _async_dsn
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -226,9 +227,8 @@ async def test_exact_text_identity_through_backend(
 
     rows = await postgres_backend.get_bound_objects(keys=values)
     assert {
-        key: (row.binding_schema, row.object_schema, row.canonical)
-        for key, row in rows.items()
-    } == {value: (value, value, f'{{"schema":"{value}"}}') for value in values}
+        key: (row.binding_schema, row.canonical) for key, row in rows.items()
+    } == {value: (value, f'{{"schema":"{value}"}}') for value in values}
 
 
 async def test_committed_rows_are_visible_through_independent_engines(
@@ -295,6 +295,7 @@ async def test_cancelled_open_releases_connection_for_engine_reuse(
 ) -> None:
     await install_postgres(postgres_engine)
     gate = asyncio.Event()
+    started = asyncio.Event()
     gated_calls = 0
 
     original_fetch = postgresql._fetch
@@ -308,12 +309,13 @@ async def test_cancelled_open_releases_connection_for_engine_reuse(
         if "schema_format" in query:
             gated_calls += 1
             if gated_calls == 1:
+                started.set()
                 await gate.wait()
         return await original_fetch(connection, query, parameters)
 
     monkeypatch.setattr(postgresql, "_fetch", gated_fetch)
     operation = asyncio.create_task(PostgresBackend.open(postgres_engine))
-    await asyncio.sleep(0)
+    await started.wait()
     operation.cancel()
     with pytest.raises(asyncio.CancelledError):
         await operation
@@ -452,6 +454,67 @@ async def test_enlisted_batch_read_sees_snapshot_before_caller_commits(
         )
         assert rows["batch-enlisted"].canonical == CANONICAL
         assert rows["batch-enlisted"].binding_content_hash == CONTENT_HASH
+
+
+async def test_enlisted_batch_conflict_retains_object_inserts(
+    postgres_engine: AsyncEngine,
+    postgres_backend: PostgresBackend,
+) -> None:
+    other_hash = "b" * 64
+    await postgres_backend.put_object(
+        schema=SCHEMA,
+        content_hash=other_hash,
+        canonical='{"value":"other"}',
+    )
+    async with postgres_engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            with pytest.raises(ObjectConflictError):
+                await postgres_backend.put_bound_objects(
+                    entries=(
+                        BoundObjectWrite(
+                            "first-key",
+                            SCHEMA,
+                            CONTENT_HASH,
+                            CANONICAL,
+                        ),
+                        BoundObjectWrite(
+                            "second-key",
+                            SCHEMA,
+                            other_hash,
+                            '{"value":"tampered"}',
+                        ),
+                    ),
+                    connection=connection,
+                )
+            row = await connection.scalar(
+                text(
+                    """
+                    SELECT canonical
+                    FROM dr_store.objects
+                    WHERE content_hash = :content_hash AND schema = :schema
+                    """
+                ),
+                {"content_hash": CONTENT_HASH, "schema": SCHEMA},
+            )
+            assert row == CANONICAL
+            assert (
+                await postgres_backend.get_binding(
+                    key="first-key",
+                    connection=connection,
+                )
+                is None
+            )
+        finally:
+            await transaction.rollback()
+
+    assert (
+        await postgres_backend.get_object(
+            schema=SCHEMA,
+            content_hash=CONTENT_HASH,
+        )
+        is None
+    )
 
 
 async def test_enlisted_read_does_not_close_caller_connection(
