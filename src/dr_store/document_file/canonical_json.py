@@ -35,12 +35,12 @@ from dr_store.core.filesystem import (
 from dr_store.core.filesystem import (
     _require_regular_file as _require_regular_file_metadata,
 )
+from dr_store.core.reasons import RegularChildFailureReason
 from dr_store.document_file.errors import (
     DocumentFileError,
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
-    ReadReason,
     ReadStage,
     ReplacementState,
 )
@@ -193,22 +193,24 @@ def _require_regular_file(metadata: os.stat_result) -> None:
         raise OSError(errno.EINVAL, str(exc)) from exc
 
 
-def _read_reason_from_oserror(error: OSError) -> ReadReason:
+def _read_reason_from_oserror(error: OSError) -> RegularChildFailureReason:
     if error.errno == errno.ENOENT:
-        return ReadReason.MISSING
+        return RegularChildFailureReason.MISSING
     if error.errno in {errno.EINVAL, errno.EBADF, errno.ELOOP}:
         message = str(error).casefold()
         if "not a regular file" in message:
-            return ReadReason.NOT_REGULAR
+            return RegularChildFailureReason.NOT_REGULAR
         if error.errno == errno.ELOOP:
-            return ReadReason.NOT_REGULAR
-    return ReadReason.MISMATCH
+            return RegularChildFailureReason.NOT_REGULAR
+    return RegularChildFailureReason.MISMATCH
 
 
-def _read_reason_from_decode(error: BaseException) -> ReadReason:
+def _read_reason_from_decode(
+    error: BaseException,
+) -> RegularChildFailureReason:
     if isinstance(error, (JsonByteLimitError, JsonDepthLimitError)):
-        return ReadReason.BOUNDS_EXCEEDED
-    return ReadReason.MISMATCH
+        return RegularChildFailureReason.BOUNDS_EXCEEDED
+    return RegularChildFailureReason.MISMATCH
 
 
 def _raise_read_error(
@@ -388,7 +390,7 @@ class CanonicalJsonFile:
                 raise DocumentReadError(  # noqa: TRY301
                     self._path,
                     ReadStage.READ_BYTES,
-                    reason=ReadReason.BOUNDS_EXCEEDED,
+                    reason=RegularChildFailureReason.BOUNDS_EXCEEDED,
                 )
         except DocumentReadError:
             raise

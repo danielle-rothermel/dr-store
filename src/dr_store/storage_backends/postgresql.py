@@ -186,7 +186,7 @@ async def _run_connection_operation[T](
     engine: AsyncEngine,
     operation: Callable[[AsyncConnection], Awaitable[T]],
     *,
-    transactional: bool,
+    write: bool,
     connection: AsyncConnection | None = None,
 ) -> T:
     if connection is not None:
@@ -197,7 +197,7 @@ async def _run_connection_operation[T](
         return await operation(connection)
 
     async with engine.connect() as acquired:
-        if transactional:
+        if write:
             async with acquired.begin():
                 return await operation(acquired)
         return await operation(acquired)
@@ -226,7 +226,7 @@ async def install_postgres(engine: AsyncEngine) -> None:
             {"format": POSTGRES_SCHEMA_FORMAT},
         )
 
-    await _run_connection_operation(engine, install, transactional=True)
+    await _run_connection_operation(engine, install, write=True)
 
 
 class PostgresBackend:
@@ -265,7 +265,7 @@ class PostgresBackend:
         await _run_connection_operation(
             engine,
             validate,
-            transactional=False,
+            write=False,
         )
         self = object.__new__(cls)
         self._engine = engine
@@ -316,7 +316,7 @@ class PostgresBackend:
         return await _run_connection_operation(
             self._engine,
             put,
-            transactional=True,
+            write=True,
             connection=connection,
         )
 
@@ -343,7 +343,7 @@ class PostgresBackend:
         return await _run_connection_operation(
             self._engine,
             get,
-            transactional=False,
+            write=False,
             connection=connection,
         )
 
@@ -376,7 +376,7 @@ class PostgresBackend:
         return await _run_connection_operation(
             self._engine,
             bind_key,
-            transactional=True,
+            write=True,
             connection=connection,
         )
 
@@ -397,7 +397,7 @@ class PostgresBackend:
         return await _run_connection_operation(
             self._engine,
             get,
-            transactional=False,
+            write=False,
             connection=connection,
         )
 
@@ -457,7 +457,7 @@ class PostgresBackend:
         return await _run_connection_operation(
             self._engine,
             get,
-            transactional=False,
+            write=False,
             connection=connection,
         )
 
@@ -569,6 +569,6 @@ class PostgresBackend:
         return await _run_connection_operation(
             self._engine,
             put,
-            transactional=True,
+            write=True,
             connection=connection,
         )

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from enum import UNIQUE, StrEnum, verify
-from pathlib import Path  # noqa: TC003 - public hints resolve at runtime.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from dr_store.core.reasons import RegularChildFailureReason
 
 
 @verify(UNIQUE)
@@ -46,20 +51,6 @@ class ReadStage(StrEnum):
     VERIFY_CANONICALITY = "verify_canonicality"
 
 
-@verify(UNIQUE)
-class ReadReason(StrEnum):
-    """Why a document read did not recover one complete canonical document.
-
-    Members describe reporting outcomes. Read behavior must never be
-    constructed by iterating this enum.
-    """
-
-    MISSING = "missing"
-    NOT_REGULAR = "not_regular"
-    MISMATCH = "mismatch"
-    BOUNDS_EXCEEDED = "bounds_exceeded"
-
-
 class DocumentFileError(Exception):
     """Base for standalone canonical document-file failures."""
 
@@ -97,7 +88,7 @@ class DocumentReadError(DocumentFileError):
         path: Path,
         stage: ReadStage,
         *,
-        reason: ReadReason,
+        reason: RegularChildFailureReason,
     ) -> None:
         self.path = path
         self.stage = stage

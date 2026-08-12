@@ -13,12 +13,12 @@ from dr_store import (
     DocumentDirectory,
     ManifestPublishError,
     ManifestReadError,
+    RegularChildFailureReason,
 )
 from dr_store.document_file import (
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
-    ReadReason,
     ReplacementState,
 )
 from dr_store.document_file import canonical_json as file_module
@@ -170,7 +170,7 @@ def test_read_error_is_thin_contextual_translation(
         directory.read_manifest()
 
     assert caught.value.path == directory.path / MANIFEST_NAME
-    assert caught.value.reason is ReadReason.MISMATCH
+    assert caught.value.reason is RegularChildFailureReason.MISMATCH
     document_error = caught.value.__cause__
     assert isinstance(document_error, DocumentReadError)
     assert document_error.__cause__ is not None

@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Added typed `DocumentReadError` reporting with `ReadStage` and `ReadReason`.
+- Added typed `DocumentReadError` reporting with `ReadStage` and `RegularChildFailureReason`.
 - Added `RecordCacheStats` and corruption logging on unverifiable cache reads.
 - Added `ContentMismatchReason` for typed object verification failures.
 - Added `read_verified_regular_child` and `VerifiedRegularChildReadError` as the
@@ -79,9 +79,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the artifact-bundle public API and package.
 - Removed the unused `pydantic` runtime dependency left after the bundle cutover.
 
+- Split `core/errors.py` into `core/reasons.py`, `core/store_errors.py`,
+  `core/directory_errors.py`, and `core/verified_read_errors.py`; `core/errors.py`
+  remains a compatibility re-export facade.
+- Renamed internal PostgreSQL `_run_connection_operation(..., transactional=...)`
+  to `write=...` for mutating connection paths.
+
 ### Breaking
 
 - Renamed public `ObjectStore.get_bound_rows` to `get_bound_objects`.
+- Removed public `ReadReason`; document read failures now report
+  `RegularChildFailureReason`.
 - Removed redundant protocol fields noted above without compatibility shims.
 
 ## [0.2.0] - 2026-08-08

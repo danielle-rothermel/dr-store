@@ -229,7 +229,7 @@ A failed attempt to recover one complete canonical document within its declared 
 bounds from the document selected at the start of the read. It reports the read \
 phase and whether the failure is missing, not regular, mismatched, or \
 bounds-exceeded."""
-exported_symbols = ["DocumentReadError", "ReadStage", "ReadReason"]
+exported_symbols = ["DocumentReadError", "ReadStage"]
 categories = ["document artifacts"]
 
 [[terms]]

@@ -512,7 +512,7 @@ class ReadStage(StrEnum):
     VERIFY_CANONICALITY = "verify_canonicality"
 
 @verify(UNIQUE)
-class ReadReason(StrEnum):
+class RegularChildFailureReason(StrEnum):
     MISSING = "missing"
     NOT_REGULAR = "not_regular"
     MISMATCH = "mismatch"
@@ -531,7 +531,7 @@ authoritative. `REPLACED` means replacement returned before later finalization
 failed. `UNKNOWN` means the replacement operation itself failed and cannot
 prove whether the target changed, so callers must inspect or coordinate before
 treating either value as authoritative. `DocumentReadError` reports
-`ReadStage`, `ReadReason`, and the requested path. `MISSING` means the selected
+`ReadStage`, `RegularChildFailureReason`, and the requested path. `MISSING` means the selected
 document is absent; every other reason means the document is present but
 invalid. Both errors derive from `DocumentFileError` and preserve the
 originating failure as their cause. `ManifestPublishError` and

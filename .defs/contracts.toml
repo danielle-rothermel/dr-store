@@ -274,9 +274,9 @@ byte beyond the caller-supplied byte bound from the child descriptor it \
 inspected, and accepts only one complete UTF-8 strict JSON value within the \
 configured nesting-depth bound whose stored bytes exactly equal its canonical \
 JSON bytes. Byte-bound failures raise `DocumentReadError` at `ReadStage.READ_BYTES` \
-with `ReadReason.BOUNDS_EXCEEDED`; nesting-depth bound failures raise at \
+with `RegularChildFailureReason.BOUNDS_EXCEEDED`; nesting-depth bound failures raise at \
 `ReadStage.DECODE`. Every other open, read, close, or canonicality failure \
-raises `DocumentReadError` with `ReadStage` and `ReadReason`. `MISSING` means \
+raises `DocumentReadError` with `ReadStage` and `RegularChildFailureReason`. `MISSING` means \
 the selected document is absent; every other reason means the document is \
 present but invalid. Unsupported platforms fail closed."""
 rationale = """
@@ -296,7 +296,7 @@ file for both manifest publication and instance reads. It translates \
 standalone configuration, publication, and read failures into its established \
 typed directory errors while preserving the originating error as the cause. \
 `ManifestPublishError` and `ManifestReadError` expose the same \
-`PublicationStage`, `ReplacementState`, `ReadStage`, and `ReadReason` fields \
+`PublicationStage`, `ReplacementState`, `ReadStage`, and `RegularChildFailureReason` fields \
 as the delegated file errors. \
 One lexical absolute directory path is captured and shared by manifest and \
 sidecar operations; symlink targets are not frozen. \
