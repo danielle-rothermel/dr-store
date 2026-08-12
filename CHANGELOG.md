@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   change is that `-h` or `--help` as the sole argument now prints the script's
   usage instead of being forwarded.
 
+- Added real-PostgreSQL coverage for `ObjectStore.put_many_enlisted`, which
+  previously had no behavioral test against a live server: every entry stored
+  and bound, first-writer-wins per key returning the **existing** winner rather
+  than the rejected reference just offered (with the losing record still stored
+  content-addressed), rollback and commit moving the whole batch with the
+  caller's transaction, and an empty batch writing nothing. The enlisted batch
+  contract now states those winner semantics and names these tests.
+
 - Added `scripts/check-compatibility.sh`, which verifies the working tree
   against an already-released dr-store in both directions by installing that
   release into a throwaway virtual environment and exchanging artifact bundles

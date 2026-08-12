@@ -26,6 +26,8 @@ SCHEMA = "example.record"
 RECORD: Jsonable = {"value": "stored"}
 CANONICAL = '{"value":"stored"}'
 CONTENT_HASH = compute_content_hash(RECORD)
+OTHER_RECORD: Jsonable = {"value": "also stored"}
+OTHER_CONTENT_HASH = compute_content_hash(OTHER_RECORD)
 KEY = "evidence-key"
 OTHER_KEY = "missing-key"
 
@@ -165,6 +167,144 @@ async def test_bind_enlisted_is_idempotent(
                 store.bind_enlisted(connection, KEY, reference)
                 is BindStatus.IDEMPOTENT
             )
+    finally:
+        engine.dispose()
+
+
+def test_put_many_enlisted_requires_postgres_backend() -> None:
+    store = ObjectStore(MemoryBackend())
+    with pytest.raises(TypeError, match="PostgresBackend"):
+        store.put_many_enlisted(
+            cast("Connection", object()),
+            {KEY: (SCHEMA, RECORD)},
+        )
+
+
+async def test_put_many_enlisted_stores_and_binds_every_entry(
+    postgres_backend: PostgresBackend,
+) -> None:
+    store = ObjectStore(postgres_backend)
+    engine = _sync_engine()
+    try:
+        with engine.connect() as connection, connection.begin():
+            written = store.put_many_enlisted(
+                connection,
+                {
+                    KEY: (SCHEMA, RECORD),
+                    OTHER_KEY: (SCHEMA, OTHER_RECORD),
+                },
+            )
+            assert written == {
+                KEY: ObjectReference(schema=SCHEMA, content_hash=CONTENT_HASH),
+                OTHER_KEY: ObjectReference(
+                    schema=SCHEMA, content_hash=OTHER_CONTENT_HASH
+                ),
+            }
+            assert store.resolve_enlisted(connection, KEY) == written[KEY]
+            assert (
+                store.resolve_enlisted(connection, OTHER_KEY)
+                == written[OTHER_KEY]
+            )
+            assert store.get_enlisted(connection, written[KEY]) == RECORD
+    finally:
+        engine.dispose()
+
+
+async def test_put_many_enlisted_returns_the_first_writer_for_a_taken_key(
+    postgres_backend: PostgresBackend,
+) -> None:
+    # The batch write is first-writer-wins: a key already bound keeps its
+    # existing reference and that reference -- not the rejected one just
+    # offered -- is what comes back. Callers that record the returned winner
+    # depend on this, so it is pinned against the real database.
+    store = ObjectStore(postgres_backend)
+    engine = _sync_engine()
+    try:
+        with engine.connect() as connection, connection.begin():
+            first = store.put_many_enlisted(
+                connection, {KEY: (SCHEMA, RECORD)}
+            )
+            assert first[KEY].content_hash == CONTENT_HASH
+
+            second = store.put_many_enlisted(
+                connection,
+                {KEY: (SCHEMA, OTHER_RECORD), OTHER_KEY: (SCHEMA, RECORD)},
+            )
+            assert second[KEY] == first[KEY]
+            assert second[KEY].content_hash == CONTENT_HASH
+            assert second[OTHER_KEY].content_hash == CONTENT_HASH
+            assert store.resolve_enlisted(connection, KEY) == first[KEY]
+            # The losing record is still stored content-addressed; only the
+            # binding refused to move.
+            assert (
+                store.get_enlisted(
+                    connection,
+                    ObjectReference(
+                        schema=SCHEMA, content_hash=OTHER_CONTENT_HASH
+                    ),
+                )
+                == OTHER_RECORD
+            )
+    finally:
+        engine.dispose()
+
+
+async def test_put_many_enlisted_rolls_back_with_the_caller(
+    postgres_backend: PostgresBackend,
+) -> None:
+    store = ObjectStore(postgres_backend)
+    engine = _sync_engine()
+    try:
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            store.put_many_enlisted(
+                connection,
+                {KEY: (SCHEMA, RECORD), OTHER_KEY: (SCHEMA, OTHER_RECORD)},
+            )
+            assert store.resolve_enlisted(connection, KEY) is not None
+            transaction.rollback()
+
+        with engine.connect() as connection, connection.begin():
+            assert store.resolve_enlisted(connection, KEY) is None
+            assert store.resolve_enlisted(connection, OTHER_KEY) is None
+    finally:
+        engine.dispose()
+
+
+async def test_put_many_enlisted_commits_every_entry_together(
+    postgres_backend: PostgresBackend,
+) -> None:
+    store = ObjectStore(postgres_backend)
+    engine = _sync_engine()
+    try:
+        with engine.connect() as connection, connection.begin():
+            store.put_many_enlisted(
+                connection,
+                {KEY: (SCHEMA, RECORD), OTHER_KEY: (SCHEMA, OTHER_RECORD)},
+            )
+
+        with engine.connect() as connection, connection.begin():
+            assert store.resolve_enlisted(connection, KEY) == ObjectReference(
+                schema=SCHEMA, content_hash=CONTENT_HASH
+            )
+            assert store.resolve_enlisted(
+                connection, OTHER_KEY
+            ) == ObjectReference(
+                schema=SCHEMA, content_hash=OTHER_CONTENT_HASH
+            )
+    finally:
+        engine.dispose()
+
+
+async def test_put_many_enlisted_writes_nothing_for_an_empty_batch(
+    postgres_backend: PostgresBackend,
+) -> None:
+    store = ObjectStore(postgres_backend)
+    engine = _sync_engine()
+    try:
+        with engine.connect() as connection, connection.begin():
+            assert store.put_many_enlisted(connection, {}) == {}
+            assert store.resolve_enlisted(connection, KEY) is None
     finally:
         engine.dispose()
 

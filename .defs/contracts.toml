@@ -881,10 +881,18 @@ When ``put_bound_objects_enlisted`` runs on a caller-supplied enlisted \
 connection and raises ``ObjectConflictError`` after inserting one or more \
 object rows, those object inserts remain visible on that same open connection \
 until the caller commits or rolls back. Binding inserts that follow the failed \
-conflict check are not performed."""
+conflict check are not performed. Above that backend operation, \
+``ObjectStore.put_many_enlisted`` is first-writer-wins per key: a key already \
+bound keeps its existing binding, and the reference returned for that key is \
+the existing winner rather than the rejected reference just offered. The \
+losing record is still stored content-addressed; only the binding refuses to \
+move. The whole batch is visible or absent with the caller's transaction."""
 rationale = """
 Platform ledger enlistment may compose several storage steps in one caller \
 transaction. Conflict after partial progress must not erase already-executed \
-object inserts from the enlisted snapshot the caller is coordinating."""
+object inserts from the enlisted snapshot the caller is coordinating. \
+Returning the existing winner rather than the offered reference is what lets a \
+caller detect that its own write lost and reconcile, so it is pinned against a \
+real database rather than inferred from a fake."""
 date = "2026-08-12"
-check = "scripts/test-postgres.sh"
+check = "scripts/test-postgres.sh tests/object_store/test_enlisted.py"
