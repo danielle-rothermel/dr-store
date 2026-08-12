@@ -332,7 +332,7 @@ child with required no-follow, directory-relative flags, reads from the child \
 descriptor it inspected, and verifies the caller-supplied non-negative head and \
 tail lengths plus sidecar hash. It rejects final-component symlinks and fails \
 closed when the required platform support is unavailable. Failures raise \
-`SidecarVerificationError` with `SidecarVerificationReason`."""
+`SidecarVerificationError` with `RegularChildFailureReason`."""
 rationale = """
 Pinned descriptors prevent a checked child name from being swapped to a \
 different final object before reading. This boundary does not claim containment \
@@ -349,8 +349,9 @@ direct child with required no-follow, directory-relative flags, reads no more \
 than one byte beyond the caller-supplied ``max_bytes`` bound from the child \
 descriptor it inspected, verifies the caller-supplied non-negative expected byte \
 length and full lowercase SHA-256 digest, and returns exactly the verified \
-bytes. Every open, read, bound, length, or digest failure raises a typed \
-read error, and unsupported platforms fail closed."""
+bytes. Every open, read, bound, length, or digest failure raises \
+`VerifiedRegularChildReadError` with `RegularChildFailureReason`, and \
+unsupported platforms fail closed."""
 rationale = """
 One storage-owned read-and-verify primitive keeps descriptor-pinned byte recovery \
 consistent for callers that need verified bytes rather than verify-only checks. \

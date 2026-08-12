@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import errno
 import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dr_store.core.errors import (
     AllocationError,
+    RegularChildFailureReason,
     SidecarVerificationError,
-    SidecarVerificationReason,
     VerifiedRegularChildReadError,
 )
 from dr_store.core.verified_read import read_verified_regular_child
@@ -130,19 +129,6 @@ class SidecarWriter:
         )
 
 
-def _open_failure_reason(
-    exc: BaseException,
-    *,
-    child_open: bool,
-) -> SidecarVerificationReason:
-    if isinstance(exc, OSError):
-        if exc.errno == errno.ENOENT:
-            return SidecarVerificationReason.MISSING
-        if child_open and exc.errno == errno.ELOOP:
-            return SidecarVerificationReason.NOT_REGULAR
-    return SidecarVerificationReason.MISMATCH
-
-
 def verify_sidecar(
     directory: Path,
     name: str,
@@ -164,7 +150,7 @@ def verify_sidecar(
         if length < 0:
             raise SidecarVerificationError(
                 sidecar_path,
-                SidecarVerificationReason.BOUNDS_EXCEEDED,
+                RegularChildFailureReason.BOUNDS_EXCEEDED,
             )
 
     expected_length = expected_head_length + expected_tail_length
@@ -177,34 +163,7 @@ def verify_sidecar(
             expected_sha256=expected_sidecar_hash,
         )
     except VerifiedRegularChildReadError as exc:
-        message = str(exc)
-        if "exceeds the" in message:
-            raise SidecarVerificationError(
-                sidecar_path,
-                SidecarVerificationReason.BOUNDS_EXCEEDED,
-            ) from exc
-        if "length mismatch" in message or "hash mismatch" in message:
-            raise SidecarVerificationError(
-                sidecar_path,
-                SidecarVerificationReason.MISMATCH,
-            ) from exc
-        if "is not a regular file" in message:
-            raise SidecarVerificationError(
-                sidecar_path,
-                SidecarVerificationReason.NOT_REGULAR,
-            ) from exc
-        if message.startswith("descriptor-pinned no-follow child reads"):
-            raise SidecarVerificationError(
-                sidecar_path,
-                SidecarVerificationReason.UNSUPPORTED_PLATFORM,
-            ) from None
-        if exc.__cause__ is not None:
-            child_open = message.startswith("could not read child ")
-            raise SidecarVerificationError(
-                sidecar_path,
-                _open_failure_reason(exc.__cause__, child_open=child_open),
-            ) from exc.__cause__
         raise SidecarVerificationError(
             sidecar_path,
-            SidecarVerificationReason.MISMATCH,
-        ) from exc
+            exc.reason,
+        ) from exc.__cause__ if exc.__cause__ is not None else exc

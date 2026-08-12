@@ -16,13 +16,21 @@ from dr_serialize import (
     decode_strict_json_bytes,
     validate_strict_json,
 )
+from dr_serialize.decoding.errors import (
+    JsonByteLimitError,
+    JsonDepthLimitError,
+)
 
+from dr_store.core.descriptor_io import (
+    open_child_descriptor,
+    open_directory_descriptor,
+    read_bounded_child_descriptor,
+)
 from dr_store.document_file.errors import (
     DocumentFileError,
     DocumentPublishError,
     DocumentReadError,
     PublicationStage,
-    ReadBoundsExceededMarker,
     ReadReason,
     ReadStage,
     ReplacementState,
@@ -194,11 +202,8 @@ def _read_reason_from_oserror(error: OSError) -> ReadReason:
 
 
 def _read_reason_from_decode(error: BaseException) -> ReadReason:
-    message = str(error).casefold()
-    if any(marker.value in message for marker in ReadBoundsExceededMarker):
+    if isinstance(error, (JsonByteLimitError, JsonDepthLimitError)):
         return ReadReason.BOUNDS_EXCEEDED
-    if isinstance(error, ValueError) and "canonical" in message:
-        return ReadReason.MISMATCH
     return ReadReason.MISMATCH
 
 
@@ -345,7 +350,7 @@ class CanonicalJsonFile:
             _raise_read_error(self._path, stage, exc)
         return document
 
-    def _read_bytes(self) -> bytes:  # noqa: PLR0915
+    def _read_bytes(self) -> bytes:
         stage = ReadStage.OPEN_DIRECTORY
         try:
             _require_descriptor_support(publication=False)
@@ -357,28 +362,24 @@ class CanonicalJsonFile:
         failure_stage = stage
         raw: bytes | None = None
         try:
-            directory_descriptor = os.open(
+            directory_descriptor = open_directory_descriptor(
                 self._directory,
-                _directory_flags(),
+                flags=_directory_flags(),
             )
             stage = ReadStage.OPEN_CHILD
-            child_descriptor = os.open(
+            child_descriptor = open_child_descriptor(
                 self._name,
-                _read_flags(),
-                dir_fd=directory_descriptor,
+                flags=_read_flags(),
+                directory_descriptor=directory_descriptor,
             )
             stage = ReadStage.READ_BYTES
             metadata = os.fstat(child_descriptor)
             _require_regular_file(metadata)
-            chunks = bytearray()
-            limit = self._max_bytes + 1
-            while len(chunks) < limit:
-                requested = min(_READ_CHUNK_BYTES, limit - len(chunks))
-                chunk = os.read(child_descriptor, requested)
-                if not chunk:
-                    break
-                chunks.extend(chunk)
-            raw = bytes(chunks)
+            raw = read_bounded_child_descriptor(
+                child_descriptor,
+                max_bytes=self._max_bytes,
+                chunk_bytes=_READ_CHUNK_BYTES,
+            )
         except (NotImplementedError, OSError, TypeError, ValueError) as exc:
             failure = exc
             failure_stage = stage

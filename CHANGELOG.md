@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Unified regular direct-child read and sidecar verification failures under
+  `RegularChildFailureReason`, replacing `SidecarVerificationReason` and
+  message-based failure classification in sidecar verification and canonical
+  JSON decode. Added `check_safe_name`, shared `descriptor_io` helpers, and
+  collapsed duplicate sidecar lexical name validation on the verify path.
+
 ### Added
 
 - Added typed `DocumentReadError` reporting with `ReadStage` and `ReadReason`.

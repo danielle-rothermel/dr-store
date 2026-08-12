@@ -23,7 +23,9 @@ class ContentMismatchReason(StrEnum):
     NON_CANONICAL_FORM = "non_canonical_form"
 
 
-class SidecarVerificationReason(StrEnum):
+class RegularChildFailureReason(StrEnum):
+    """Why a pinned regular-child read or verification did not succeed."""
+
     MISSING = "missing"
     NOT_REGULAR = "not_regular"
     MISMATCH = "mismatch"
@@ -190,7 +192,7 @@ class SidecarVerificationError(DocumentDirectoryError):
     def __init__(
         self,
         path: Path,
-        reason: SidecarVerificationReason,
+        reason: RegularChildFailureReason,
     ) -> None:
         self.path = path
         self.reason = reason
@@ -201,3 +203,12 @@ class SidecarVerificationError(DocumentDirectoryError):
 
 class VerifiedRegularChildReadError(Exception):
     """Failed to read or verify one pinned regular direct child."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: RegularChildFailureReason,
+    ) -> None:
+        self.reason = reason
+        super().__init__(message)

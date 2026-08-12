@@ -648,7 +648,7 @@ Sidecar's directory entry or impose ordering on document publication.
 Sidecar verification also refuses final-component symlinks for both the
 Document Directory and named child, requires a regular direct child, and reads
 from the descriptor it inspected. Failures raise `SidecarVerificationError`
-with `SidecarVerificationReason` (`MISSING`, `NOT_REGULAR`, `MISMATCH`,
+with `RegularChildFailureReason` (`MISSING`, `NOT_REGULAR`, `MISMATCH`,
 `BOUNDS_EXCEEDED`, or `UNSUPPORTED_PLATFORM`). `read_verified_regular_child` is
 the shared storage-owned primitive for bounded descriptor-pinned reads that
 verify a caller-supplied byte length and SHA-256 digest and return the verified

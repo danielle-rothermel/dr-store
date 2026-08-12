@@ -9,6 +9,7 @@ import sys
 FUNCTIONAL_MODULES = (
     "dr_store.content_addressing",
     "dr_store.core",
+    "dr_store.core.descriptor_io",
     "dr_store.core.errors",
     "dr_store.core.filesystem",
     "dr_store.core.verified_read",
