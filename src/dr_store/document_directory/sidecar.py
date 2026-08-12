@@ -177,12 +177,12 @@ def verify_sidecar(
             expected_sha256=expected_sidecar_hash,
         )
     except VerifiedRegularChildReadError as exc:
-        if exc.__cause__ is not None:
+        message = str(exc)
+        if "exceeds the" in message:
             raise SidecarVerificationError(
                 sidecar_path,
-                _open_failure_reason(exc.__cause__, child_open=True),
-            ) from exc.__cause__
-        message = str(exc)
+                SidecarVerificationReason.BOUNDS_EXCEEDED,
+            ) from exc
         if "length mismatch" in message or "hash mismatch" in message:
             raise SidecarVerificationError(
                 sidecar_path,
@@ -193,16 +193,17 @@ def verify_sidecar(
                 sidecar_path,
                 SidecarVerificationReason.NOT_REGULAR,
             ) from exc
-        if "exceeds the" in message:
-            raise SidecarVerificationError(
-                sidecar_path,
-                SidecarVerificationReason.BOUNDS_EXCEEDED,
-            ) from exc
         if message.startswith("descriptor-pinned no-follow child reads"):
             raise SidecarVerificationError(
                 sidecar_path,
                 SidecarVerificationReason.UNSUPPORTED_PLATFORM,
             ) from None
+        if exc.__cause__ is not None:
+            child_open = message.startswith("could not read child ")
+            raise SidecarVerificationError(
+                sidecar_path,
+                _open_failure_reason(exc.__cause__, child_open=child_open),
+            ) from exc.__cause__
         raise SidecarVerificationError(
             sidecar_path,
             SidecarVerificationReason.MISMATCH,

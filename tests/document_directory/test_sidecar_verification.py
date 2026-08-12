@@ -88,6 +88,23 @@ def test_verify_sidecar_rejects_mismatched_length(
     assert caught.value.reason is SidecarVerificationReason.MISMATCH
 
 
+def test_verify_sidecar_rejects_extra_bytes_as_bounds_exceeded(
+    tmp_path: Path,
+) -> None:
+    payload = b"0123456789extra"
+    directory = _allocate(tmp_path)
+    (directory.path / SIDECAR_NAME).write_bytes(payload)
+
+    with pytest.raises(SidecarVerificationError) as caught:
+        directory.verify_sidecar(
+            SIDECAR_NAME,
+            expected_sidecar_hash=hashlib.sha256(payload).hexdigest(),
+            expected_head_length=5,
+            expected_tail_length=0,
+        )
+    assert caught.value.reason is SidecarVerificationReason.BOUNDS_EXCEEDED
+
+
 @pytest.mark.parametrize(
     ("expected_head_length", "expected_tail_length"),
     [
@@ -209,6 +226,37 @@ def test_verify_sidecar_rejects_a_symlinked_directory_authority(
         )
     assert caught.value.reason is SidecarVerificationReason.MISMATCH
     assert isinstance(caught.value.__cause__, OSError)
+
+
+def test_verify_sidecar_directory_open_eloop_is_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = _allocate(tmp_path)
+    real_open = os.open
+
+    def directory_eloop_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if dir_fd is None:
+            raise OSError(errno.ELOOP, "Too many levels of symbolic links")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(verified_read_module.os, "open", directory_eloop_open)
+    with pytest.raises(SidecarVerificationError) as caught:
+        directory.verify_sidecar(
+            SIDECAR_NAME,
+            expected_sidecar_hash=hashlib.sha256(b"").hexdigest(),
+            expected_head_length=0,
+            expected_tail_length=0,
+        )
+    assert caught.value.reason is SidecarVerificationReason.MISMATCH
+    assert isinstance(caught.value.__cause__, OSError)
+    assert caught.value.__cause__.errno == errno.ELOOP
 
 
 def test_verify_sidecar_rejects_a_directory(tmp_path: Path) -> None:

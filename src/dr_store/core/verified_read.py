@@ -168,12 +168,22 @@ def read_verified_regular_child(
     directory_descriptor: int | None = None
     child_descriptor: int | None = None
     try:
-        directory_descriptor = os.open(directory, _directory_flags())
-        child_descriptor = os.open(
-            name,
-            _child_flags(),
-            dir_fd=directory_descriptor,
-        )
+        try:
+            directory_descriptor = os.open(directory, _directory_flags())
+        except (NotImplementedError, OSError) as exc:
+            raise VerifiedRegularChildReadError(
+                f"could not open directory {str(directory)!r}"
+            ) from exc
+        try:
+            child_descriptor = os.open(
+                name,
+                _child_flags(),
+                dir_fd=directory_descriptor,
+            )
+        except (NotImplementedError, OSError) as exc:
+            raise VerifiedRegularChildReadError(
+                f"could not read child {str(child_path)!r}"
+            ) from exc
         metadata = os.fstat(child_descriptor)
         _require_regular_file(metadata, child_path=child_path)
         return _verify_bounded_descriptor(
@@ -194,10 +204,6 @@ def read_verified_regular_child(
                 f"could not read child {str(child_path)!r}"
             ) from exc.__cause__
         raise
-    except (NotImplementedError, OSError) as exc:
-        raise VerifiedRegularChildReadError(
-            f"could not read child {str(child_path)!r}"
-        ) from exc
     finally:
         if child_descriptor is not None:
             with suppress(OSError):
