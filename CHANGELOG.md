@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   change is that `-h` or `--help` as the sole argument now prints the script's
   usage instead of being forwarded.
 
+- Added `scripts/check-compatibility.sh`, which verifies the working tree
+  against an already-released dr-store in both directions by installing that
+  release into a throwaway virtual environment and exchanging artifact bundles
+  between the two: bundles this tree writes stay readable by the baseline,
+  bundles the baseline wrote still read here (including artifact names the
+  baseline admitted but current publication refuses), and every public name the
+  baseline exported is still present. A test suite imports exactly one
+  `dr_store`, so these checks need two versions resident at once and cannot be
+  expressed in-tree. It runs outside CI and the hooks because it reaches PyPI.
+  `--consumer PATH` also validates a consumer checkout that resolves this tree.
+
 - Declared the SQLite backend's library floor: opening `SqliteBackend` against
   a library older than SQLite 3.35 now raises `RuntimeError` naming the
   requirement, instead of the backend opening and only failing later when

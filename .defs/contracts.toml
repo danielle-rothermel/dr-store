@@ -524,9 +524,11 @@ A closed self-identifying envelope separates storage integrity from caller \
 meaning. Explicit literals and golden tests make every persisted-format change \
 a visible contract change rather than an incidental code rename. Golden tests \
 pin the stored manifest bytes so a bundle recorded by an earlier release stays \
-readable."""
+readable. Golden tests pin those bytes from inside one installed version, so \
+`scripts/check-compatibility.sh` exchanges bundles with an actually-installed \
+earlier release to confirm the claim across versions."""
 date = "2026-08-12"
-check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_reading.py::test_invalid_terminal_manifest_is_incomplete"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_reading.py::test_invalid_terminal_manifest_is_incomplete && scripts/check-compatibility.sh"
 
 [[contracts]]
 title = "Artifact bundle publication is manifest-committed"
@@ -605,7 +607,7 @@ binds admission only: an earlier release recorded such names legitimately, so \
 applying it to reads would make already-recorded bundles unreadable, which \
 name hygiene for new writers does not justify."""
 date = "2026-08-12"
-check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_reading.py"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_reading.py && scripts/check-compatibility.sh"
 
 [[contracts]]
 title = "Artifact bundle reads are layered over storage primitives"

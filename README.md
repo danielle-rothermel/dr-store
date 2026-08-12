@@ -170,6 +170,33 @@ scripts/test-postgres.sh                            # full suite
 scripts/test-postgres.sh tests/storage_backends -q  # any pytest selection
 ```
 
+`scripts/check-compatibility.sh` verifies this working tree against an
+already-released dr-store, in both directions, by installing that release into
+a throwaway virtual environment and exchanging artifact bundles between the
+two. A test suite imports exactly one `dr_store`, so it cannot express these
+checks; they need two versions resident at once. It checks that bundles this
+tree writes stay readable by the baseline, that bundles the baseline wrote
+still read here (including artifact names the baseline admitted but current
+publication refuses), and that every public name the baseline exported is
+still present.
+
+It is deliberately outside CI and the hooks: it reaches PyPI and spends about
+half a minute building the baseline environment. Run it before publishing a
+release, and whenever a change touches the bundle format, the public API
+surface, or the compatibility claims in `.defs/contracts.toml`.
+
+```console
+scripts/check-compatibility.sh                       # against the default baseline
+scripts/check-compatibility.sh --baseline 0.2.0      # against a chosen release
+scripts/check-compatibility.sh --consumer ../dr-code # also validate a consumer
+```
+
+`--consumer PATH` additionally validates a checkout that resolves this working
+tree through an editable `[tool.uv.sources]` entry: it confirms the consumer
+really imports this tree, runs the consumer's suite, and exercises the
+consumer's reuse of `scripts/test-postgres.sh` command mode from its own
+directory.
+
 To use an existing server instead, set `DR_STORE_POSTGRES_DSN` to a
 `postgresql://` URL whose database is literally named `dr_store_test`: the
 test fixtures `DROP SCHEMA dr_store CASCADE` around every test and refuse to
