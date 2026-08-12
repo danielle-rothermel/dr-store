@@ -183,11 +183,12 @@ database through one caller-owned SQLAlchemy asynchronous engine. Table \
 definitions are exported as SQLAlchemy metadata for platform Alembic ownership. \
 Auto-acquire operations use the awaited backend protocol. Sync enlisted methods \
 accept an explicit SQLAlchemy Core ``Connection`` so evidence writes can join a \
-caller-owned checkpoint transaction; enlisted ``get_bound_objects_enlisted`` \
-observes one caller-transaction snapshot. Awaited opening validates the marker \
-before independently running clients observe the same asynchronous backend \
-semantics, without PostgreSQL-specific behavior entering the object store or \
-record cache surfaces."""
+caller-owned checkpoint transaction; ``ObjectStore`` sync enlisted helpers \
+require ``PostgresBackend`` as the checkpoint integration surface. Enlisted \
+``get_bound_objects_enlisted`` observes one caller-transaction snapshot. \
+Awaited opening validates the marker before independently running clients \
+observe the same asynchronous backend semantics, without PostgreSQL-specific \
+behavior entering the record cache surface."""
 exported_symbols = [
   "PostgresBackend",
   "POSTGRES_METADATA",

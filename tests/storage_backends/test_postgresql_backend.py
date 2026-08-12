@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Callable, Mapping
 
     from sqlalchemy.engine import Connection, Engine
 
@@ -309,24 +309,19 @@ async def test_cancelled_open_releases_connection_for_engine_reuse(
     await install_postgres(postgres_engine)
     started = asyncio.Event()
     release = asyncio.Event()
-    gated_calls = 0
-    original_run = postgresql._run_connection_operation
+    original_run_sync = AsyncConnection.run_sync
 
-    async def gated_run[T](
-        engine: AsyncEngine,
-        operation: Callable[[AsyncConnection], Awaitable[T]],
-        *,
-        write: bool,
-    ) -> T:
-        nonlocal gated_calls
-        if not write:
-            gated_calls += 1
-            if gated_calls == 1:
-                started.set()
-                await release.wait()
-        return await original_run(engine, operation, write=write)
+    async def gated_run_sync(
+        self: AsyncConnection,
+        fn: Callable[..., object],
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        started.set()
+        await release.wait()
+        return await original_run_sync(self, fn, *args, **kwargs)
 
-    monkeypatch.setattr(postgresql, "_run_connection_operation", gated_run)
+    monkeypatch.setattr(AsyncConnection, "run_sync", gated_run_sync)
     operation = asyncio.create_task(PostgresBackend.open(postgres_engine))
     await started.wait()
     operation.cancel()
@@ -334,7 +329,6 @@ async def test_cancelled_open_releases_connection_for_engine_reuse(
     with pytest.raises(asyncio.CancelledError):
         await operation
 
-    assert gated_calls == 1
     backend = await PostgresBackend.open(postgres_engine)
     assert await backend.get_binding(key="missing") is None
 

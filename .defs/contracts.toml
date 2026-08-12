@@ -427,9 +427,11 @@ domains as every other backend. Each non-empty write batch uses one database \
 transaction on the auto-commit path, preserves exact replay, releases \
 connections acquired on that path before the operation completes, and makes \
 committed rows available to independently running clients without exposing a \
-PostgreSQL-specific object-store or record-cache API. Sync enlisted methods \
-accept one explicit SQLAlchemy Core ``Connection`` and run on the caller-owned \
-transaction boundary without commit, rollback, or connection release. Enlisted \
+PostgreSQL-specific record-cache API or async enlisted auto-acquire hooks. Sync \
+enlisted methods accept one explicit SQLAlchemy Core ``Connection`` and run on \
+the caller-owned transaction boundary without commit, rollback, or connection \
+release. ``ObjectStore`` exposes sync enlisted helpers that require \
+``PostgresBackend`` as the checkpoint integration surface. Enlisted \
 ``get_bound_objects_enlisted`` reads bindings and objects on that connection \
 and observes one caller-transaction snapshot, including uncommitted writes in \
 that transaction. Enlisted writes share the caller transaction; dr-store \
