@@ -152,6 +152,8 @@ class DocumentDirectory:
         *,
         error: type[DocumentDirectoryError],
     ) -> None:
+        # Verify-path name failures use BOUNDS_EXCEEDED as one coarse bucket
+        # for pre-open input rejection alongside byte and segment limits.
         sidecar_path = self._path / name
         if error is SidecarVerificationError:
             if (
@@ -168,6 +170,11 @@ class DocumentDirectory:
             name.casefold() == self._manifest.path.name.casefold()
             or _is_reserved_document_temp_name(name)
         ):
+            if error is SidecarVerificationError:
+                raise SidecarVerificationError(
+                    sidecar_path,
+                    RegularChildFailureReason.BOUNDS_EXCEEDED,
+                )
             raise error(
                 f"sidecar name {name!r} is reserved by the manifest of "
                 f"{str(self._path)!r}"

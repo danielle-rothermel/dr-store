@@ -3,7 +3,6 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
-import stat
 import uuid
 from contextlib import suppress
 from pathlib import Path
@@ -26,6 +25,16 @@ from dr_store.core.descriptor_io import (
     open_directory_descriptor,
     read_bounded_child_descriptor,
 )
+from dr_store.core.filesystem import (
+    _READ_CHUNK_BYTES,
+    _child_read_open_flags,
+    _directory_open_flags,
+    _pinned_read_support_detail,
+    validate_safe_name,
+)
+from dr_store.core.filesystem import (
+    _require_regular_file as _require_regular_file_metadata,
+)
 from dr_store.document_file.errors import (
     DocumentFileError,
     DocumentPublishError,
@@ -36,15 +45,11 @@ from dr_store.document_file.errors import (
     ReplacementState,
 )
 
-_READ_CHUNK_BYTES = 1 << 16
 _RESERVED_TEMP_PREFIX = ".dr-store-document-"
-_UNSAFE_NAME_CHARACTERS = frozenset({"/", "\\", "\x00"})
-_RESERVED_NAMES = frozenset({"", ".", ".."})
 _OPEN_SUPPORTS_DIR_FD = os.open in getattr(os, "supports_dir_fd", ())
 _UNLINK_SUPPORTS_DIR_FD = os.unlink in getattr(os, "supports_dir_fd", ())
 _COMMON_OPEN_FLAGS = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW")
 _PUBLICATION_OPEN_FLAGS = ("O_CREAT", "O_EXCL", "O_WRONLY")
-_READ_OPEN_FLAGS = ("O_NONBLOCK", "O_RDONLY")
 
 
 def _is_reserved_document_temp_name(name: str) -> bool:
@@ -52,12 +57,7 @@ def _is_reserved_document_temp_name(name: str) -> bool:
 
 
 def _validate_name(name: str) -> None:
-    if name in _RESERVED_NAMES or any(
-        character in _UNSAFE_NAME_CHARACTERS for character in name
-    ):
-        raise DocumentFileError(
-            f"name must be one safe path segment, got {name!r}"
-        )
+    validate_safe_name(name, role="name", error=DocumentFileError)
     if _is_reserved_document_temp_name(name):
         raise DocumentFileError(
             f"name {name!r} belongs to the reserved publication namespace"
@@ -83,9 +83,17 @@ def _validate_canonical_json_file_configuration(
 
 
 def _require_descriptor_support(*, publication: bool) -> None:
+    if not publication:
+        detail = _pinned_read_support_detail()
+        if detail is not None:
+            raise OSError(
+                errno.ENOTSUP,
+                f"descriptor-pinned document files are unsupported: {detail}",
+            )
+        return
     required_flags = [
         *_COMMON_OPEN_FLAGS,
-        *(_PUBLICATION_OPEN_FLAGS if publication else _READ_OPEN_FLAGS),
+        *_PUBLICATION_OPEN_FLAGS,
     ]
     missing_flags = [
         flag
@@ -95,7 +103,7 @@ def _require_descriptor_support(*, publication: bool) -> None:
     missing_operations = []
     if not _OPEN_SUPPORTS_DIR_FD:
         missing_operations.append("os.open(dir_fd=...)")
-    if publication and not _UNLINK_SUPPORTS_DIR_FD:
+    if not _UNLINK_SUPPORTS_DIR_FD:
         missing_operations.append("os.unlink(dir_fd=...)")
     missing = [*missing_flags, *missing_operations]
     if missing:
@@ -106,16 +114,8 @@ def _require_descriptor_support(*, publication: bool) -> None:
         )
 
 
-def _directory_flags() -> int:
-    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-
-
 def _temp_flags() -> int:
     return os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
-
-
-def _read_flags() -> int:
-    return os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
 
 def _temporary_name(target_name: str) -> str:
@@ -185,8 +185,14 @@ def _require_canonical_storage(document: Jsonable, raw: bytes) -> None:
 
 
 def _require_regular_file(metadata: os.stat_result) -> None:
-    if not stat.S_ISREG(metadata.st_mode):
-        raise OSError(errno.EINVAL, "document is not a regular file")
+    try:
+        _require_regular_file_metadata(
+            metadata,
+            error=ValueError,
+            message="document is not a regular file",
+        )
+    except ValueError as exc:
+        raise OSError(errno.EINVAL, str(exc)) from exc
 
 
 def _read_reason_from_oserror(error: OSError) -> ReadReason:
@@ -280,7 +286,7 @@ class CanonicalJsonFile:
             _require_descriptor_support(publication=True)
             directory_descriptor = os.open(
                 self._directory,
-                _directory_flags(),
+                _directory_open_flags(),
             )
             temporary_name = _temporary_name(self._name)
             temporary_descriptor = os.open(
@@ -364,12 +370,12 @@ class CanonicalJsonFile:
         try:
             directory_descriptor = open_directory_descriptor(
                 self._directory,
-                flags=_directory_flags(),
+                flags=_directory_open_flags(),
             )
             stage = ReadStage.OPEN_CHILD
             child_descriptor = open_child_descriptor(
                 self._name,
-                flags=_read_flags(),
+                flags=_child_read_open_flags(),
                 directory_descriptor=directory_descriptor,
             )
             stage = ReadStage.READ_BYTES
@@ -380,6 +386,14 @@ class CanonicalJsonFile:
                 max_bytes=self._max_bytes,
                 chunk_bytes=_READ_CHUNK_BYTES,
             )
+            if len(raw) > self._max_bytes:
+                raise DocumentReadError(  # noqa: TRY301
+                    self._path,
+                    ReadStage.READ_BYTES,
+                    reason=ReadReason.BOUNDS_EXCEEDED,
+                )
+        except DocumentReadError:
+            raise
         except (NotImplementedError, OSError, TypeError, ValueError) as exc:
             failure = exc
             failure_stage = stage

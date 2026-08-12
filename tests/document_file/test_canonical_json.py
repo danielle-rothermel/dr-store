@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from dr_store.core import descriptor_io as descriptor_io_module
 from dr_store.document_file import (
     CanonicalJsonFile,
     DocumentFileError,
@@ -205,10 +206,11 @@ def test_read_consumes_only_the_byte_bound_plus_one(
         returned.append(len(chunk))
         return chunk
 
-    monkeypatch.setattr(file_module.os, "read", recording_read)
+    monkeypatch.setattr(descriptor_io_module.os, "read", recording_read)
     with pytest.raises(DocumentReadError) as caught:
         oversized.read()
     assert caught.value.reason is ReadReason.BOUNDS_EXCEEDED
+    assert caught.value.stage is ReadStage.READ_BYTES
 
     assert requested == [4]
     assert sum(returned) == 4
@@ -404,6 +406,7 @@ def test_read_stays_on_opened_inode_across_replacement(
 
     monkeypatch.setattr(file_module.os, "open", recording_open)
     monkeypatch.setattr(file_module.os, "read", gated_read)
+    monkeypatch.setattr(descriptor_io_module.os, "read", gated_read)
 
     def read_old() -> None:
         try:

@@ -17,26 +17,16 @@ from dr_store.core.errors import (
     RegularChildFailureReason,
     VerifiedRegularChildReadError,
 )
-from dr_store.core.filesystem import UnsafeNameError, check_regular_child_name
+from dr_store.core.filesystem import (
+    UnsafeNameError,
+    _child_read_open_flags,
+    _directory_open_flags,
+    _pinned_read_support_detail,
+    check_regular_child_name,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-_OPEN_SUPPORTS_DIR_FD = os.open in getattr(os, "supports_dir_fd", ())
-_REQUIRED_OPEN_FLAGS = (
-    "O_CLOEXEC",
-    "O_DIRECTORY",
-    "O_NOFOLLOW",
-    "O_NONBLOCK",
-)
-
-
-def _directory_flags() -> int:
-    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-
-
-def _child_flags() -> int:
-    return os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
 
 def _directory_open_reason(exc: BaseException) -> RegularChildFailureReason:
@@ -92,13 +82,8 @@ def _validate_read_arguments(
 
 
 def _require_descriptor_support() -> None:
-    missing_flags = [
-        flag
-        for flag in _REQUIRED_OPEN_FLAGS
-        if not isinstance(getattr(os, flag, None), int)
-    ]
-    if not _OPEN_SUPPORTS_DIR_FD or missing_flags:
-        detail = ", ".join(missing_flags) or "os.open(dir_fd=...)"
+    detail = _pinned_read_support_detail()
+    if detail is not None:
         raise VerifiedRegularChildReadError(
             "descriptor-pinned no-follow child reads are unsupported: "
             f"missing {detail}",
@@ -135,7 +120,7 @@ def read_verified_regular_child(
         try:
             directory_descriptor = open_directory_descriptor(
                 directory,
-                flags=_directory_flags(),
+                flags=_directory_open_flags(),
             )
         except (NotImplementedError, OSError) as exc:
             raise VerifiedRegularChildReadError(
@@ -145,7 +130,7 @@ def read_verified_regular_child(
         try:
             child_descriptor = open_child_descriptor(
                 name,
-                flags=_child_flags(),
+                flags=_child_read_open_flags(),
                 directory_descriptor=directory_descriptor,
             )
         except (NotImplementedError, OSError) as exc:

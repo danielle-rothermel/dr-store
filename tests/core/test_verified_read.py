@@ -10,7 +10,7 @@ from dr_store import (
     VerifiedRegularChildReadError,
     read_verified_regular_child,
 )
-from dr_store.core import verified_read as verified_read_module
+from dr_store.core import filesystem as filesystem_module
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -113,7 +113,7 @@ def test_read_verified_regular_child_fails_closed_without_no_follow_support(
     payload = b"stored"
     child_name = "artifact.bin"
     (tmp_path / child_name).write_bytes(payload)
-    monkeypatch.delattr(verified_read_module.os, "O_NOFOLLOW")
+    monkeypatch.delattr(filesystem_module.os, "O_NOFOLLOW")
 
     with pytest.raises(VerifiedRegularChildReadError) as caught:
         read_verified_regular_child(

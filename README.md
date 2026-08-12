@@ -631,16 +631,21 @@ not redirect their operations. This does not freeze symlink targets.
 
 Canonical document reads open the named directory and regular direct child with
 required no-follow, directory-relative flags, then stream from the child
-descriptor they inspected. They read only to the configured byte bound plus the
-single byte needed to detect overflow, enforce the configured nesting-depth
-bound, and require one complete UTF-8 strict JSON value whose bytes are exactly
-canonical. Final-component symlinks and non-regular files are rejected, a
-replacement after open cannot redirect that read to a different inode, and
-platforms without the required descriptor operations fail closed.
+descriptor they inspected through shared internals in
+[`core/filesystem.py`](src/dr_store/core/filesystem.py). They read only to the
+configured byte bound plus the single byte needed to detect overflow; byte-bound
+failures report `ReadStage.READ_BYTES`. They enforce the configured
+nesting-depth bound at decode, and require one complete UTF-8 strict JSON value
+whose bytes are exactly canonical. Final-component symlinks and non-regular
+files are rejected, a replacement after open cannot redirect that read to a
+different inode, and platforms without the required descriptor operations fail
+closed.
 
-Outside the reserved publication namespace, name validation prevents lexical
-traversal syntax. Sidecar creation and writes follow existing final-component
-symlinks and therefore require trusted, caller-controlled directory contents.
+Outside the reserved publication namespace, [`validate_safe_name`](src/dr_store/core/filesystem.py)
+prevents lexical traversal syntax across canonical files, document directories,
+and verified regular-child reads. Sidecar creation and writes follow existing
+final-component symlinks and therefore require trusted, caller-controlled
+directory contents.
 Sidecar writer coordination remains the caller's concern. Sidecar finalization
 flushes userspace buffers and closes the Sidecar descriptor before returning
 its stored-byte accounting and sidecar hash, but it does not flush the
@@ -649,11 +654,12 @@ Sidecar verification also refuses final-component symlinks for both the
 Document Directory and named child, requires a regular direct child, and reads
 from the descriptor it inspected. Failures raise `SidecarVerificationError`
 with `RegularChildFailureReason` (`MISSING`, `NOT_REGULAR`, `MISMATCH`,
-`BOUNDS_EXCEEDED`, or `UNSUPPORTED_PLATFORM`). `read_verified_regular_child` is
-the shared storage-owned primitive for bounded descriptor-pinned reads that
-verify a caller-supplied byte length and SHA-256 digest and return the verified
-bytes. `DocumentDirectory.verify_sidecar` delegates to it without returning
-bytes.
+`BOUNDS_EXCEEDED`, or `UNSUPPORTED_PLATFORM`). Shared pinned-read internals in
+[`core/filesystem.py`](src/dr_store/core/filesystem.py) and
+[`descriptor_io.py`](src/dr_store/core/descriptor_io.py) back both canonical
+document reads and `read_verified_regular_child`, which verifies a
+caller-supplied byte length and SHA-256 digest and returns the verified bytes.
+`DocumentDirectory.verify_sidecar` delegates to it without returning bytes.
 
 A failed Sidecar `write` raises `AllocationError` and may leave its descriptor
 open and its accounting state advanced. The writer is unusable by contract and
