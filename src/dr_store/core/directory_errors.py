@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path  # noqa: TC003 - public hints resolve at runtime.
 
+from dr_store.core.reasons import RegularChildFailureReason  # noqa: TC001
 from dr_store.document_file.errors import (
     PublicationStage,
     ReadStage,
     ReplacementState,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from dr_store.core.reasons import RegularChildFailureReason
 
 
 class DocumentDirectoryError(Exception):

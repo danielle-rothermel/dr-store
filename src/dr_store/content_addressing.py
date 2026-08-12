@@ -108,3 +108,8 @@ class ObjectReference:
                 schema=self.schema,
                 reason=ContentMismatchReason.HASH_MISMATCH,
             )
+
+
+import dr_store.core.store_errors as _store_errors_module  # noqa: E402
+
+_store_errors_module.ObjectReference = ObjectReference

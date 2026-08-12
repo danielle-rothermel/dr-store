@@ -6,6 +6,8 @@ from dr_store.core.reasons import ContentMismatchReason
 
 if TYPE_CHECKING:
     from dr_store.content_addressing import ObjectReference
+else:
+    ObjectReference: type
 
 
 class StoreError(Exception):

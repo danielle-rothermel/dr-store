@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 from enum import UNIQUE, StrEnum, verify
-from typing import TYPE_CHECKING
+from pathlib import Path  # noqa: TC003 - public hints resolve at runtime.
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from dr_store.core.reasons import RegularChildFailureReason
+from dr_store.core.reasons import RegularChildFailureReason  # noqa: TC001
 
 
 @verify(UNIQUE)
