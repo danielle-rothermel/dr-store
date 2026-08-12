@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator  # noqa: TC003
+from contextlib import asynccontextmanager
 from pathlib import Path  # noqa: TC003
 
 import pytest
@@ -36,8 +37,8 @@ def _backend_params() -> list[object]:
     return params
 
 
-@pytest.fixture
-async def postgres_engine() -> AsyncIterator[AsyncEngine]:
+@asynccontextmanager
+async def _postgres_engine() -> AsyncIterator[AsyncEngine]:
     dsn = os.environ.get("DR_STORE_POSTGRES_DSN")
     if dsn is None:
         if os.environ.get("DR_STORE_REQUIRE_POSTGRES") == "1":
@@ -89,6 +90,12 @@ async def postgres_engine() -> AsyncIterator[AsyncEngine]:
         await engine.dispose()
 
 
+@pytest.fixture
+async def postgres_engine() -> AsyncIterator[AsyncEngine]:
+    async with _postgres_engine() as engine:
+        yield engine
+
+
 @pytest.fixture(params=_backend_params())
 async def backend(
     request: pytest.FixtureRequest,
@@ -96,16 +103,15 @@ async def backend(
 ) -> AsyncIterator[Backend]:
     kind = request.param
     if kind == "memory":
-        instance: Backend = MemoryBackend()
+        yield MemoryBackend()
     elif kind == "sqlite":
         instance = await SqliteBackend.open(tmp_path / "store.db")
-    else:
-        postgres_engine = await request.getfixturevalue("postgres_engine")
-        await install_postgres(postgres_engine)
-        instance = await PostgresBackend.open(postgres_engine)
-    yield instance
-    if isinstance(instance, SqliteBackend):
+        yield instance
         await instance.aclose()
+    else:
+        async with _postgres_engine() as engine:
+            await install_postgres(engine)
+            yield await PostgresBackend.open(engine)
 
 
 @pytest.fixture

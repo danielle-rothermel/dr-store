@@ -103,6 +103,34 @@ dr-store never commits that connection. Enlisted `get_bound_objects` observes
 one caller-transaction snapshot. Opening never installs, alters, adopts, or
 upgrades storage.
 
+## Testing
+
+`scripts/pre-check.sh` is the canonical developer check: lint, types, the full
+test suite, and built-wheel layout verification. Without a PostgreSQL DSN the
+backend-parametrized tests run against the memory and SQLite backends only and
+every PostgreSQL-gated test is skipped.
+
+`scripts/test-postgres.sh` runs the full test suite with the PostgreSQL
+backend enabled. It needs no configuration and no existing server: it
+provisions a throwaway password-authenticated PostgreSQL server under `/tmp`
+(unix socket only, no TCP listener), creates the dedicated `dr_store_test`
+database, exports `DR_STORE_POSTGRES_DSN` and `DR_STORE_REQUIRE_POSTGRES=1`
+(so PostgreSQL tests fail rather than skip), runs pytest, and tears the server
+down. It requires PostgreSQL 16-18 client and server tools, located from
+`PATH`, from a Homebrew `postgresql@16`-`18` installation, or from an explicit
+`DR_STORE_POSTGRES_BIN=<bin directory>`. Arguments pass through to pytest:
+
+```console
+scripts/test-postgres.sh                            # full suite
+scripts/test-postgres.sh tests/storage_backends -q  # any pytest selection
+```
+
+To use an existing server instead, set `DR_STORE_POSTGRES_DSN` to a
+`postgresql://` URL whose database is literally named `dr_store_test`: the
+test fixtures `DROP SCHEMA dr_store CASCADE` around every test and refuse to
+run against any other database name. Set `DR_STORE_REQUIRE_POSTGRES=1` to turn
+missing-DSN skips into failures.
+
 ## Usage
 
 ```python

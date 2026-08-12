@@ -151,10 +151,7 @@ export DR_STORE_REQUIRE_POSTGRES=1
 
 cd -- "${repository_root}"
 if [[ "$#" -eq 0 ]]; then
-    set -- \
-        tests/storage_backends/test_postgresql_install.py \
-        tests/storage_backends/test_postgresql_backend.py \
-        tests/storage_backends/test_postgresql_contract.py
+    set -- tests
 fi
 uv run pytest -q "$@"
 

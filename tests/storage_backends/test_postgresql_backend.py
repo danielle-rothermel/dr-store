@@ -21,7 +21,7 @@ from dr_store import (
     install_postgres,
 )
 from dr_store.storage_backends import postgresql
-from tests.storage_backends.conftest import _async_dsn
+from tests.conftest import _async_dsn
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
