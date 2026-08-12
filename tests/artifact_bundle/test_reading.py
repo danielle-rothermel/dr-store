@@ -395,6 +395,36 @@ def test_invalid_terminal_manifest_is_incomplete(
     assert caught.value.__cause__ is not None
 
 
+@pytest.mark.parametrize(
+    "name",
+    [".dr-store-document-owned", ".DR-STORE-DOCUMENT-owned"],
+)
+def test_bundle_recorded_with_document_temp_artifact_name_still_reads(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    # An earlier release admitted this namespace as an artifact name. Current
+    # admission refuses it, but a bundle already recorded with one stays
+    # readable, so such a bundle is written here directly.
+    content = b"legacy artifact"
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / name).write_bytes(content)
+    (bundle / "manifest.json").write_bytes(
+        _manifest_bytes([_descriptor(name, content)])
+    )
+
+    manifest = _reader(bundle).audit()
+
+    assert [descriptor.name for descriptor in manifest.artifacts] == [name]
+    consumed: list[bytes] = []
+    _reader(bundle).consume_and_verify_artifact(
+        name,
+        lambda reader: consumed.append(reader.read()),
+    )
+    assert consumed == [content]
+
+
 def test_missing_manifest_is_incomplete_with_os_cause(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     bundle.mkdir()

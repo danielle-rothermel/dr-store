@@ -34,10 +34,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   dr-store's own pytest, with `DR_STORE_POSTGRES_DSN` exported, the exit code
   propagated, and the same teardown on success, failure, and interrupt.
   Consumer repositories can reuse the scratch-server mechanics without
-  duplicating them. Every other invocation reaches pytest verbatim exactly as
+  duplicating them. The command runs in the caller's working directory, so a
+  consumer's relative test paths and project discovery resolve against that
+  repository. Every other invocation reaches pytest verbatim exactly as
   before, including a `--` that follows pytest arguments; the one behavior
   change is that `-h` or `--help` as the sole argument now prints the script's
   usage instead of being forwarded.
+
+- Declared the SQLite backend's library floor: opening `SqliteBackend` against
+  a library older than SQLite 3.35 now raises `RuntimeError` naming the
+  requirement, instead of the backend opening and only failing later when
+  `delete_bindings` reaches `DELETE ... RETURNING`. The floor is exported as
+  `dr_store.storage_backends.sqlite.MINIMUM_SQLITE_VERSION`.
 
 - Added the `dr_store.artifact_bundle` package and its fifteen public names
   (`ArtifactBundlePublication`, `ArtifactBundleReader`, `BundleManifest`,
@@ -54,10 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   models import it directly rather than relying on a transitive resolution.
 - Added `dr_store.document_file.is_reserved_document_temp_name(name)`, the
   public predicate for the case-insensitive `.dr-store-document-` namespace
-  that manifest publication reserves. Bundle artifact names, document-directory
-  sidecar names, and canonical document names are all refused through it, so
-  one source of truth covers every layer that creates children beside a
-  published document.
+  that manifest publication reserves. Names a caller asks a layer to create —
+  bundle artifact admission, document-directory sidecar names, and canonical
+  document names — are all refused through it, so one source of truth covers
+  every layer that creates children beside a published document. Reading does
+  not apply the reservation: a bundle recorded by 0.2.0 carrying such an
+  artifact name stays readable.
 
 ### Changed
 

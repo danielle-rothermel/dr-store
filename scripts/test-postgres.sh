@@ -13,9 +13,9 @@ DR_STORE_POSTGRES_DSN and DR_STORE_REQUIRE_POSTGRES, then runs work against it
 and tears the server down on success, failure, and interrupt.
 
 A leading '--' selects command mode: the rest of the line is a command run
-against the scratch server, and its exit code is propagated. This lets consumer
-repositories reuse the scratch-server mechanics without duplicating them, for
-example:
+against the scratch server in the caller's working directory, and its exit code
+is propagated. This lets consumer repositories reuse the scratch-server
+mechanics without duplicating them, for example:
 
   scripts/test-postgres.sh -- uv run pytest tests/evaluation -q
 
@@ -191,12 +191,15 @@ encoded_socket="$(
 export DR_STORE_POSTGRES_DSN="postgresql://postgres@/dr_store_test?host=${encoded_socket}"
 export DR_STORE_REQUIRE_POSTGRES=1
 
-cd -- "${repository_root}"
 if [[ "${command_mode}" -eq 1 ]]; then
+    # Command mode runs in the caller's directory: a consumer repository's
+    # relative paths and project discovery must resolve against that
+    # repository, not against dr-store.
     "${supplied_command[@]}"
     exit
 fi
 
+cd -- "${repository_root}"
 if [[ "$#" -eq 0 ]]; then
     set -- tests
 fi

@@ -201,7 +201,9 @@ exists on ``ObjectStore`` or any backend. A batch commits atomically across \
 every chunk it is split into, so no caller observes a partially evicted batch. \
 Restricting eviction to cache-grade keys is caller-owned discipline: dr-store \
 does not distinguish cache keys from evidence keys and rejects no key on \
-grade."""
+grade. The SQLite backend reports per-key outcomes from `DELETE ... \
+RETURNING` and therefore requires SQLite 3.35 or later, checked once when the \
+backend opens rather than when an eviction is attempted."""
 rationale = """
 Cache consumers need their memoized bindings to be bustable, while evidence \
 keeps its identity: a new attempt gets new binding keys rather than rebinding \
@@ -583,12 +585,14 @@ check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifa
 title = "Bundle artifact names are safe exact direct children"
 statement = """
 Every artifact name is one non-empty relative path segment. Publication and \
-reading reject absolute paths, dot segments, separators, `manifest.json`, the \
-case-insensitive `.dr-store-document-` temporary namespace that manifest \
-publication reserves, and the `.dr-store-artifact-bundle-` prefix. Descriptor \
-names are unique by exact string, and artifact creation is exclusive and never \
-replaces an existing child. The format defines no cross-platform case-folding \
-or Unicode-normalization profile."""
+reading both reject absolute paths, dot segments, separators, \
+`manifest.json`, and the `.dr-store-artifact-bundle-` prefix. Admission is \
+stricter than the recorded format by exactly one rule: publication also \
+refuses the case-insensitive `.dr-store-document-` temporary namespace that \
+manifest publication reserves, while reading admits descriptor names within \
+it. Descriptor names are unique by exact string, and artifact creation is \
+exclusive and never replaces an existing child. The format defines no \
+cross-platform case-folding or Unicode-normalization profile."""
 rationale = """
 Restricting artifacts to exclusively created direct children prevents lexical \
 traversal and replacement without introducing a portable-filename subsystem \
@@ -596,7 +600,10 @@ merely to predict every filesystem's aliasing rules. Reserving the document \
 temporary namespace through the document layer's own public predicate keeps \
 one source of truth for the names publication may create, and reserving the \
 bundle prefix keeps every name an earlier release refused refused, so bundle \
-names stay symmetric across releases."""
+names stay symmetric across releases. That document-namespace reservation \
+binds admission only: an earlier release recorded such names legitimately, so \
+applying it to reads would make already-recorded bundles unreadable, which \
+name hygiene for new writers does not justify."""
 date = "2026-08-12"
 check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_reading.py"
 

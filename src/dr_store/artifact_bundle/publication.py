@@ -28,7 +28,7 @@ from dr_store.artifact_bundle.models import (
     BundleManifest,
 )
 from dr_store.artifact_bundle.names import (
-    validate_artifact_name,
+    validate_admissible_artifact_name,
     validate_single_segment,
 )
 from dr_store.core.errors import AllocationError, ManifestPublishError
@@ -201,7 +201,7 @@ class ArtifactBundlePublication:
     def open_artifact(self, name: str) -> BundleArtifactWriter:
         """Reserve an exact name and exclusively create its regular child."""
         try:
-            validate_artifact_name(name)
+            validate_admissible_artifact_name(name)
         except (TypeError, ValueError) as exc:
             raise BundleAllocationError(
                 f"invalid bundle artifact name {name!r}"

@@ -88,13 +88,27 @@ def test_descriptor_is_strict_and_closed(arguments: dict[str, Any]) -> None:
         "nul\x00name",
         "manifest.json",
         ".dr-store-artifact-bundle-owned",
-        ".dr-store-document-owned",
-        ".DR-STORE-DOCUMENT-owned",
     ],
 )
 def test_descriptor_rejects_unsafe_and_reserved_names(name: str) -> None:
     with pytest.raises(ValidationError):
         _descriptor(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".dr-store-document-owned",
+        ".DR-STORE-DOCUMENT-owned",
+        ".dr-store-document-deadbeefdeadbeef-abc.tmp",
+    ],
+)
+def test_descriptor_admits_document_temp_names_recorded_earlier(
+    name: str,
+) -> None:
+    # Admission refuses this namespace, but the recorded format never did, so
+    # a bundle an earlier release wrote carrying such a name stays parseable.
+    assert _descriptor(name).name == name
 
 
 def test_descriptor_identity_is_exact_without_casefolding() -> None:

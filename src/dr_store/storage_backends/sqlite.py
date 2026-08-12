@@ -30,6 +30,12 @@ _BUSY_TIMEOUT_MS = 30_000
 _KEY_QUERY_CHUNK_SIZE = 999
 _TRANSIENT_DATABASE_PATHS = frozenset({"", ":memory:"})
 
+# `DELETE ... RETURNING`, which binding deletion uses to report per-key
+# outcomes from one statement, requires SQLite 3.35. The floor is checked once
+# at open so an unsupported library fails there rather than only when an
+# eviction is attempted.
+MINIMUM_SQLITE_VERSION = (3, 35, 0)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS objects (
     schema       TEXT NOT NULL,
@@ -67,7 +73,17 @@ def _persistent_database_path(path: str | Path) -> str:
     return str(Path(raw_path).absolute())
 
 
+def _check_sqlite_version() -> None:
+    if sqlite3.sqlite_version_info < MINIMUM_SQLITE_VERSION:
+        required = ".".join(str(part) for part in MINIMUM_SQLITE_VERSION)
+        raise RuntimeError(
+            f"SQLite backend requires SQLite {required} or later, "
+            f"got {sqlite3.sqlite_version}"
+        )
+
+
 def _open_connection(path: str, *, busy_timeout_ms: int) -> sqlite3.Connection:
+    _check_sqlite_version()
     connection = sqlite3.connect(
         path,
         timeout=busy_timeout_ms / 1000,
@@ -103,7 +119,11 @@ async def _await_settled[T](future: asyncio.Future[T]) -> T:
 
 
 class SqliteBackend:
-    """One asynchronous worker and connection for persistent SQLite storage."""
+    """One asynchronous worker and connection for persistent SQLite storage.
+
+    Requires SQLite ``MINIMUM_SQLITE_VERSION`` or later; opening against an
+    older library raises ``RuntimeError``.
+    """
 
     _loop: asyncio.AbstractEventLoop
     _worker: ThreadPoolExecutor
