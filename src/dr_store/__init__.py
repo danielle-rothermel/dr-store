@@ -62,6 +62,7 @@ from dr_store.document_file import (
 )
 from dr_store.object_store import (
     BindStatus,
+    EvictStatus,
     ObjectStore,
     PutStatus,
     StoreHit,
@@ -125,6 +126,7 @@ __all__ = [
     "DocumentFileError",
     "DocumentPublishError",
     "DocumentReadError",
+    "EvictStatus",
     "ManifestPublishError",
     "ManifestReadError",
     "MemoryBackend",

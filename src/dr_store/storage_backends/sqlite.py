@@ -365,6 +365,28 @@ class SqliteBackend:
                 )
         return rows
 
+    async def delete_bindings(self, *, keys: tuple[str, ...]) -> set[str]:
+        self._check_operation()
+        for key in keys:
+            validate_binding_key(key)
+        if not keys:
+            return set()
+        return await self._run(self._delete_bindings, keys)
+
+    def _delete_bindings(self, keys: tuple[str, ...]) -> set[str]:
+        deleted: set[str] = set()
+        with self._immediate() as connection:
+            for start in range(0, len(keys), _KEY_QUERY_CHUNK_SIZE):
+                chunk = keys[start : start + _KEY_QUERY_CHUNK_SIZE]
+                placeholders = ", ".join("?" for _ in chunk)
+                rows = connection.execute(
+                    "DELETE FROM bindings "  # noqa: S608
+                    f"WHERE key IN ({placeholders}) RETURNING key",
+                    chunk,
+                ).fetchall()
+                deleted.update(row[0] for row in rows)
+        return deleted
+
     async def put_bound_objects(
         self,
         *,

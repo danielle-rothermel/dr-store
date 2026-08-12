@@ -117,6 +117,16 @@ class MemoryBackend:
                 )
             return rows
 
+    async def delete_bindings(self, *, keys: tuple[str, ...]) -> set[str]:
+        for key in keys:
+            validate_binding_key(key)
+        with self._lock:
+            deleted: set[str] = set()
+            for key in keys:
+                if self._bindings.pop(key, None) is not None:
+                    deleted.add(key)
+            return deleted
+
     async def put_bound_objects(
         self,
         *,

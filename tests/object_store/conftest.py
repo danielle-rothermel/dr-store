@@ -83,6 +83,9 @@ class ControlledBackend:
         self.put_calls += 1
         return await self._inner.put_bound_objects(entries=entries)
 
+    async def delete_bindings(self, *, keys: tuple[str, ...]) -> set[str]:
+        return await self._inner.delete_bindings(keys=keys)
+
 
 @pytest.fixture
 def controlled_backend() -> ControlledBackend:

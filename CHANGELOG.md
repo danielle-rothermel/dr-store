@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Added `ObjectStore.evict_bindings(keys)` and the `EvictStatus` enum
+  (`EVICTED`, `ABSENT`), the cache-grade operation that makes memoized
+  bindings bustable. It deletes binding rows for the given exact keys and
+  never touches object rows, so evicted content stays retrievable by reference
+  and other keys bound to it keep resolving. Absent keys report `ABSENT`
+  instead of raising, so replay is idempotent. There is no prefix form and,
+  deliberately, no enlisted variant: eviction is structurally unavailable
+  inside an evidence transaction. Backends gained the matching
+  `delete_bindings` operation on all three implementations.
+
 - Added the `dr_store.artifact_bundle` package and its fifteen public names
   (`ArtifactBundlePublication`, `ArtifactBundleReader`, `BundleManifest`,
   `ArtifactDescriptor`, `BundleArtifactWriter`, `VerifyingArtifactReader`,

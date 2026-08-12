@@ -52,8 +52,10 @@ part_of = ["binding"]
 [[terms]]
 name = "binding"
 definition = """
-A single-assignment association from a key to one object reference. Once \
-established, it is not replaced, cleared, or rebound."""
+A single-assignment association from a key to one object reference. While it \
+exists it is neither replaced nor rebound; cache-grade binding eviction is the \
+only operation that removes it, and a key evicted that way is bindable again \
+from its unbound state."""
 categories = ["object storage"]
 part_of = ["object store"]
 
@@ -159,12 +161,25 @@ categories = ["object storage"]
 is_a = ["compare-and-set"]
 
 [[terms]]
+name = "binding eviction"
+definition = """
+The cache-grade awaited operation that deletes the binding rows for \
+caller-supplied exact keys. It removes resolvability and never content, so \
+referenced objects stay stored and retrievable by reference. Evicting an \
+unbound key is a reported absence rather than a failure, and no enlisted \
+variant exists."""
+exported_symbols = ["EvictStatus"]
+categories = ["object storage"]
+part_of = ["object store"]
+
+[[terms]]
 name = "backend"
 definition = """
 The asynchronous storage boundary that supplies atomic insert-if-absent \
-operations and point and batch operations for object and binding tables. Each \
-implementation owns its persistence scope and completes transaction and resource \
-cleanup before an awaited operation terminates."""
+operations, point and batch operations for object and binding tables, and an \
+exact-key binding delete. Each implementation owns its persistence scope and \
+completes transaction and resource cleanup before an awaited operation \
+terminates."""
 exported_symbols = [
   "Backend",
   "MemoryBackend",

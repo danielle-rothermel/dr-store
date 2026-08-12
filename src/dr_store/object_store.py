@@ -52,6 +52,11 @@ class PutStatus(enum.Enum):
     IDEMPOTENT = "idempotent"
 
 
+class EvictStatus(enum.Enum):
+    EVICTED = "evicted"
+    ABSENT = "absent"
+
+
 @dataclass(frozen=True, slots=True)
 class StoreHit:
     """One verified bound record, including a strict-JSON ``null`` record."""
@@ -459,3 +464,28 @@ class ObjectStore:
         if bound is None:
             return None
         return ObjectReference(schema=bound[0], content_hash=bound[1])
+
+    async def evict_bindings(
+        self,
+        keys: Iterable[str],
+    ) -> dict[str, EvictStatus]:
+        """Remove the binding for each distinct exact key, cache-grade.
+
+        Eviction deletes binding rows only: referenced objects stay stored and
+        remain retrievable through :meth:`get`, because content is shared
+        across keys and this operation removes resolvability, not content.
+        Absent keys report :attr:`EvictStatus.ABSENT` rather than raising, so
+        replaying an eviction is idempotent. Exact keys only; there is no
+        prefix form and no enlisted variant, so evidence transactions cannot
+        reach it.
+        """
+        distinct = tuple(dict.fromkeys(keys))
+        for key in distinct:
+            validate_binding_key(key)
+        if not distinct:
+            return {}
+        deleted = await self._backend.delete_bindings(keys=distinct)
+        return {
+            key: EvictStatus.EVICTED if key in deleted else EvictStatus.ABSENT
+            for key in distinct
+        }

@@ -59,6 +59,7 @@ def test_object_store_public_surface_is_exact() -> None:
     assert public == {
         "bind",
         "bind_enlisted",
+        "evict_bindings",
         "get",
         "get_bound_objects",
         "get_bound_objects_enlisted",
@@ -80,6 +81,7 @@ def test_backend_public_surfaces_are_exact() -> None:
 
     expected = {
         "bind",
+        "delete_bindings",
         "get_binding",
         "get_bound_objects",
         "get_object",
@@ -141,6 +143,7 @@ def test_postgresql_public_surface_is_exact() -> None:
     expected = {
         "bind",
         "bind_enlisted",
+        "delete_bindings",
         "get_binding",
         "get_binding_enlisted",
         "get_bound_objects",
@@ -157,6 +160,7 @@ def test_postgresql_public_surface_is_exact() -> None:
     assert public == expected
     async_methods = {
         "bind",
+        "delete_bindings",
         "get_binding",
         "get_bound_objects",
         "get_object",
@@ -231,6 +235,42 @@ def test_object_store_enlisted_methods_are_sync() -> None:
         assert not inspect.iscoroutinefunction(getattr(ObjectStore, name))
 
 
+def test_eviction_is_async_only_and_never_enlisted() -> None:
+    from dr_store import (
+        Backend,
+        EvictStatus,
+        MemoryBackend,
+        ObjectStore,
+        PostgresBackend,
+        SqliteBackend,
+    )
+
+    assert inspect.iscoroutinefunction(ObjectStore.evict_bindings)
+    assert list(inspect.signature(ObjectStore.evict_bindings).parameters) == [
+        "self",
+        "keys",
+    ]
+    assert [(status.name, status.value) for status in EvictStatus] == [
+        ("EVICTED", "evicted"),
+        ("ABSENT", "absent"),
+    ]
+    # The enlisted surface deliberately excludes eviction, so evidence
+    # transactions cannot reach a destructive verb.
+    for surface in (
+        ObjectStore,
+        Backend,
+        MemoryBackend,
+        SqliteBackend,
+        PostgresBackend,
+    ):
+        assert not [
+            name
+            for name in dir(surface)
+            if "evict" in name or name.startswith("delete_")
+            if name.endswith("_enlisted")
+        ]
+
+
 def test_record_cache_public_surface_is_exact() -> None:
     from dr_store import RecordCache
 
@@ -250,6 +290,7 @@ def test_sqlite_backend_public_surface_is_exact() -> None:
     expected = {
         "aclose",
         "bind",
+        "delete_bindings",
         "get_binding",
         "get_bound_objects",
         "get_object",

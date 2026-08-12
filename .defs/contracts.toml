@@ -88,8 +88,10 @@ replaying the same reference is idempotent, and requesting a different \
 reference raises a typed conflict that preserves the existing winner. Binding \
 keys may be empty and contain any text except NUL or unpaired surrogate code \
 points. Every public backend and facade binding path validates that domain \
-before storage work begins, and the object-store surface exposes no clear, \
-overwrite, or rebind operation."""
+before storage work begins, and the object-store surface exposes no overwrite \
+or rebind operation. Cache-grade ``evict_bindings`` is the only operation that \
+removes a binding; it never rewrites one in place, so a bound key changes \
+reference only by passing back through its unbound state."""
 rationale = """
 Single assignment makes a successful key resolution stable while allowing \
 concurrent contenders to observe one correlated winner. One shared permissive \
@@ -103,8 +105,9 @@ title = "Backends own atomicity and declare persistence scope"
 statement = """
 Every backend supplies awaited atomic insert-if-absent operations for object \
 rows and bindings, exact-key reads that return bindings with their referenced \
-object rows, and atomic write batches that store prepared objects and establish \
-each key's first-writer binding. An operation releases no transaction or shared \
+object rows, atomic write batches that store prepared objects and establish \
+each key's first-writer binding, and an exact-key binding delete that reports \
+which rows existed and leaves object rows untouched. An operation releases no transaction or shared \
 connection until driver cleanup makes that resource reusable. Cancellation is \
 an operational failure and does not prove whether a write committed; storage \
 performs no automatic retry, while exact immutable replay remains supported. The \
@@ -175,6 +178,29 @@ barrier for every small commit while matching the deliberately bounded \
 persistence claim."""
 date = "2026-08-08"
 check = "uv run pytest -q tests/storage_backends/test_sqlite_backend.py"
+
+[[contracts]]
+title = "Binding eviction is cache-grade and removes resolvability only"
+statement = """
+``ObjectStore.evict_bindings`` deduplicates its input keys, validates that key \
+text domain before storage work begins, and returns exactly one \
+``EvictStatus`` for every distinct requested key: ``EVICTED`` when a binding \
+row existed and was deleted, ``ABSENT`` otherwise. It deletes binding rows for \
+those exact keys only and never deletes, rewrites, or reference-counts object \
+rows, so evicted content stays retrievable through ``get`` and bindings on \
+other keys to the same reference keep resolving. Replaying an eviction is \
+idempotent, there is no prefix or wildcard form, and no enlisted variant \
+exists on ``ObjectStore`` or any backend."""
+rationale = """
+Cache consumers need their memoized bindings to be bustable, while evidence \
+keeps its append-only identity: a new attempt gets new binding keys rather than \
+rebinding old ones, so eviction never becomes a mutation path. Keeping content \
+addressed and shared means resolvability is the only safe thing to remove \
+without ownership tracking storage does not have. Excluding eviction from the \
+sync enlisted surface makes the destructive verb structurally unreachable from \
+an evidence transaction, rather than merely discouraged."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/object_store/test_eviction.py tests/storage_backends/test_contract.py tests/test_public_api.py"
 
 [[contracts]]
 title = "Callers own domain meaning"
@@ -437,7 +463,9 @@ caller-owned connection. Enlisted ``get_bound_objects_enlisted`` reads \
 bindings and objects on that connection and observes one caller-transaction \
 snapshot, including uncommitted writes in that transaction. Enlisted writes \
 share the caller transaction; dr-store defines no savepoint API, so an evidence \
-persistence failure aborts the enclosing checkpoint transaction."""
+persistence failure aborts the enclosing checkpoint transaction. Binding \
+deletion is available only on the awaited path, so the enlisted surface carries \
+no destructive verb."""
 rationale = """
 A shared deployment changes persistence scope and contention mechanism, not the \
 observable storage model. One conformance suite across every backend prevents \

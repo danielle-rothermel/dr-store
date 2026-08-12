@@ -100,3 +100,12 @@ class Backend(Protocol):
     ) -> dict[str, BindOutcome]:
         """Atomically store prepared objects and bind their keys."""
         ...
+
+    async def delete_bindings(self, *, keys: tuple[str, ...]) -> set[str]:
+        """Delete the binding rows for the requested exact keys.
+
+        Return the subset of ``keys`` whose binding row existed and was
+        deleted. Object rows are never touched, so content stays retrievable
+        by reference after its keys stop resolving.
+        """
+        ...
