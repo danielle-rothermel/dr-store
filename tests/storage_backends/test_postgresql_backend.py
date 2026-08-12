@@ -228,7 +228,7 @@ async def test_exact_text_identity_through_backend(
     rows = await postgres_backend.get_bound_objects(keys=values)
     assert {
         key: (row.binding_schema, row.canonical) for key, row in rows.items()
-    } == {value: (value, value, f'{{"schema":"{value}"}}') for value in values}
+    } == {value: (value, f'{{"schema":"{value}"}}') for value in values}
 
 
 async def test_committed_rows_are_visible_through_independent_engines(

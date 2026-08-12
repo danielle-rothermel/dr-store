@@ -16,10 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Added `read_verified_regular_child` and `VerifiedRegularChildReadError` as the
   storage-owned bounded descriptor-pinned read-and-verify primitive for regular
   direct children.
-- Added public `ObjectStore.get_many`, `ObjectStore.put_many`, and
-  `ObjectStore.get_bound_objects` for evidence-grade bulk reads, prepared bulk
-  writes, and joined binding/object fetches. Bulk hits use `StoreHit` so bound
-  strict-JSON `null` records are distinct from unbound keys.
+- Added public `ObjectStore.get_many` and `ObjectStore.put_many` for
+  evidence-grade bulk reads and prepared bulk writes. Bulk hits use `StoreHit`
+  so bound strict-JSON `null` records are distinct from unbound keys.
 - Added public `ObjectStore.verify_stored_record` so callers can verify stored
   content separately from joined reads.
 - Added shared `descriptor_io` helpers and consolidated safe-name validation in
