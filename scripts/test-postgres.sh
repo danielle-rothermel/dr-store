@@ -12,41 +12,30 @@ Starts a scratch password-authenticated PostgreSQL server, exports
 DR_STORE_POSTGRES_DSN and DR_STORE_REQUIRE_POSTGRES, then runs work against it
 and tears the server down on success, failure, and interrupt.
 
-Without '--', runs dr-store's own suite: 'uv run pytest -q' over the given
-paths, or over 'tests' when no arguments are supplied.
-
-After '--', runs the supplied command instead and propagates its exit code.
-This lets consumer repositories reuse the scratch-server mechanics without
-duplicating them, for example:
+A leading '--' selects command mode: the rest of the line is a command run
+against the scratch server, and its exit code is propagated. This lets consumer
+repositories reuse the scratch-server mechanics without duplicating them, for
+example:
 
   scripts/test-postgres.sh -- uv run pytest tests/evaluation -q
+
+Otherwise the arguments are dr-store's own suite: 'uv run pytest -q' over the
+given paths, or over 'tests' when no arguments are supplied. Every argument
+reaches pytest verbatim, including a later '--' and pytest's own '-h'; this
+usage text prints only when '-h' or '--help' is the sole argument.
 USAGE
 }
 
 command_mode=0
 declare -a supplied_command=()
-for argument in "$@"; do
-    if [[ "${argument}" == "--" ]]; then
-        command_mode=1
-        break
-    fi
-    if [[ "${argument}" == "-h" || "${argument}" == "--help" ]]; then
-        usage
-        exit 0
-    fi
-done
-
-if [[ "${command_mode}" -eq 1 ]]; then
-    while [[ "$#" -gt 0 ]]; do
-        if [[ "$1" == "--" ]]; then
-            shift
-            supplied_command=("$@")
-            break
-        fi
-        printf 'Unexpected argument before "--": %s\n' "$1" >&2
-        usage >&2
-        exit 2
-    done
+if [[ "$#" -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
+    usage
+    exit 0
+fi
+if [[ "$#" -gt 0 && "$1" == "--" ]]; then
+    command_mode=1
+    shift
+    supplied_command=("$@")
     if [[ "${#supplied_command[@]}" -eq 0 ]]; then
         printf '%s\n' 'A command is required after "--".' >&2
         usage >&2

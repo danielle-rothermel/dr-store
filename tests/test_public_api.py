@@ -53,6 +53,10 @@ def test_public_module_vocabulary_tripwire() -> None:
 
 
 def test_object_store_public_surface_is_exact() -> None:
+    # `evict_bindings` is the only destructive verb here and it is
+    # awaited-only. Consult the contract "Binding eviction is cache-grade and
+    # removes resolvability only" in .defs/contracts.toml before adding any
+    # destructive name to this set.
     from dr_store import ObjectStore
 
     public = {name for name in dir(ObjectStore) if not name.startswith("_")}
@@ -77,6 +81,10 @@ def test_object_store_public_surface_is_exact() -> None:
 
 
 def test_backend_public_surfaces_are_exact() -> None:
+    # `delete_bindings` is the only destructive verb here and it is
+    # awaited-only. Consult the contract "Binding eviction is cache-grade and
+    # removes resolvability only" in .defs/contracts.toml before adding any
+    # destructive name to this set.
     from dr_store import Backend, MemoryBackend
 
     expected = {
@@ -235,6 +243,58 @@ def test_object_store_enlisted_methods_are_sync() -> None:
         assert not inspect.iscoroutinefunction(getattr(ObjectStore, name))
 
 
+DESTRUCTIVE_VERBS = frozenset(
+    {
+        "evict",
+        "delete",
+        "unbind",
+        "purge",
+        "drop",
+        "remove",
+        "clear",
+        "expire",
+    }
+)
+
+# The enlisted read/write surface, pinned positively: every ObjectStore method
+# whose first non-self parameter is a caller-owned Connection. Consult the
+# contract "Binding eviction is cache-grade and removes resolvability only" in
+# .defs/contracts.toml before adding a destructive name to this set.
+ENLISTED_OBJECT_STORE_METHODS = frozenset(
+    {
+        "bind_enlisted",
+        "get_bound_objects_enlisted",
+        "get_enlisted",
+        "get_many_enlisted",
+        "put_enlisted",
+        "put_many_enlisted",
+        "resolve_enlisted",
+    }
+)
+
+
+def _connection_first_methods(surface: type) -> set[str]:
+    found = set()
+    for name in dir(surface):
+        if name.startswith("_"):
+            continue
+        attribute = getattr(surface, name)
+        if not callable(attribute):
+            continue
+        try:
+            parameters = list(inspect.signature(attribute).parameters.values())
+        except (TypeError, ValueError):
+            continue
+        positional = [
+            parameter
+            for parameter in parameters
+            if parameter.name not in {"self", "cls"}
+        ]
+        if positional and positional[0].name == "connection":
+            found.add(name)
+    return found
+
+
 def test_eviction_is_async_only_and_never_enlisted() -> None:
     from dr_store import (
         Backend,
@@ -254,8 +314,17 @@ def test_eviction_is_async_only_and_never_enlisted() -> None:
         ("EVICTED", "evicted"),
         ("ABSENT", "absent"),
     ]
-    # The enlisted surface deliberately excludes eviction, so evidence
-    # transactions cannot reach a destructive verb.
+
+    # Positive invariant: the enlisted surface is exactly the known
+    # connection-taking read/write set, so a new enlisted method cannot appear
+    # without failing here.
+    assert _connection_first_methods(ObjectStore) == set(
+        ENLISTED_OBJECT_STORE_METHODS
+    )
+
+    # No destructive verb appears in the enlisted surface, nor as any sync
+    # method on a backend: eviction is structurally unreachable from an
+    # evidence transaction rather than merely discouraged.
     for surface in (
         ObjectStore,
         Backend,
@@ -263,12 +332,20 @@ def test_eviction_is_async_only_and_never_enlisted() -> None:
         SqliteBackend,
         PostgresBackend,
     ):
-        assert not [
+        destructive_sync = {
             name
             for name in dir(surface)
-            if "evict" in name or name.startswith("delete_")
-            if name.endswith("_enlisted")
-        ]
+            if not name.startswith("_")
+            and _tokens(name) & DESTRUCTIVE_VERBS
+            and (
+                name.endswith("_enlisted")
+                or not inspect.iscoroutinefunction(getattr(surface, name))
+            )
+        }
+        assert destructive_sync == set(), (
+            f"{surface.__name__} exposes destructive sync/enlisted surface: "
+            f"{destructive_sync}"
+        )
 
 
 def test_record_cache_public_surface_is_exact() -> None:

@@ -19,7 +19,8 @@ document artifacts:
   provides immutable puts, verified reads, and atomic bindings from opaque
   caller-owned keys to object references.
 - **[Storage backends](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/storage_backends)**
-  supply the Object Store's atomic, append-only point and batch operations.
+  supply the Object Store's atomic point and batch operations over append-only
+  object rows and single-assignment bindings.
   `MemoryBackend` is process-local; `SqliteBackend` persists committed data for
   cross-process use; `PostgresBackend` shares committed data through a
   caller-owned SQLAlchemy engine opened synchronously or asynchronously.
@@ -303,6 +304,10 @@ class BindStatus(Enum):
     BOUND = "bound"
     IDEMPOTENT = "idempotent"
 
+class EvictStatus(Enum):
+    EVICTED = "evicted"
+    ABSENT = "absent"
+
 class ObjectStore:
     def __init__(self, backend: Backend) -> None: ...
     async def put(
@@ -329,6 +334,9 @@ class ObjectStore:
         self, key: str, reference: ObjectReference
     ) -> BindStatus: ...
     async def resolve(self, key: str) -> ObjectReference | None: ...
+    async def evict_bindings(
+        self, keys: Iterable[str]
+    ) -> dict[str, EvictStatus]: ...
     def put_enlisted(
         self, connection: Connection, schema: str, record: Jsonable
     ) -> tuple[ObjectReference, PutStatus]: ...
@@ -365,6 +373,13 @@ reporting cache-style misses. `put_many` validates, canonicalizes, and hashes
 every proposed entry before one backend write batch, then returns the first
 binding winner for each input key. A batch read claims no single snapshot
 across backend read chunks.
+
+`evict_bindings` is cache-grade: it deletes the binding rows for exact keys so
+memoized entries become bustable, reports `ABSENT` instead of raising for
+unbound keys, and never touches object rows, so evicted content stays
+retrievable by reference. Evidence keys are never evicted — a requeued run
+takes new keys — and there is deliberately no enlisted variant, so eviction
+cannot be reached from inside an evidence transaction.
 
 Verified object reads raise `ContentHashMismatchError` with
 `ContentMismatchReason`. `actual` carries the observed hash only for
@@ -421,6 +436,7 @@ class Backend(Protocol):
     async def put_bound_objects(
         self, *, entries: tuple[BoundObjectWrite, ...]
     ) -> dict[str, BindOutcome]: ...
+    async def delete_bindings(self, *, keys: tuple[str, ...]) -> set[str]: ...
 
 class MemoryBackend: ...
 class PostgresBackend:

@@ -77,8 +77,11 @@ categories = ["object storage"]
 [[terms]]
 name = "append-only"
 definition = """
-The property that stored associations are added but never mutated or removed \
-through the storage contract."""
+The property that object rows and their content associations are added but \
+never mutated or removed through the storage contract. The key-to-reference \
+mapping is single-assignment rather than append-only: cache-grade binding \
+eviction is its one removal path, and no operation mutates an existing \
+association in place."""
 categories = ["object storage"]
 
 [[terms]]
@@ -123,7 +126,7 @@ name = "object store"
 definition = """
 The asynchronous append-only mapping from object references to immutable records \
 together with the single-assignment mapping from caller-owned keys to those \
-references."""
+references, whose entries are removable only by cache-grade binding eviction."""
 exported_symbols = ["ObjectStore", "StoreError", "StoreHit"]
 categories = ["object storage"]
 

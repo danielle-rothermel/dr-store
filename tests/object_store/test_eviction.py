@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from dr_store import (
+    BindingConflictError,
     BindStatus,
     EvictStatus,
     ObjectStore,
@@ -20,6 +21,8 @@ RECORD_B: Jsonable = {"payload": {"id": "b"}}
 KEY_A = "key:a"
 KEY_B = "key:b"
 KEY_MISSING = "key:missing"
+CACHE_KEY = "cache:example:v1:a"
+EVIDENCE_KEY = "evidence:attempt:1:a"
 
 
 async def test_evicted_key_stops_resolving(store: ObjectStore) -> None:
@@ -84,14 +87,29 @@ async def test_mixed_batch_reports_per_key_status(store: ObjectStore) -> None:
     assert await store.resolve(KEY_B) is None
 
 
-async def test_evicted_key_is_bindable_again(store: ObjectStore) -> None:
+async def test_evicted_cache_key_is_bindable_again(store: ObjectStore) -> None:
+    # Rebinding is reachable only by passing back through the unbound state,
+    # and only for cache-grade keys: evidence keys are never evicted, so this
+    # is not a rebind path for evidence. A requeued run takes new attempt keys.
     first, _ = await store.put(SCHEMA, RECORD_A)
     second, _ = await store.put(SCHEMA, RECORD_B)
-    await store.bind(KEY_A, first)
-    await store.evict_bindings([KEY_A])
+    await store.bind(CACHE_KEY, first)
+    await store.evict_bindings([CACHE_KEY])
 
-    assert await store.bind(KEY_A, second) is BindStatus.BOUND
-    assert await store.resolve(KEY_A) == second
+    assert await store.bind(CACHE_KEY, second) is BindStatus.BOUND
+    assert await store.resolve(CACHE_KEY) == second
+
+
+async def test_divergent_bind_without_eviction_still_conflicts(
+    store: ObjectStore,
+) -> None:
+    first, _ = await store.put(SCHEMA, RECORD_A)
+    second, _ = await store.put(SCHEMA, RECORD_B)
+    await store.bind(EVIDENCE_KEY, first)
+
+    with pytest.raises(BindingConflictError):
+        await store.bind(EVIDENCE_KEY, second)
+    assert await store.resolve(EVIDENCE_KEY) == first
 
 
 async def test_empty_batch_touches_no_bindings(store: ObjectStore) -> None:

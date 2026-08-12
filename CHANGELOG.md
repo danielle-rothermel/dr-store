@@ -21,17 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   bindings bustable. It deletes binding rows for the given exact keys and
   never touches object rows, so evicted content stays retrievable by reference
   and other keys bound to it keep resolving. Absent keys report `ABSENT`
-  instead of raising, so replay is idempotent. There is no prefix form and,
-  deliberately, no enlisted variant: eviction is structurally unavailable
-  inside an evidence transaction. Backends gained the matching
-  `delete_bindings` operation on all three implementations.
+  instead of raising, so replay is idempotent, and a batch commits atomically
+  however the backend chunks it. There is no prefix form and, deliberately, no
+  enlisted variant: the sync enlisted surface carries no destructive verb, so
+  eviction is unreachable from inside an evidence transaction. Which keys the
+  awaited path is pointed at stays caller-owned discipline — evidence keys are
+  never evicted, since a requeued run takes new keys. Backends gained the
+  matching `delete_bindings` operation on all three implementations.
 
-- Added a command mode to `scripts/test-postgres.sh`: everything after a `--`
-  separator runs against the scratch server instead of dr-store's own pytest,
-  with `DR_STORE_POSTGRES_DSN` exported, the exit code propagated, and the same
-  teardown on success, failure, and interrupt. Consumer repositories can reuse
-  the scratch-server mechanics without duplicating them. Invocation without
-  `--` is unchanged.
+- Added a command mode to `scripts/test-postgres.sh`: a **leading** `--` makes
+  the rest of the line a command run against the scratch server instead of
+  dr-store's own pytest, with `DR_STORE_POSTGRES_DSN` exported, the exit code
+  propagated, and the same teardown on success, failure, and interrupt.
+  Consumer repositories can reuse the scratch-server mechanics without
+  duplicating them. Every other invocation reaches pytest verbatim exactly as
+  before, including a `--` that follows pytest arguments; the one behavior
+  change is that `-h` or `--help` as the sole argument now prints the script's
+  usage instead of being forwarded.
 
 - Added the `dr_store.artifact_bundle` package and its fifteen public names
   (`ArtifactBundlePublication`, `ArtifactBundleReader`, `BundleManifest`,

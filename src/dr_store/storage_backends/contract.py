@@ -41,7 +41,12 @@ class BoundObjectWrite:
 
 
 class Backend(Protocol):
-    """Atomic object and binding operations."""
+    """Atomic object and binding operations.
+
+    Object rows are append-only. Bindings are single-assignment, with one
+    destructive operation: cache-grade :meth:`delete_bindings` removes binding
+    rows for exact keys and never touches object rows.
+    """
 
     async def put_object(
         self,
@@ -102,10 +107,17 @@ class Backend(Protocol):
         ...
 
     async def delete_bindings(self, *, keys: tuple[str, ...]) -> set[str]:
-        """Delete the binding rows for the requested exact keys.
+        """Delete the binding rows for the requested exact keys, cache-grade.
 
         Return the subset of ``keys`` whose binding row existed and was
         deleted. Object rows are never touched, so content stays retrievable
-        by reference after its keys stop resolving.
+        by reference after its keys stop resolving. A batch commits atomically
+        however the backend chunks it.
+
+        This is the only destructive operation on the protocol and it is
+        awaited-only. Do not add an enlisted variant: the sync enlisted surface
+        carries no destructive verb, and the public-API surface pin enforces
+        that. Consult "Binding eviction is cache-grade and removes
+        resolvability only" in ``.defs/contracts.toml`` before changing this.
         """
         ...

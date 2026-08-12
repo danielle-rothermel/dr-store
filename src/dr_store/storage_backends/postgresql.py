@@ -325,6 +325,12 @@ def _delete_bindings_on_connection(
     keys: tuple[str, ...],
     batch_chunk_size: int,
 ) -> set[str]:
+    # This helper takes a sync ``Connection`` like the enlisted helpers do, but
+    # it is deliberately reachable only from the awaited ``delete_bindings``.
+    # Do not add a ``delete_bindings_enlisted`` wrapper: the enlisted surface
+    # carries no destructive verb, and the public-API surface pin enforces
+    # that. Consult the contract "Binding eviction is cache-grade and removes
+    # resolvability only" in .defs/contracts.toml before changing this.
     deleted: set[str] = set()
     for chunk in _chunked(keys, batch_chunk_size=batch_chunk_size):
         rows = _fetch_sync(

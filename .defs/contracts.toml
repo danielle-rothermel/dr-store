@@ -91,12 +91,18 @@ points. Every public backend and facade binding path validates that domain \
 before storage work begins, and the object-store surface exposes no overwrite \
 or rebind operation. Cache-grade ``evict_bindings`` is the only operation that \
 removes a binding; it never rewrites one in place, so a bound key changes \
-reference only by passing back through its unbound state."""
+reference only by passing back through its unbound state. That path is \
+available to cache-grade keys only: evidence keys are never evicted, because a \
+requeued run takes new attempt keys, and binding an evidence key to a divergent \
+reference raises ``BindingConflictError`` whether or not eviction exists. See \
+"Binding eviction is cache-grade and removes resolvability only"."""
 rationale = """
 Single assignment makes a successful key resolution stable while allowing \
 concurrent contenders to observe one correlated winner. One shared permissive \
 text domain preserves opaque caller-owned keys without letting backend-specific \
-string constraints select different winners."""
+string constraints select different winners. Confining removal to an unbind \
+step keeps that winner rule intact for every key that is never evicted, so \
+evidence identity stays as stable as it was before caches gained a bust."""
 date = "2026-08-08"
 check = "uv run pytest -q tests/object_store/test_binding.py tests/storage_backends/test_contract.py tests/record_cache/test_cache.py"
 
@@ -107,25 +113,26 @@ Every backend supplies awaited atomic insert-if-absent operations for object \
 rows and bindings, exact-key reads that return bindings with their referenced \
 object rows, atomic write batches that store prepared objects and establish \
 each key's first-writer binding, and an exact-key binding delete that reports \
-which rows existed and leaves object rows untouched. An operation releases no transaction or shared \
-connection until driver cleanup makes that resource reusable. Cancellation is \
-an operational failure and does not prove whether a write committed; storage \
-performs no automatic retry, while exact immutable replay remains supported. The \
-in-memory backend is process-local. Each SQLite backend owns one dedicated \
-worker and one connection and admits at most one submitted or running worker \
-operation. Other callers await an async admission gate before work is submitted. \
-The worker executes complete operations outside the event-loop thread, chunks \
-exact-key reads into joined queries without promising one batch-wide snapshot, \
-and uses one immediate transaction for each non-empty write batch. Cancellation \
-while awaiting admission starts no SQLite work. A cancelled admitted operation \
-does not abandon its worker work: the caller waits until the operation and its \
-cleanup settle, then cancellation wins. If that worker path also fails, its \
-failure remains the cause of the cancellation. SQLite requires a non-transient \
-filesystem path, captures its lexical absolute path during open, retains \
-committed rows across reopen, and supports cross-process contention without \
-claiming power-loss durability. Empty and `:memory:` paths are rejected; the \
-captured absolute path prevents later working-directory redirection but does not \
-freeze symlink targets."""
+which rows existed and leaves object rows untouched. An operation releases no \
+transaction or shared connection until driver cleanup makes that resource \
+reusable. Cancellation is an operational failure and does not prove whether a \
+write committed; storage performs no automatic retry, while exact immutable \
+replay remains supported. The in-memory backend is process-local. Each SQLite \
+backend owns one dedicated worker and one connection and admits at most one \
+submitted or running worker operation. Other callers await an async admission \
+gate before work is submitted. The worker executes complete operations outside \
+the event-loop thread, chunks exact-key reads into joined queries without \
+promising one batch-wide snapshot, and uses one immediate transaction for each \
+non-empty write batch. Cancellation while awaiting admission starts no SQLite \
+work. A cancelled admitted operation does not abandon its worker work: the \
+caller waits until the operation and its cleanup settle, then cancellation \
+wins. If that worker path also fails, its failure remains the cause of the \
+cancellation. SQLite requires a non-transient filesystem path, captures its \
+lexical absolute path during open, retains committed rows across reopen, and \
+supports cross-process contention without claiming power-loss durability. \
+Empty and `:memory:` paths are rejected; the captured absolute path prevents \
+later working-directory redirection but does not freeze symlink targets.
+"""
 rationale = """
 The object store owns hashing, verification, idempotency, and typed conflicts, \
 while each asynchronous backend owns the atomic storage and resource-cleanup \
@@ -190,17 +197,24 @@ those exact keys only and never deletes, rewrites, or reference-counts object \
 rows, so evicted content stays retrievable through ``get`` and bindings on \
 other keys to the same reference keep resolving. Replaying an eviction is \
 idempotent, there is no prefix or wildcard form, and no enlisted variant \
-exists on ``ObjectStore`` or any backend."""
+exists on ``ObjectStore`` or any backend. A batch commits atomically across \
+every chunk it is split into, so no caller observes a partially evicted batch. \
+Restricting eviction to cache-grade keys is caller-owned discipline: dr-store \
+does not distinguish cache keys from evidence keys and rejects no key on \
+grade."""
 rationale = """
 Cache consumers need their memoized bindings to be bustable, while evidence \
-keeps its append-only identity: a new attempt gets new binding keys rather than \
-rebinding old ones, so eviction never becomes a mutation path. Keeping content \
-addressed and shared means resolvability is the only safe thing to remove \
-without ownership tracking storage does not have. Excluding eviction from the \
-sync enlisted surface makes the destructive verb structurally unreachable from \
-an evidence transaction, rather than merely discouraged."""
+keeps its identity: a new attempt gets new binding keys rather than rebinding \
+old ones, so eviction never becomes a mutation path. Keeping content addressed \
+and shared means resolvability is the only safe thing to remove without \
+ownership tracking storage does not have. The sync enlisted surface \
+deliberately omits eviction and the public-API surface pin enforces that \
+omission, so no destructive verb reaches an evidence transaction through the \
+enlisted path; which keys the awaited path is pointed at remains the caller's \
+responsibility, since a namespace-aware storage layer would put domain meaning \
+where this package refuses to hold it."""
 date = "2026-08-12"
-check = "uv run pytest -q tests/object_store/test_eviction.py tests/storage_backends/test_contract.py tests/test_public_api.py"
+check = "scripts/test-postgres.sh -- uv run pytest -q tests/object_store/test_eviction.py tests/test_public_api.py"
 
 [[contracts]]
 title = "Callers own domain meaning"

@@ -53,6 +53,8 @@ class PutStatus(enum.Enum):
 
 
 class EvictStatus(enum.Enum):
+    """Per-key cache-grade eviction status; a return value, never stored."""
+
     EVICTED = "evicted"
     ABSENT = "absent"
 
@@ -65,7 +67,12 @@ class StoreHit:
 
 
 class ObjectStore:
-    """Append-only content-addressed store over a pluggable backend."""
+    """Content-addressed store over a pluggable backend.
+
+    Content is append-only: stored records are never mutated or removed.
+    Bindings are single-assignment, never overwritten or rebound in place, and
+    removable only by cache-grade :meth:`evict_bindings`.
+    """
 
     def __init__(self, backend: Backend) -> None:
         self._backend = backend
