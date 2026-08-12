@@ -14,8 +14,8 @@ from dr_store.core.errors import (
     DocumentDirectoryError,
     ManifestPublishError,
     ManifestReadError,
+    RegularChildFailureReason,
     SidecarVerificationError,
-    SidecarVerificationReason,
 )
 from dr_store.core.filesystem import validate_safe_name
 from dr_store.document_directory.sidecar import (
@@ -151,24 +151,13 @@ class DocumentDirectory:
     ) -> None:
         sidecar_path = self._path / name
         if error is SidecarVerificationError:
-            try:
-                validate_safe_name(
-                    name,
-                    role="sidecar name",
-                    error=AllocationError,
-                )
-            except AllocationError as exc:
-                raise SidecarVerificationError(
-                    sidecar_path,
-                    SidecarVerificationReason.BOUNDS_EXCEEDED,
-                ) from exc
             if (
                 name.casefold() == self._manifest.path.name.casefold()
                 or _is_reserved_document_temp_name(name)
             ):
                 raise SidecarVerificationError(
                     sidecar_path,
-                    SidecarVerificationReason.BOUNDS_EXCEEDED,
+                    RegularChildFailureReason.BOUNDS_EXCEEDED,
                 )
             return
         validate_safe_name(name, role="sidecar name", error=error)

@@ -263,7 +263,7 @@ name = "sidecar hash"
 definition = """
 The full 64-character lowercase SHA-256 hash of a sidecar's stored bytes after \
 any truncation. Its input is raw bytes, so it is not a content hash."""
-exported_symbols = ["SidecarVerificationError", "SidecarVerificationReason"]
+exported_symbols = ["SidecarVerificationError"]
 categories = ["document artifacts"]
 is_a = ["hash"]
 
@@ -275,6 +275,7 @@ no-follow descriptors, verifies the caller-supplied byte length and SHA-256 \
 digest against the recovered bytes, and returns those verified bytes."""
 exported_symbols = [
   "read_verified_regular_child",
+  "RegularChildFailureReason",
   "VerifiedRegularChildReadError",
 ]
 categories = ["document artifacts"]

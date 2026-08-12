@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from dr_store import VerifiedRegularChildReadError, read_verified_regular_child
+from dr_store import (
+    RegularChildFailureReason,
+    VerifiedRegularChildReadError,
+    read_verified_regular_child,
+)
 from dr_store.core import verified_read as verified_read_module
 
 if TYPE_CHECKING:
@@ -38,7 +42,7 @@ def test_read_verified_regular_child_rejects_hash_mismatch(
     child_name = "artifact.bin"
     (tmp_path / child_name).write_bytes(payload)
 
-    with pytest.raises(VerifiedRegularChildReadError, match="hash mismatch"):
+    with pytest.raises(VerifiedRegularChildReadError) as caught:
         read_verified_regular_child(
             tmp_path,
             child_name,
@@ -46,6 +50,7 @@ def test_read_verified_regular_child_rejects_hash_mismatch(
             expected_byte_length=len(payload),
             expected_sha256="0" * 64,
         )
+    assert caught.value.reason is RegularChildFailureReason.MISMATCH
 
 
 def test_read_verified_regular_child_rejects_length_mismatch(
@@ -55,7 +60,7 @@ def test_read_verified_regular_child_rejects_length_mismatch(
     child_name = "artifact.bin"
     (tmp_path / child_name).write_bytes(payload)
 
-    with pytest.raises(VerifiedRegularChildReadError, match="length mismatch"):
+    with pytest.raises(VerifiedRegularChildReadError) as caught:
         read_verified_regular_child(
             tmp_path,
             child_name,
@@ -63,6 +68,7 @@ def test_read_verified_regular_child_rejects_length_mismatch(
             expected_byte_length=len(payload) + 1,
             expected_sha256=hashlib.sha256(payload).hexdigest(),
         )
+    assert caught.value.reason is RegularChildFailureReason.MISMATCH
 
 
 def test_read_verified_regular_child_rejects_bound_exceeded(
@@ -72,7 +78,7 @@ def test_read_verified_regular_child_rejects_bound_exceeded(
     child_name = "artifact.bin"
     (tmp_path / child_name).write_bytes(payload)
 
-    with pytest.raises(VerifiedRegularChildReadError, match="exceeds the"):
+    with pytest.raises(VerifiedRegularChildReadError) as caught:
         read_verified_regular_child(
             tmp_path,
             child_name,
@@ -80,6 +86,7 @@ def test_read_verified_regular_child_rejects_bound_exceeded(
             expected_byte_length=4,
             expected_sha256=hashlib.sha256(payload[:4]).hexdigest(),
         )
+    assert caught.value.reason is RegularChildFailureReason.BOUNDS_EXCEEDED
 
 
 def test_read_verified_regular_child_rejects_non_regular_child(
@@ -88,10 +95,7 @@ def test_read_verified_regular_child_rejects_non_regular_child(
     child_name = "child-dir"
     (tmp_path / child_name).mkdir()
 
-    with pytest.raises(
-        VerifiedRegularChildReadError,
-        match="is not a regular file",
-    ):
+    with pytest.raises(VerifiedRegularChildReadError) as caught:
         read_verified_regular_child(
             tmp_path,
             child_name,
@@ -99,6 +103,7 @@ def test_read_verified_regular_child_rejects_non_regular_child(
             expected_byte_length=0,
             expected_sha256=hashlib.sha256(b"").hexdigest(),
         )
+    assert caught.value.reason is RegularChildFailureReason.NOT_REGULAR
 
 
 def test_read_verified_regular_child_fails_closed_without_no_follow_support(
@@ -118,13 +123,16 @@ def test_read_verified_regular_child_fails_closed_without_no_follow_support(
             expected_byte_length=len(payload),
             expected_sha256=hashlib.sha256(payload).hexdigest(),
         )
+    assert (
+        caught.value.reason is RegularChildFailureReason.UNSUPPORTED_PLATFORM
+    )
     assert caught.value.__cause__ is None
 
 
 def test_read_verified_regular_child_rejects_unsafe_name(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(VerifiedRegularChildReadError):
+    with pytest.raises(VerifiedRegularChildReadError) as caught:
         read_verified_regular_child(
             tmp_path,
             "../outside.bin",
@@ -132,6 +140,7 @@ def test_read_verified_regular_child_rejects_unsafe_name(
             expected_byte_length=0,
             expected_sha256=hashlib.sha256(b"").hexdigest(),
         )
+    assert caught.value.reason is RegularChildFailureReason.BOUNDS_EXCEEDED
 
 
 def test_read_verified_regular_child_detects_overflow_with_one_extra_byte(
@@ -141,7 +150,7 @@ def test_read_verified_regular_child_detects_overflow_with_one_extra_byte(
     child_name = "artifact.bin"
     (tmp_path / child_name).write_bytes(payload)
 
-    with pytest.raises(VerifiedRegularChildReadError, match="exceeds the"):
+    with pytest.raises(VerifiedRegularChildReadError) as caught:
         read_verified_regular_child(
             tmp_path,
             child_name,
@@ -149,3 +158,4 @@ def test_read_verified_regular_child_detects_overflow_with_one_extra_byte(
             expected_byte_length=5,
             expected_sha256=hashlib.sha256(payload).hexdigest(),
         )
+    assert caught.value.reason is RegularChildFailureReason.BOUNDS_EXCEEDED

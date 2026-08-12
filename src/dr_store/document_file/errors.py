@@ -60,20 +60,6 @@ class ReadReason(StrEnum):
     BOUNDS_EXCEEDED = "bounds_exceeded"
 
 
-@verify(UNIQUE)
-class ReadBoundsExceededMarker(StrEnum):
-    """Substrings that identify bound-limit failures in decode errors."""
-
-    MAX_BYTES = "max_bytes"
-    MAX_DEPTH = "max_depth"
-    NESTING_DEPTH = "nesting depth"
-    BYTE_BOUND = "byte bound"
-    DEPTH_BOUND = "depth bound"
-    EXCEEDS_CONFIGURED = "exceeds the configured"
-    LIMIT_IS = "limit is"
-    REACHES_DEPTH = "reaches depth"
-
-
 class DocumentFileError(Exception):
     """Base for standalone canonical document-file failures."""
 
