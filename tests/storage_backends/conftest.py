@@ -70,8 +70,3 @@ async def postgres_engine() -> AsyncIterator[AsyncEngine]:
                 )
                 await connection.commit()
         await engine.dispose()
-
-
-@pytest.fixture
-async def postgres_pool(postgres_engine: AsyncEngine) -> AsyncEngine:
-    return postgres_engine

@@ -18,12 +18,19 @@ categories = ["content addressing", "object storage"]
 part_of = ["object reference"]
 
 [[terms]]
-name = "canonical JSON"
+name = "canonical JSON text"
 definition = """
 The single deterministic UTF-8 JSON text selected for an accepted value by a \
 declared canonical profile. Equivalent accepted values have the same text \
 regardless of incidental formatting or object-key order."""
 categories = ["content addressing", "object storage", "document artifacts"]
+
+[[terms]]
+name = "unbudgeted"
+definition = """
+An explicit declaration that the executor installs no policy limit for an \
+axis. It is neither an unlimited-resource promise nor a bounded-return \
+guarantee."""
 
 [[terms]]
 name = "hash"

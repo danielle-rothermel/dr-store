@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import UNIQUE, StrEnum, verify
 from typing import TYPE_CHECKING
 
 from dr_store.document_file.errors import (
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from dr_store.content_addressing import ObjectReference
 
 
+@verify(UNIQUE)
 class ContentMismatchReason(StrEnum):
     HASH_MISMATCH = "hash_mismatch"
     INVALID_JSON = "invalid_json"
@@ -23,6 +24,7 @@ class ContentMismatchReason(StrEnum):
     NON_CANONICAL_FORM = "non_canonical_form"
 
 
+@verify(UNIQUE)
 class RegularChildFailureReason(StrEnum):
     """Why a pinned regular-child read or verification did not succeed."""
 

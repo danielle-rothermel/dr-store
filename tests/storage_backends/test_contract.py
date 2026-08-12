@@ -43,7 +43,6 @@ async def test_put_absent_replay_and_competing_value(
         canonical=CANONICAL,
     ) == PutOutcome(
         inserted=True,
-        stored_schema=SCHEMA,
         stored_canonical=CANONICAL,
     )
     assert await backend.put_object(
@@ -52,7 +51,6 @@ async def test_put_absent_replay_and_competing_value(
         canonical=CANONICAL,
     ) == PutOutcome(
         inserted=False,
-        stored_schema=SCHEMA,
         stored_canonical=CANONICAL,
     )
     assert await backend.put_object(
@@ -61,7 +59,6 @@ async def test_put_absent_replay_and_competing_value(
         canonical=COMPETING_CANONICAL,
     ) == PutOutcome(
         inserted=False,
-        stored_schema=SCHEMA,
         stored_canonical=CANONICAL,
     )
 
@@ -134,10 +131,8 @@ async def test_batch_put_get_and_conflict_rollback(
     assert await backend.get_bound_objects(
         keys=(KEY, "unbound", missing_object_key)
     ) == {
-        KEY: BoundObjectRow(SCHEMA, CONTENT_HASH, SCHEMA, CANONICAL),
-        missing_object_key: BoundObjectRow(
-            OTHER_SCHEMA, OTHER_HASH, None, None
-        ),
+        KEY: BoundObjectRow(SCHEMA, CONTENT_HASH, CANONICAL),
+        missing_object_key: BoundObjectRow(OTHER_SCHEMA, OTHER_HASH, None),
     }
 
     colliding_hash = "c" * 64
@@ -264,7 +259,7 @@ async def test_put_contention_has_one_correlated_winner(
     winner = await backend.get_object(schema=SCHEMA, content_hash=CONTENT_HASH)
     assert winner is not None
     for contender, outcome in results:
-        assert (outcome.stored_schema, outcome.stored_canonical) == winner
+        assert outcome.stored_canonical == winner[1]
         if outcome.inserted:
             assert contender == winner[1]
 

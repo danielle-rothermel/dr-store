@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
 from dr_store.content_addressing import (
-    _validate_binding_key,
-    _validate_content_hash,
-    _validate_reference_schema,
+    validate_binding_key,
+    validate_content_hash,
+    validate_reference_schema,
 )
 from dr_store.core.errors import ObjectConflictError
 from dr_store.storage_backends.contract import (
@@ -105,7 +105,6 @@ async def _await_settled[T](future: asyncio.Future[T]) -> T:
 class SqliteBackend:
     """One asynchronous worker and connection for persistent SQLite storage."""
 
-    _path: str
     _loop: asyncio.AbstractEventLoop
     _worker: ThreadPoolExecutor
     _connection: sqlite3.Connection
@@ -164,7 +163,6 @@ class SqliteBackend:
             raise
 
         self = object.__new__(cls)
-        self._path = database_path
         self._loop = loop
         self._worker = worker
         self._connection = connection
@@ -213,8 +211,8 @@ class SqliteBackend:
         canonical: str,
     ) -> PutOutcome:
         self._check_operation()
-        _validate_reference_schema(schema)
-        _validate_content_hash(content_hash)
+        validate_reference_schema(schema)
+        validate_content_hash(content_hash)
         return await self._run(
             self._put_object,
             schema,
@@ -241,10 +239,9 @@ class SqliteBackend:
                 (schema, content_hash),
             ).fetchone()
             assert row is not None
-            stored_schema, stored_canonical = row
+            _stored_schema, stored_canonical = row
         return PutOutcome(
             inserted=inserted,
-            stored_schema=stored_schema,
             stored_canonical=stored_canonical,
         )
 
@@ -255,8 +252,8 @@ class SqliteBackend:
         content_hash: str,
     ) -> tuple[str, str] | None:
         self._check_operation()
-        _validate_reference_schema(schema)
-        _validate_content_hash(content_hash)
+        validate_reference_schema(schema)
+        validate_content_hash(content_hash)
         return await self._run(self._get_object, schema, content_hash)
 
     def _get_object(
@@ -281,9 +278,9 @@ class SqliteBackend:
         content_hash: str,
     ) -> BindOutcome:
         self._check_operation()
-        _validate_binding_key(key)
-        _validate_reference_schema(schema)
-        _validate_content_hash(content_hash)
+        validate_binding_key(key)
+        validate_reference_schema(schema)
+        validate_content_hash(content_hash)
         return await self._run(self._bind, key, schema, content_hash)
 
     def _bind(
@@ -313,7 +310,7 @@ class SqliteBackend:
 
     async def get_binding(self, *, key: str) -> tuple[str, str] | None:
         self._check_operation()
-        _validate_binding_key(key)
+        validate_binding_key(key)
         return await self._run(self._get_binding, key)
 
     def _get_binding(self, key: str) -> tuple[str, str] | None:
@@ -332,7 +329,7 @@ class SqliteBackend:
     ) -> dict[str, BoundObjectRow]:
         self._check_operation()
         for key in keys:
-            _validate_binding_key(key)
+            validate_binding_key(key)
         if not keys:
             return {}
         return await self._run(self._get_bound_objects, keys)
@@ -358,13 +355,12 @@ class SqliteBackend:
                 key,
                 binding_schema,
                 binding_content_hash,
-                object_schema,
+                _object_schema,
                 canonical,
             ) in stored_rows:
                 rows[key] = BoundObjectRow(
                     binding_schema=binding_schema,
                     binding_content_hash=binding_content_hash,
-                    object_schema=object_schema,
                     canonical=canonical,
                 )
         return rows
@@ -376,9 +372,9 @@ class SqliteBackend:
     ) -> dict[str, BindOutcome]:
         self._check_operation()
         for entry in entries:
-            _validate_binding_key(entry.key)
-            _validate_reference_schema(entry.schema)
-            _validate_content_hash(entry.content_hash)
+            validate_binding_key(entry.key)
+            validate_reference_schema(entry.schema)
+            validate_content_hash(entry.content_hash)
         if not entries:
             return {}
         return await self._run(self._put_bound_objects, entries)

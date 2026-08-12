@@ -229,7 +229,7 @@ class ObjectStore:
         self, schema: str, record: Jsonable
     ) -> tuple[ObjectReference, PutStatus]: ...
     async def get(self, reference: ObjectReference) -> Jsonable: ...
-    async def get_bound_rows(
+    async def get_bound_objects(
         self, keys: Iterable[str]
     ) -> Mapping[str, BoundObjectRow]: ...
     async def get_many(
@@ -251,7 +251,7 @@ class ObjectStore:
     async def resolve(self, key: str) -> ObjectReference | None: ...
 ```
 
-`get_bound_rows` deduplicates requested keys and returns joined binding/object
+`get_bound_objects` deduplicates requested keys and returns joined binding/object
 rows without verification. `verify_stored_record` applies the same checks as
 `get` to one stored row. `get_many` composes those steps for evidence-grade
 bulk reads: deduplicated keys, one verified hit or unbound `None` for every
@@ -262,6 +262,10 @@ reporting cache-style misses. `put_many` validates, canonicalizes, and hashes
 every proposed entry before one backend write batch, then returns the first
 binding winner for each input key. A batch read claims no single snapshot
 across backend read chunks.
+
+Verified object reads raise `ContentHashMismatchError` with
+`ContentMismatchReason`. `actual` carries the observed hash only for
+`HASH_MISMATCH`; other reasons leave `actual` unset.
 
 ## Storage backends
 
@@ -274,7 +278,6 @@ objects carry prepared writes and joined binding/object read results:
 @dataclass(frozen=True, slots=True)
 class PutOutcome:
     inserted: bool
-    stored_schema: str
     stored_canonical: str
 
 @dataclass(frozen=True, slots=True)
@@ -294,7 +297,6 @@ class BoundObjectWrite:
 class BoundObjectRow:
     binding_schema: str
     binding_content_hash: str
-    object_schema: str | None
     canonical: str | None
 ```
 
@@ -465,6 +467,9 @@ does not close a separate instance or coordinate another process, even when
 both use the same database path. These persistence semantics do not promise
 power-loss durability.
 
+Unverifiable stored cache values still report a miss, but increment
+`RecordCache.stats.corruption_count` and log the corrupted key.
+
 ## Canonical JSON document files
 
 A [canonical JSON document file](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_file)
@@ -531,13 +536,6 @@ document is absent; every other reason means the document is present but
 invalid. Both errors derive from `DocumentFileError` and preserve the
 originating failure as their cause. `ManifestPublishError` and
 `ManifestReadError` expose the same structured fields on the directory surface.
-
-Verified object reads raise `ContentHashMismatchError` with
-`ContentMismatchReason`. `actual` carries the observed hash only for
-`HASH_MISMATCH`; other reasons leave `actual` unset.
-
-Unverifiable stored cache values still report a miss, but increment
-`RecordCache.stats.corruption_count` and log the corrupted key.
 
 ## Document Directory
 

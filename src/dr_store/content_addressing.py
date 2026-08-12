@@ -38,7 +38,7 @@ def _prepare_record(record: Jsonable) -> _PreparedRecord:
     )
 
 
-def _validate_reference_schema(schema: object) -> str:
+def validate_reference_schema(schema: object) -> str:
     if not isinstance(schema, str) or not schema:
         raise ReferenceValidationError(
             "ObjectReference schema must be a non-empty string"
@@ -47,14 +47,14 @@ def _validate_reference_schema(schema: object) -> str:
     return schema
 
 
-def _validate_binding_key(key: object) -> str:
+def validate_binding_key(key: object) -> str:
     if not isinstance(key, str):
         raise ReferenceValidationError("binding key must be a string")
     _validate_storage_text(key, name="binding key")
     return key
 
 
-def _validate_content_hash(content_hash: object) -> str:
+def validate_content_hash(content_hash: object) -> str:
     if not isinstance(content_hash, str) or not is_content_hash(content_hash):
         raise ReferenceValidationError(
             "content hash must be a 64-character lowercase hex SHA-256 hash, "
@@ -91,8 +91,8 @@ class ObjectReference:
     content_hash: str
 
     def __post_init__(self) -> None:
-        _validate_reference_schema(self.schema)
-        _validate_content_hash(self.content_hash)
+        validate_reference_schema(self.schema)
+        validate_content_hash(self.content_hash)
 
     @classmethod
     def for_record(cls, schema: str, record: Jsonable) -> ObjectReference:

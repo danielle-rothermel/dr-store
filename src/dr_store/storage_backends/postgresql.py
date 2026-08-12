@@ -7,9 +7,9 @@ from sqlalchemy.engine import Connection  # noqa: TC002
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from dr_store.content_addressing import (
-    _validate_binding_key,
-    _validate_content_hash,
-    _validate_reference_schema,
+    validate_binding_key,
+    validate_content_hash,
+    validate_reference_schema,
 )
 from dr_store.core.errors import ObjectConflictError
 from dr_store.storage_backends.contract import (
@@ -284,8 +284,8 @@ class PostgresBackend:
         canonical: str,
         connection: AsyncConnection | None = None,
     ) -> PutOutcome:
-        _validate_reference_schema(schema)
-        _validate_content_hash(content_hash)
+        validate_reference_schema(schema)
+        validate_content_hash(content_hash)
 
         async def put(conn: AsyncConnection) -> PutOutcome:
             inserted = await _fetchrow(
@@ -300,7 +300,6 @@ class PostgresBackend:
             if inserted is not None:
                 return PutOutcome(
                     inserted=True,
-                    stored_schema=inserted["schema"],
                     stored_canonical=inserted["canonical"],
                 )
             stored = await _fetchrow(
@@ -311,7 +310,6 @@ class PostgresBackend:
             assert stored is not None
             return PutOutcome(
                 inserted=False,
-                stored_schema=stored["schema"],
                 stored_canonical=stored["canonical"],
             )
 
@@ -329,8 +327,8 @@ class PostgresBackend:
         content_hash: str,
         connection: AsyncConnection | None = None,
     ) -> tuple[str, str] | None:
-        _validate_reference_schema(schema)
-        _validate_content_hash(content_hash)
+        validate_reference_schema(schema)
+        validate_content_hash(content_hash)
 
         async def get(conn: AsyncConnection) -> tuple[str, str] | None:
             row = await _fetchrow(
@@ -357,9 +355,9 @@ class PostgresBackend:
         content_hash: str,
         connection: AsyncConnection | None = None,
     ) -> BindOutcome:
-        _validate_binding_key(key)
-        _validate_reference_schema(schema)
-        _validate_content_hash(content_hash)
+        validate_binding_key(key)
+        validate_reference_schema(schema)
+        validate_content_hash(content_hash)
 
         async def bind_key(conn: AsyncConnection) -> BindOutcome:
             inserted = await _fetchrow(
@@ -388,7 +386,7 @@ class PostgresBackend:
         key: str,
         connection: AsyncConnection | None = None,
     ) -> tuple[str, str] | None:
-        _validate_binding_key(key)
+        validate_binding_key(key)
 
         async def get(conn: AsyncConnection) -> tuple[str, str] | None:
             row = await _fetchrow(conn, _GET_BINDING_SQL, {"key": key})
@@ -410,15 +408,14 @@ class PostgresBackend:
         connection: AsyncConnection | None = None,
     ) -> dict[str, BoundObjectRow]:
         for key in keys:
-            _validate_binding_key(key)
+            validate_binding_key(key)
         distinct_keys = tuple(dict.fromkeys(keys))
         if not distinct_keys:
             return {}
 
-        bindings: dict[str, tuple[str, str]] = {}
-        objects: dict[tuple[str, str], str] = {}
-
-        async def get(conn: AsyncConnection) -> None:
+        async def get(conn: AsyncConnection) -> dict[str, BoundObjectRow]:
+            bindings: dict[str, tuple[str, str]] = {}
+            objects: dict[tuple[str, str], str] = {}
             for chunk in self._chunks(distinct_keys):
                 rows = await _fetch(
                     conn,
@@ -448,23 +445,21 @@ class PostgresBackend:
                         "canonical"
                     ]
 
-        await _run_connection_operation(
+            results: dict[str, BoundObjectRow] = {}
+            for key, (schema, content_hash) in bindings.items():
+                results[key] = BoundObjectRow(
+                    binding_schema=schema,
+                    binding_content_hash=content_hash,
+                    canonical=objects.get((schema, content_hash)),
+                )
+            return results
+
+        return await _run_connection_operation(
             self._engine,
             get,
             transactional=False,
             connection=connection,
         )
-
-        results: dict[str, BoundObjectRow] = {}
-        for key, (schema, content_hash) in bindings.items():
-            canonical = objects.get((schema, content_hash))
-            results[key] = BoundObjectRow(
-                binding_schema=schema,
-                binding_content_hash=content_hash,
-                object_schema=schema if canonical is not None else None,
-                canonical=canonical,
-            )
-        return results
 
     async def put_bound_objects(
         self,
@@ -473,9 +468,9 @@ class PostgresBackend:
         connection: AsyncConnection | None = None,
     ) -> dict[str, BindOutcome]:
         for entry in entries:
-            _validate_binding_key(entry.key)
-            _validate_reference_schema(entry.schema)
-            _validate_content_hash(entry.content_hash)
+            validate_binding_key(entry.key)
+            validate_reference_schema(entry.schema)
+            validate_content_hash(entry.content_hash)
         if not entries:
             return {}
 
@@ -493,11 +488,11 @@ class PostgresBackend:
 
         references = tuple(objects)
         distinct_writes = tuple(writes.values())
-        inserted_keys: set[str] = set()
-        stored_objects: dict[tuple[str, str], str] = {}
-        stored_bindings: dict[str, tuple[str, str]] = {}
 
-        async def put(conn: AsyncConnection) -> None:
+        async def put(conn: AsyncConnection) -> dict[str, BindOutcome]:
+            inserted_keys: set[str] = set()
+            stored_objects: dict[tuple[str, str], str] = {}
+            stored_bindings: dict[str, tuple[str, str]] = {}
             for chunk in self._chunks(references):
                 await _execute(
                     conn,
@@ -561,19 +556,19 @@ class PostgresBackend:
                         row["content_hash"],
                     )
 
-        await _run_connection_operation(
+            assert stored_bindings.keys() == writes.keys()
+            return {
+                key: BindOutcome(
+                    bound=key in inserted_keys,
+                    existing_schema=stored_bindings[key][0],
+                    existing_content_hash=stored_bindings[key][1],
+                )
+                for key in writes
+            }
+
+        return await _run_connection_operation(
             self._engine,
             put,
             transactional=True,
             connection=connection,
         )
-
-        assert stored_bindings.keys() == writes.keys()
-        return {
-            key: BindOutcome(
-                bound=key in inserted_keys,
-                existing_schema=stored_bindings[key][0],
-                existing_content_hash=stored_bindings[key][1],
-            )
-            for key in writes
-        }

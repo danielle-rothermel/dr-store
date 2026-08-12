@@ -57,7 +57,7 @@ def test_object_store_public_surface_is_exact() -> None:
     assert public == {
         "bind",
         "get",
-        "get_bound_rows",
+        "get_bound_objects",
         "get_many",
         "put",
         "put_many",

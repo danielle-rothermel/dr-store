@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import enum
 from collections.abc import (  # noqa: TC003 - public hints resolve at runtime.
     AsyncIterator,
     Iterable,
@@ -25,14 +24,11 @@ from dr_store.core.errors import (
 )
 from dr_store.object_store import ObjectStore
 from dr_store.record_cache.cache import CacheEntry, CacheHit, RecordCache
-from dr_store.storage_backends.sqlite import SqliteBackend, _await_settled
-
-
-class _Lifecycle(enum.Enum):
-    OPEN = enum.auto()
-    CLOSING = enum.auto()
-    CLOSED = enum.auto()
-    FAILED = enum.auto()
+from dr_store.storage_backends.sqlite import (
+    SqliteBackend,
+    _await_settled,
+    _Lifecycle,
+)
 
 
 class SqliteRecordCache(RecordCache):
@@ -41,7 +37,6 @@ class SqliteRecordCache(RecordCache):
     _sqlite_backend: SqliteBackend
     _loop: asyncio.AbstractEventLoop
     _state: _Lifecycle
-    _active_operations: int
     _operation_tasks: set[asyncio.Task[object]]
     _drained: asyncio.Event
     _close_task: asyncio.Task[None] | None
@@ -72,7 +67,6 @@ class SqliteRecordCache(RecordCache):
         self._sqlite_backend = backend
         self._loop = asyncio.get_running_loop()
         self._state = _Lifecycle.OPEN
-        self._active_operations = 0
         self._operation_tasks = set()
         self._drained = asyncio.Event()
         self._drained.set()
@@ -93,15 +87,13 @@ class SqliteRecordCache(RecordCache):
             raise SqliteRecordCacheClosedError("SQLite record cache is closed")
         task = asyncio.current_task()
         assert task is not None
-        self._active_operations += 1
         self._operation_tasks.add(task)
         self._drained.clear()
         try:
             yield
         finally:
             self._operation_tasks.remove(task)
-            self._active_operations -= 1
-            if self._active_operations == 0:
+            if not self._operation_tasks:
                 self._drained.set()
 
     async def get(self, key: str, *, schema: str) -> CacheHit | None:

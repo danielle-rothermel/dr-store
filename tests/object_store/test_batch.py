@@ -6,10 +6,12 @@ import pytest
 
 from dr_store import (
     ContentHashMismatchError,
+    ObjectConflictError,
     ObjectNotFoundError,
     ObjectReference,
     ObjectStore,
     RecordCache,
+    ReferenceValidationError,
     SchemaMismatchError,
     StoreHit,
     compute_content_hash,
@@ -113,7 +115,7 @@ async def test_get_many_raises_when_referenced_object_is_missing(
         await store.get_many([KEY_A], schema=SCHEMA)
 
 
-async def test_get_bound_rows_returns_unverified_rows(
+async def test_get_bound_objects_returns_unverified_rows(
     controlled_backend: ControlledBackend,
 ) -> None:
     store = ObjectStore(controlled_backend)
@@ -122,14 +124,13 @@ async def test_get_bound_rows_returns_unverified_rows(
     controlled_backend.object_rows[
         (reference.schema, reference.content_hash)
     ] = "not valid json"
-    rows = await store.get_bound_rows([KEY_A])
+    rows = await store.get_bound_objects([KEY_A])
     row = rows[KEY_A]
-    assert row.object_schema is not None
     assert row.canonical is not None
     with pytest.raises(ContentHashMismatchError):
         store.verify_stored_record(
             reference=reference,
-            stored_schema=row.object_schema,
+            stored_schema=row.binding_schema,
             canonical=row.canonical,
         )
 
@@ -145,3 +146,24 @@ async def test_record_cache_still_reports_corruption_as_miss(
     ] = "not valid json"
     cache = RecordCache(store)
     assert await cache.get_many([KEY_A], schema=SCHEMA) == {KEY_A: None}
+
+
+async def test_put_many_rejects_invalid_key_before_backend(
+    store: ObjectStore,
+) -> None:
+    with pytest.raises(ReferenceValidationError):
+        await store.put_many({"\0": (SCHEMA, RECORD_A)})
+
+
+async def test_put_many_raises_on_competing_canonical_for_same_hash(
+    controlled_backend: ControlledBackend,
+) -> None:
+    reference = ObjectReference.for_record(SCHEMA, RECORD_A)
+    controlled_backend.set_object(
+        schema=SCHEMA,
+        content_hash=reference.content_hash,
+        canonical='{"tampered":true}',
+    )
+    store = ObjectStore(controlled_backend)
+    with pytest.raises(ObjectConflictError):
+        await store.put_many({KEY_A: (SCHEMA, RECORD_A)})

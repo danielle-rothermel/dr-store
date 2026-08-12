@@ -153,7 +153,7 @@ def _finalize_publication_resources(
     owns_temporary: bool,
     directory_descriptor: int | None,
     failure: Exception | None,
-) -> tuple[Exception | None, bool]:
+) -> Exception | None:
     if temporary_descriptor is not None:
         try:
             os.close(temporary_descriptor)
@@ -168,15 +168,13 @@ def _finalize_publication_resources(
     ):
         with suppress(OSError):
             os.unlink(temporary_name, dir_fd=directory_descriptor)
-    directory_close_failed = False
     if directory_descriptor is not None:
         try:
             os.close(directory_descriptor)
         except OSError as exc:
             if failure is None:
                 failure = exc
-                directory_close_failed = True
-    return failure, directory_close_failed
+    return failure
 
 
 def _require_canonical_storage(document: Jsonable, raw: bytes) -> None:
@@ -315,7 +313,7 @@ class CanonicalJsonFile:
         except (NotImplementedError, OSError, TypeError, ValueError) as exc:
             failure = exc
         finally:
-            failure, _directory_close_failed = _finalize_publication_resources(
+            failure = _finalize_publication_resources(
                 temporary_descriptor=temporary_descriptor,
                 temporary_name=temporary_name,
                 owns_temporary=owns_temporary,
