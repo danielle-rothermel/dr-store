@@ -52,11 +52,12 @@ wheels = [
 
 [[package]]
 name = "dr-store"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "dr-serialize" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 
@@ -73,6 +74,7 @@ dev = [
 requires-dist = [
     { name = "dr-serialize", specifier = ">=0.1.2" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
+    { name = "pydantic", specifier = ">=2.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
 ]
 

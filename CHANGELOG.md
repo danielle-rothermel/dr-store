@@ -6,6 +6,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-12
+
+### Added
+
+- Added the `dr_store.artifact_bundle` package and its fifteen public names
+  (`ArtifactBundlePublication`, `ArtifactBundleReader`, `BundleManifest`,
+  `ArtifactDescriptor`, `BundleArtifactWriter`, `VerifyingArtifactReader`,
+  `BundleReadLimits`, and the `ArtifactBundleError` hierarchy) for terminal
+  manifest-committed publication and bounded verified reads of one task, run,
+  or result directory. The on-disk `dr-store-artifact-bundle-v1` manifest
+  format is byte-identical to the one written by 0.2.0, so bundles recorded by
+  that release read unchanged.
+- Added `.defs` contract and term entries covering the bundle manifest format,
+  manifest-committed publication, layered bundle reads, verified consumption,
+  and the bundle failure taxonomy.
+- Added `pydantic>=2.0` as a declared runtime dependency; the bundle boundary
+  models import it directly rather than relying on a transitive resolution.
+
+### Changed
+
+- Artifact bundles are a thin packaging layer over existing storage
+  primitives. Manifest publication runs as one `DocumentDirectory` manifest
+  publication, and every declared artifact is recovered by exactly one
+  `read_verified_regular_child` call, so the package holds no second
+  atomic-replacement and no second verified-read implementation.
+- `ArtifactBundleReader.consume_and_verify_artifact` performs one bounded
+  verified whole-read before invoking its consumer, so a selected artifact
+  must fit within `max_bytes_per_artifact` and `max_total_artifact_bytes` and
+  bytes that fail descriptor verification are never delivered.
+- The document-directory granularity contract now names artifact bundles as
+  one publication packaged over a document directory.
+
 ## [0.2.2] - 2026-08-12
 
 ### Added

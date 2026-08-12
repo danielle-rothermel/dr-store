@@ -449,14 +449,240 @@ check = "scripts/test-postgres.sh"
 title = "Document directories represent one publication"
 statement = """
 One document directory represents one task, run, or result publication and is \
-never a per-event record or packed execution-record backend. Callers own \
-partitioned allocation roots and retention."""
+never a per-event record or packed execution-record backend. An artifact bundle \
+is one such publication packaged over a document directory, so it inherits this \
+granularity rather than relaxing it. Callers own partitioned allocation roots \
+and retention."""
 rationale = """
 A document directory groups one manifest with sidecars for one publication \
-unit. Keeping that granularity explicit prevents the format from being mistaken \
-for a high-volume record or retention system."""
+unit. Keeping that granularity explicit prevents the format, and every layer \
+packaged over it, from being mistaken for a high-volume record or retention \
+system."""
 date = "2026-08-11"
-check = "uv run pytest -q tests/document_directory/test_directory.py"
+check = "uv run pytest -q tests/document_directory/test_directory.py tests/artifact_bundle/test_publication.py::test_allocate_creates_one_fresh_prefixed_directory"
+
+[[contracts]]
+title = "The bundle manifest is a closed versioned format"
+statement = """
+Every artifact bundle uses the regular direct-child filename \
+`manifest.json`. Its canonical strict JSON value contains exactly the top-level \
+keys `format`, `artifacts`, and `payload`; `format` is exactly \
+`dr-store-artifact-bundle-v1`. Each artifact descriptor contains exactly \
+`name`, `sha256`, and `byte_length`, and descriptors are ordered by exact \
+artifact name. Public `ArtifactDescriptor` and `BundleManifest` are strict \
+frozen `BaseModel` boundary models. Writers emit no unknown fields; readers \
+reject duplicate keys, unknown fields, unsupported format markers, unsorted or \
+duplicate descriptors, non-strict JSON, and non-canonical bytes. Persisted wire \
+literals are explicit constants rather than values derived from model field \
+names."""
+rationale = """
+A closed self-identifying envelope separates storage integrity from caller \
+meaning. Explicit literals and golden tests make every persisted-format change \
+a visible contract change rather than an incidental code rename. Golden tests \
+pin the stored manifest bytes so a bundle recorded by an earlier release stays \
+readable."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_reading.py::test_invalid_terminal_manifest_is_incomplete"
+
+[[contracts]]
+title = "Artifact bundle publication is manifest-committed"
+statement = """
+`ArtifactBundlePublication.allocate(...)` owns one collision-safe fresh \
+document-directory allocation. `open_artifact(...)` admits multiple active \
+synchronous `BundleArtifactWriter` instances only for distinct exact names; \
+each writer's `write(...)` accepts caller-supplied bytes incrementally, and \
+`finalize()` completes its descriptor. Name reservation and writer-state changes \
+are thread-safe; each writer owns one file and incremental SHA-256 state, while \
+the publication schedules no tasks and multiplexes no bytes. A duplicate \
+rejection before admission does not poison the publication, while any admitted \
+create, write, or finalize failure permanently prevents publication. \
+`publish(payload)` is non-waiting: an active writer, a failed writer, or an \
+invalid payload produces a visible precondition refusal before any manifest \
+operation. Refusal for an active writer or invalid payload is nonterminal. Only \
+a valid publish call after every admitted writer finalized successfully begins \
+the one deterministic manifest attempt and makes the publication terminal. That \
+attempt orders descriptors by exact name, runs as one document-directory \
+Manifest publication, and exposes no retry, replacement, append, truncation, \
+retention, or later mutation operation."""
+rationale = """
+One API-level terminal transition distinguishes interrupted work from a \
+completed publication without claiming a durable cross-process once-only lock. \
+Independent distinct-name writers support concurrent producers without making \
+the bundle a scheduler, and delegating the terminal attempt keeps exactly one \
+atomic same-directory replacement implementation in the package."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_failures.py"
+
+[[contracts]]
+title = "Bundle descriptors define verified contents"
+statement = """
+The bundle manifest contains exactly one artifact descriptor for every bundle \
+artifact and no duplicate exact artifact name. Each descriptor pins the \
+artifact's relative name, full lowercase SHA-256 hash, and non-negative byte \
+length. Files not named by the manifest are outside the bundle, are ignored by \
+bundle verification, and are never returned as bundle artifacts."""
+rationale = """
+The manifest remains authoritative for every byte the bundle claims without \
+requiring a coherent snapshot or lock over unrelated directory entries. Hash \
+and length distinguish modification from truncation without assigning domain \
+meaning to raw bytes."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_models.py tests/artifact_bundle/test_reading.py::test_audit_verifies_every_declared_artifact_and_ignores_other_files"
+
+[[contracts]]
+title = "Bundle artifact names are safe exact direct children"
+statement = """
+Every artifact name is one non-empty relative path segment. Publication and \
+reading reject absolute paths, dot segments, separators, `manifest.json`, and \
+the reserved bundle temporary namespace. Descriptor names are unique by exact \
+string, and artifact creation is exclusive and never replaces an existing \
+child. The format defines no cross-platform case-folding or Unicode-normalization \
+profile."""
+rationale = """
+Restricting artifacts to exclusively created direct children prevents lexical \
+traversal and replacement without introducing a portable-filename subsystem \
+merely to predict every filesystem's aliasing rules."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_reading.py"
+
+[[contracts]]
+title = "Artifact bundle reads are layered over storage primitives"
+statement = """
+`ArtifactBundleReader(path, *, limits)` accepts frozen public \
+`BundleReadLimits` with `manifest_max_bytes`, `manifest_max_depth`, \
+`max_artifacts`, `max_bytes_per_artifact`, and `max_total_artifact_bytes`. \
+Every read validates the terminal manifest as one bounded canonical \
+document-directory Manifest, then checks all declared bounds before any \
+artifact work. Every declared or selected artifact is recovered by exactly one \
+`read_verified_regular_child` call, so each recovery is bounded, no-follow, \
+directory-relative, descriptor-pinned, and verified against the descriptor's \
+byte length and SHA-256 before its bytes are returned. The package contains no \
+second verified-read and no second atomic-replacement implementation. \
+Descriptor pinning holds within each primitive call rather than across a whole \
+read operation, and results describe bytes verified at read time without \
+claiming that external actors cannot later mutate a path. Missing platform \
+support, an exceeded bound, or any declared-file mismatch fails through a typed \
+read error."""
+rationale = """
+Reusing the storage-owned read-and-verify primitive keeps one audited \
+descriptor-pinned recovery path for every bundle artifact and removes a parallel \
+implementation that could drift from it. The point-in-time guarantee remains no \
+stronger than the bytes the reader actually recovered and does not claim \
+ancestor-path containment."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_reading.py"
+
+[[contracts]]
+title = "Artifact bundle integrity audits verify every declared file"
+statement = """
+Each `audit()` validates one regular direct-child canonical manifest, checks \
+all declared bounds before artifact work, then recovers and verifies every \
+declared regular direct-child artifact. It returns the verified \
+`BundleManifest` only after every declared file has the exact descriptor byte \
+length and SHA-256. Files outside the manifest are not inspected."""
+rationale = """
+Eager bounded verification gives integrity-audit callers one accepted state for \
+the whole bundle, while ignoring undeclared entries keeps the manifest \
+authoritative without locking unrelated directory contents."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_reading.py::test_audit_verifies_every_declared_artifact_and_ignores_other_files tests/artifact_bundle/test_reading.py::test_audit_reports_exact_artifact_verification_reason"
+
+[[contracts]]
+title = "Verified artifact consumption delivers only verified bytes"
+statement = """
+`ArtifactBundleReader.consume_and_verify_artifact(...)` validates one canonical \
+manifest under its limits, recovers one selected declared artifact by a single \
+bounded verified whole-read, and only then invokes one synchronous consumer \
+callback with a package-owned `VerifyingArtifactReader`. A selected artifact \
+must therefore fit within `max_bytes_per_artifact` and \
+`max_total_artifact_bytes`, and bytes that fail descriptor verification are \
+never delivered. The facade exposes only `read(...)` while hashing and counting \
+the exact bytes it delivered. `read(0)` is not EOF, and consuming exactly the \
+declared length without a later empty read is incomplete. The operation \
+succeeds only after observed EOF and exact descriptor hash and byte-length \
+agreement, returns the verified `ArtifactDescriptor`, and invalidates the \
+facade before returning. It makes no claim about a later path read."""
+rationale = """
+Recovering through the shared verified-read primitive removes the package's \
+bespoke streaming reader while keeping consumption-coupled verification \
+observable to callers. Refusing unverified bytes is the stricter behavior and \
+costs only the residency bound the limits already declare."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_reading.py::test_verified_consumption_reads_selected_content_once tests/artifact_bundle/test_reading.py::test_verified_consumption_requires_observed_eof tests/artifact_bundle/test_reading.py::test_consumer_is_called_once_and_facade_is_invalid_after_callback tests/artifact_bundle/test_reading.py::test_consumption_refuses_mutated_bytes_before_delivering_them"
+
+[[contracts]]
+title = "Artifact bundle failures use one small typed hierarchy"
+statement = """
+`ArtifactBundleError` is the common base. `BundleAllocationError` reports fresh \
+allocation and artifact-writer admission failures. `BundlePublishError` reports \
+a publication precondition or terminal-manifest phase through public \
+`phase: BundlePublicationPhase` and \
+`replacement_state: ReplacementState | None` fields. Replacement state is \
+absent for a precondition refusal and uses the existing public \
+`ReplacementState` for a terminal manifest attempt. `BundleReadError` reports \
+manifest, filesystem, or consumer failure; `BundleIncompleteError` and \
+`BundleVerificationError` specialize it for a missing valid terminal manifest \
+and a selected or declared artifact mismatch or incomplete consumption. \
+Verification failures expose public `artifact_name: str` and \
+`reason: BundleVerificationReason` fields. Bundle failures raised over a \
+storage primitive report the primitive's own underlying serialization, model, \
+consumer, or operating-system exception as their cause rather than the \
+intermediate primitive error."""
+rationale = """
+These categories distinguish recovery-relevant allocation, refusal, and \
+terminal-manifest outcomes without freezing one public exception type for every \
+low-level writer step. Reporting the originating cause keeps the layering an \
+implementation detail rather than a change to what callers can diagnose."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_failures.py tests/artifact_bundle/test_reading.py tests/test_public_api.py::test_artifact_bundle_public_surfaces_are_exact"
+
+[[contracts]]
+title = "Completed bundles claim visibility without crash durability"
+statement = """
+Each artifact writer hashes the exact supplied bytes, flushes userspace buffers, \
+and closes its descriptor. Manifest publication writes and closes one \
+same-directory temporary document and atomically replaces `manifest.json`. The \
+path does not call `F_FULLFSYNC`, `fsync`, or a directory flush and defines no \
+configurable durability mode. Successful publication is terminal and \
+process-visible, without claiming protection from external filesystem mutation \
+or survival across process, machine, filesystem, or power failure."""
+rationale = """
+Close and same-directory replacement support the intended process-visible \
+terminal boundary. A future crash-durable publication requires its own design \
+rather than an option on this capability."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_failures.py::test_publication_never_uses_file_or_directory_sync tests/artifact_bundle/test_failures.py::test_manifest_replacement_is_same_directory tests/artifact_bundle/test_reading.py::test_directory_is_pinned_within_one_verified_child_read"
+
+[[contracts]]
+title = "Artifact bundle operations remain synchronous and offloadable"
+statement = """
+Artifact writer, manifest publication, integrity-audit, and verified-consumption \
+operations are synchronous, and the package owns no event loop, executor, \
+scheduler, or async filesystem twin. An async caller offloads one complete \
+bundle operation rather than running package hashing or filesystem I/O on its \
+event-loop thread or splitting one operation across independently scheduled \
+per-chunk calls."""
+rationale = """
+Keeping file ownership and the terminal transition inside synchronous operations \
+makes the boundary deterministic while leaving executor policy with async \
+applications."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_reading.py tests/test_public_api.py::test_artifact_bundle_public_surfaces_are_exact"
+
+[[contracts]]
+title = "Artifact bundles do not own domain meaning"
+statement = """
+The bundle format owns artifact names, byte lengths, hashes, completeness, \
+verification, and terminal publication. The bundle manifest carries a separate \
+opaque strict JSON payload; \
+evaluation, provider, corpus, experiment, and other caller packages own that \
+payload's schema and all interpretation of the described artifacts."""
+rationale = """
+Separating a general integrity envelope from caller-owned metadata lets one \
+publication primitive serve unrelated domains without making dr-store an owner \
+of their evidence, identity, or analysis models."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_publication.py::test_publish_orders_descriptors_and_writes_pinned_manifest tests/artifact_bundle/test_reading.py"
 
 [[contracts]]
 title = "PostgreSQL schema installation is explicit"
