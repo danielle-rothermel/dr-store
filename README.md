@@ -52,8 +52,8 @@ PostgreSQL 16 through 18 installations use SQLAlchemy with psycopg and an
 explicit, absent-only schema installation step. The caller creates and owns the
 engine; dr-store neither accepts a DSN nor disposes the engine.
 
-Sync-first platform assembly (checkpoint enlistment and ordinary auto-acquire
-operations on the same engine):
+Sync-first platform assembly (checkpoint enlistment and enlisted reads/writes
+on a caller-owned connection):
 
 ```python
 import os
@@ -64,6 +64,7 @@ from dr_store import (
     ObjectStore,
     POSTGRES_METADATA,
     PostgresBackend,
+    format_object_reference,
     install_postgres_sync,
 )
 
@@ -77,10 +78,19 @@ engine = create_engine(
 install_postgres_sync(engine)
 backend = PostgresBackend.open_sync(engine)
 store = ObjectStore(backend)
+
+# Checkpoint write (inside a DBOS transaction):
+# with connection.begin():
+#     ref, _ = store.put_enlisted(connection, "example.note.v1", {"title": "hello"})
+#     evidence_reference = format_object_reference(ref)
+
+# Read outside a checkpoint (caller opens the connection):
+# with engine.connect() as connection:
+#     record = store.get_enlisted(connection, ref)
 ```
 
-Async auto-acquire operations use the same schema marker through an
-``AsyncEngine``:
+Awaited auto-acquire operations such as ``await store.put(...)`` require a
+backend opened with ``await PostgresBackend.open(async_engine)``:
 
 ```python
 import asyncio
