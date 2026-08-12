@@ -14,7 +14,7 @@ from dr_store import (
     SidecarVerificationError,
     SidecarVerificationReason,
 )
-from dr_store.document_directory import sidecar as sidecar_module
+from dr_store.core import verified_read as verified_read_module
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -88,6 +88,23 @@ def test_verify_sidecar_rejects_mismatched_length(
     assert caught.value.reason is SidecarVerificationReason.MISMATCH
 
 
+def test_verify_sidecar_rejects_extra_bytes_as_bounds_exceeded(
+    tmp_path: Path,
+) -> None:
+    payload = b"0123456789extra"
+    directory = _allocate(tmp_path)
+    (directory.path / SIDECAR_NAME).write_bytes(payload)
+
+    with pytest.raises(SidecarVerificationError) as caught:
+        directory.verify_sidecar(
+            SIDECAR_NAME,
+            expected_sidecar_hash=hashlib.sha256(payload).hexdigest(),
+            expected_head_length=5,
+            expected_tail_length=0,
+        )
+    assert caught.value.reason is SidecarVerificationReason.BOUNDS_EXCEEDED
+
+
 @pytest.mark.parametrize(
     ("expected_head_length", "expected_tail_length"),
     [
@@ -151,7 +168,7 @@ def test_verify_sidecar_rejects_unsafe_and_reserved_names_before_open(
     def unexpected_open(*_args: object, **_kwargs: object) -> int:
         pytest.fail("unsafe Sidecar name reached the filesystem open")
 
-    monkeypatch.setattr(sidecar_module.os, "open", unexpected_open)
+    monkeypatch.setattr(verified_read_module.os, "open", unexpected_open)
     with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             name,
@@ -209,6 +226,37 @@ def test_verify_sidecar_rejects_a_symlinked_directory_authority(
         )
     assert caught.value.reason is SidecarVerificationReason.MISMATCH
     assert isinstance(caught.value.__cause__, OSError)
+
+
+def test_verify_sidecar_directory_open_eloop_is_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = _allocate(tmp_path)
+    real_open = os.open
+
+    def directory_eloop_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if dir_fd is None:
+            raise OSError(errno.ELOOP, "Too many levels of symbolic links")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(verified_read_module.os, "open", directory_eloop_open)
+    with pytest.raises(SidecarVerificationError) as caught:
+        directory.verify_sidecar(
+            SIDECAR_NAME,
+            expected_sidecar_hash=hashlib.sha256(b"").hexdigest(),
+            expected_head_length=0,
+            expected_tail_length=0,
+        )
+    assert caught.value.reason is SidecarVerificationReason.MISMATCH
+    assert isinstance(caught.value.__cause__, OSError)
+    assert caught.value.__cause__.errno == errno.ELOOP
 
 
 def test_verify_sidecar_rejects_a_directory(tmp_path: Path) -> None:
@@ -312,9 +360,9 @@ def test_verify_sidecar_streams_bounded_reads_from_the_inspected_descriptor(
         reads.append((descriptor, size))
         return real_read(descriptor, size)
 
-    monkeypatch.setattr(sidecar_module.os, "open", recording_open)
-    monkeypatch.setattr(sidecar_module.os, "fstat", recording_fstat)
-    monkeypatch.setattr(sidecar_module.os, "read", recording_read)
+    monkeypatch.setattr(verified_read_module.os, "open", recording_open)
+    monkeypatch.setattr(verified_read_module.os, "fstat", recording_fstat)
+    monkeypatch.setattr(verified_read_module.os, "read", recording_read)
     directory.verify_sidecar(
         SIDECAR_NAME,
         expected_sidecar_hash=hashlib.sha256(payload).hexdigest(),
@@ -326,7 +374,9 @@ def test_verify_sidecar_streams_bounded_reads_from_the_inspected_descriptor(
     assert inspected_descriptors == child_descriptors
     assert len(reads) >= 4
     assert {descriptor for descriptor, _ in reads} == set(child_descriptors)
-    assert {size for _, size in reads} == {sidecar_module._READ_CHUNK_BYTES}
+    assert all(
+        size <= verified_read_module._READ_CHUNK_BYTES for _, size in reads
+    )
     assert sidecar_path.read_bytes() == replacement
     for descriptor in directory_descriptors + child_descriptors:
         with pytest.raises(
@@ -355,7 +405,7 @@ def test_verify_sidecar_unreadable_child_is_typed(
             raise PermissionError("read refused")
         return real_open(path, flags, mode)
 
-    monkeypatch.setattr(sidecar_module.os, "open", refusing_child_open)
+    monkeypatch.setattr(verified_read_module.os, "open", refusing_child_open)
     with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(
             SIDECAR_NAME,
@@ -373,7 +423,7 @@ def test_verify_sidecar_fails_closed_without_no_follow_support(
 ) -> None:
     directory = _allocate(tmp_path)
     (directory.path / SIDECAR_NAME).write_bytes(b"stored")
-    monkeypatch.delattr(sidecar_module.os, "O_NOFOLLOW")
+    monkeypatch.delattr(verified_read_module.os, "O_NOFOLLOW")
 
     with pytest.raises(SidecarVerificationError) as caught:
         directory.verify_sidecar(

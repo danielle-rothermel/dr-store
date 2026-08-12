@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import enum
 import json
+from collections.abc import Iterable, Mapping  # noqa: TC003
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dr_serialize import (
@@ -17,6 +19,7 @@ from dr_store.content_addressing import (
     _hash_canonical,
     _prepare_record,
     _validate_binding_key,
+    _validate_reference_schema,
 )
 from dr_store.core.errors import (
     BindingConflictError,
@@ -32,8 +35,6 @@ from dr_store.storage_backends.contract import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from dr_store.storage_backends.contract import Backend
 
 
@@ -45,6 +46,13 @@ class BindStatus(enum.Enum):
 class PutStatus(enum.Enum):
     STORED = "stored"
     IDEMPOTENT = "idempotent"
+
+
+@dataclass(frozen=True, slots=True)
+class StoreHit:
+    """One verified bound record, including a strict-JSON ``null`` record."""
+
+    record: Jsonable
 
 
 class ObjectStore:
@@ -92,13 +100,13 @@ class ObjectStore:
         if stored is None:
             raise ObjectNotFoundError(reference=reference)
         stored_schema, canonical = stored
-        return self._verify_stored_record(
+        return self.verify_stored_record(
             reference=reference,
             stored_schema=stored_schema,
             canonical=canonical,
         )
 
-    def _verify_stored_record(
+    def verify_stored_record(
         self,
         *,
         reference: ObjectReference,
@@ -144,13 +152,62 @@ class ObjectStore:
             )
         return record
 
-    async def _get_bound_objects(
+    async def get_many(
         self,
-        keys: tuple[str, ...],
+        keys: Iterable[str],
+        *,
+        schema: str,
+    ) -> dict[str, StoreHit | None]:
+        """Return one verified hit or unbound ``None`` per distinct key.
+
+        Invalid requested schemas, schema mismatches, missing referenced
+        objects, and unverifiable stored content raise typed errors.
+        """
+        validated_schema = _validate_reference_schema(schema)
+        distinct = tuple(dict.fromkeys(keys))
+        rows = await self.get_bound_rows(distinct)
+        results: dict[str, StoreHit | None] = {}
+        for key in distinct:
+            row = rows.get(key)
+            if row is None:
+                results[key] = None
+                continue
+            reference = ObjectReference(
+                schema=row.binding_schema,
+                content_hash=row.binding_content_hash,
+            )
+            if reference.schema != validated_schema:
+                raise SchemaMismatchError(
+                    expected=validated_schema,
+                    actual=reference.schema,
+                )
+            if row.object_schema is None or row.canonical is None:
+                raise ObjectNotFoundError(reference=reference)
+            results[key] = StoreHit(
+                record=self.verify_stored_record(
+                    reference=reference,
+                    stored_schema=row.object_schema,
+                    canonical=row.canonical,
+                )
+            )
+        return results
+
+    async def put_many(
+        self,
+        entries: Mapping[str, tuple[str, Jsonable]],
+    ) -> dict[str, ObjectReference]:
+        """Store records and return the first binding winner for each key."""
+        return await self._put_bound_records(entries)
+
+    async def get_bound_rows(
+        self,
+        keys: Iterable[str],
     ) -> Mapping[str, BoundObjectRow]:
-        for key in keys:
+        """Return joined binding/object rows without verification."""
+        distinct = tuple(dict.fromkeys(keys))
+        for key in distinct:
             _validate_binding_key(key)
-        return await self._backend.get_bound_objects(keys=keys)
+        return await self._backend.get_bound_objects(keys=distinct)
 
     async def _put_bound_records(
         self,

@@ -23,7 +23,9 @@ from dr_store.core.errors import (
     SqliteRecordCacheClosedError,
     SqliteRecordCacheCloseError,
     StoreError,
+    VerifiedRegularChildReadError,
 )
+from dr_store.core.verified_read import read_verified_regular_child
 from dr_store.document_directory import (
     DocumentDirectory,
     SidecarSummary,
@@ -43,6 +45,7 @@ from dr_store.object_store import (
     BindStatus,
     ObjectStore,
     PutStatus,
+    StoreHit,
 )
 from dr_store.record_cache import (
     CacheEntry,
@@ -114,8 +117,11 @@ __all__ = [
     "SqliteRecordCacheCloseError",
     "SqliteRecordCacheClosedError",
     "StoreError",
+    "StoreHit",
+    "VerifiedRegularChildReadError",
     "compute_content_hash",
     "derive_cache_key",
     "install_postgres",
     "is_content_hash",
+    "read_verified_regular_child",
 ]

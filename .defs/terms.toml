@@ -109,7 +109,7 @@ definition = """
 The asynchronous append-only mapping from object references to immutable records \
 together with the single-assignment mapping from caller-owned keys to those \
 references."""
-exported_symbols = ["ObjectStore", "StoreError"]
+exported_symbols = ["ObjectStore", "StoreError", "StoreHit"]
 categories = ["object storage"]
 
 [[terms]]
@@ -266,6 +266,18 @@ any truncation. Its input is raw bytes, so it is not a content hash."""
 exported_symbols = ["SidecarVerificationError", "SidecarVerificationReason"]
 categories = ["document artifacts"]
 is_a = ["hash"]
+
+[[terms]]
+name = "verified regular-child read"
+definition = """
+A bounded operation that opens one regular direct child through pinned \
+no-follow descriptors, verifies the caller-supplied byte length and SHA-256 \
+digest against the recovered bytes, and returns those verified bytes."""
+exported_symbols = [
+  "read_verified_regular_child",
+  "VerifiedRegularChildReadError",
+]
+categories = ["document artifacts"]
 
 [[terms]]
 name = "record cache"

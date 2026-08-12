@@ -97,7 +97,7 @@ class RecordCache:
         validated_schema = _validate_reference_schema(schema)
         for key in keys:
             _validate_binding_key(key)
-        rows = await self._store._get_bound_objects(keys)
+        rows = await self._store.get_bound_rows(keys)
         results: dict[str, CacheHit | None] = {}
         for key in keys:
             row = rows.get(key)
@@ -115,7 +115,7 @@ class RecordCache:
                 if row.object_schema is None or row.canonical is None:
                     results[key] = None
                     continue
-                record = self._store._verify_stored_record(
+                record = self._store.verify_stored_record(
                     reference=reference,
                     stored_schema=row.object_schema,
                     canonical=row.canonical,
@@ -160,7 +160,7 @@ class RecordCache:
         self,
         entries: Mapping[str, CacheEntry],
     ) -> dict[str, ObjectReference]:
-        return await self._store._put_bound_records(
+        return await self._store.put_many(
             {
                 key: (entry.schema, entry.record)
                 for key, entry in entries.items()
