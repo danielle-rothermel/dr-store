@@ -117,8 +117,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
-temporary_root="$(mktemp -d -t dr-store-compatibility)"
+# Explicit template: `mktemp -t PREFIX` without one is a BSD extension that
+# GNU mktemp rejects. Both paths are resolved before the cleanup guard compares
+# them, since /tmp is a symlink on macOS.
+temporary_base="/tmp"
+temporary_base="$(cd -- "${temporary_base}" && pwd -P)"
+temporary_root="$(
+    mktemp -d "${temporary_base}/dr-store-compatibility.XXXXXXXX"
+)"
+temporary_root="$(cd -- "${temporary_root}" && pwd -P)"
 temporary_parent="$(dirname -- "${temporary_root}")"
+
+if [[ "${temporary_parent}" != "${temporary_base}" \
+    || "$(basename -- "${temporary_root}")" != dr-store-compatibility.* ]]; then
+    printf 'mktemp returned an unsafe directory: %s\n' \
+        "${temporary_root}" >&2
+    exit 1
+fi
 
 baseline_root="${temporary_root}/baseline"
 bundles="${temporary_root}/bundles"

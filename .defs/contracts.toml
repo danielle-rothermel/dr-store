@@ -895,4 +895,4 @@ Returning the existing winner rather than the offered reference is what lets a \
 caller detect that its own write lost and reconcile, so it is pinned against a \
 real database rather than inferred from a fake."""
 date = "2026-08-12"
-check = "scripts/test-postgres.sh tests/object_store/test_enlisted.py"
+check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_backend.py::test_enlisted_batch_conflict_retains_object_inserts tests/object_store/test_enlisted.py"
