@@ -69,6 +69,7 @@ from dr_store.storage_backends import (
     PutOutcome,
     SqliteBackend,
     install_postgres,
+    install_postgres_sync,
 )
 
 __all__ = [
@@ -125,6 +126,7 @@ __all__ = [
     "derive_cache_key",
     "format_object_reference",
     "install_postgres",
+    "install_postgres_sync",
     "is_content_hash",
     "parse_object_reference",
     "read_verified_regular_child",

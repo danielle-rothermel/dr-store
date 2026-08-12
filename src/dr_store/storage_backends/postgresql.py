@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Self, cast
 
 from sqlalchemy import text
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from dr_store.content_addressing import (
@@ -31,6 +31,7 @@ __all__ = [
     "POSTGRES_SCHEMA_FORMAT",
     "PostgresBackend",
     "install_postgres",
+    "install_postgres_sync",
 ]
 
 _MINIMUM_POSTGRES_MAJOR = 16
@@ -406,6 +407,39 @@ def _create_storage_tables_sync(connection: Connection) -> None:
     POSTGRES_METADATA.create_all(connection)
 
 
+def _install_on_connection(connection: Connection) -> None:
+    requirements = _fetchrow_sync(connection, _DATABASE_REQUIREMENTS_SQL)
+    assert requirements is not None
+    _validate_database(
+        version_num=requirements["server_version_num"],
+        server_encoding=requirements["server_encoding"],
+    )
+    _create_storage_tables_sync(connection)
+    _execute_sync(
+        connection,
+        _INSERT_SCHEMA_FORMAT_SQL,
+        {"format": POSTGRES_SCHEMA_FORMAT},
+    )
+
+
+def _validate_schema_on_connection(connection: Connection) -> None:
+    rows = _fetch_sync(connection, _GET_SCHEMA_FORMAT_SQL)
+    _validate_schema_format([row["format"] for row in rows])
+
+
+def install_postgres_sync(engine: Engine) -> None:
+    """Install the fixed ``dr_store`` schema into an empty namespace.
+
+    The caller owns ``engine``. This operation acquires and releases one
+    connection without disposing the engine.
+    """
+    if not isinstance(engine, Engine):
+        raise TypeError("engine must be a sqlalchemy.engine.Engine")
+
+    with engine.connect() as connection, connection.begin():
+        _install_on_connection(connection)
+
+
 async def _run_connection_operation[T](
     engine: AsyncEngine,
     operation: Callable[[AsyncConnection], Awaitable[T]],
@@ -429,38 +463,50 @@ async def install_postgres(engine: AsyncEngine) -> None:
         raise TypeError("engine must be a sqlalchemy.ext.asyncio.AsyncEngine")
 
     async def install(connection: AsyncConnection) -> None:
-        requirements = await connection.run_sync(
-            lambda sync_connection: _fetchrow_sync(
-                sync_connection,
-                _DATABASE_REQUIREMENTS_SQL,
-            )
-        )
-        assert requirements is not None
-        _validate_database(
-            version_num=requirements["server_version_num"],
-            server_encoding=requirements["server_encoding"],
-        )
-        await connection.run_sync(_create_storage_tables_sync)
-        await connection.run_sync(
-            lambda sync_connection: _execute_sync(
-                sync_connection,
-                _INSERT_SCHEMA_FORMAT_SQL,
-                {"format": POSTGRES_SCHEMA_FORMAT},
-            )
-        )
+        await connection.run_sync(_install_on_connection)
 
     await _run_connection_operation(engine, install, write=True)
 
 
 class PostgresBackend:
-    """Shared PostgreSQL storage through a caller-owned asynchronous engine."""
+    """Shared PostgreSQL storage through a caller-owned engine."""
 
-    _engine: AsyncEngine
+    _async_engine: AsyncEngine | None
+    _sync_engine: Engine | None
     _batch_chunk_size: int
 
     def __init__(self, engine: AsyncEngine) -> None:
         del engine
-        raise TypeError("use 'await PostgresBackend.open(engine)'")
+        raise TypeError(
+            "use 'PostgresBackend.open_sync(engine)' or "
+            "'await PostgresBackend.open(engine)'"
+        )
+
+    @classmethod
+    def open_sync(
+        cls,
+        engine: Engine,
+        *,
+        batch_chunk_size: int = _DEFAULT_BATCH_CHUNK_SIZE,
+    ) -> Self:
+        """Validate the installed schema format and use ``engine``.
+
+        ``batch_chunk_size`` must be positive and bounds batch statement
+        parameter count below the PostgreSQL driver limit.
+        """
+        if not isinstance(engine, Engine):
+            raise TypeError("engine must be a sqlalchemy.engine.Engine")
+        if batch_chunk_size <= 0:
+            raise ValueError("batch_chunk_size must be positive")
+
+        with engine.connect() as connection:
+            _validate_schema_on_connection(connection)
+
+        self = object.__new__(cls)
+        self._async_engine = None
+        self._sync_engine = engine
+        self._batch_chunk_size = batch_chunk_size
+        return self
 
     @classmethod
     async def open(
@@ -482,13 +528,7 @@ class PostgresBackend:
             raise ValueError("batch_chunk_size must be positive")
 
         async def validate(connection: AsyncConnection) -> None:
-            rows = await connection.run_sync(
-                lambda sync_connection: _fetch_sync(
-                    sync_connection,
-                    _GET_SCHEMA_FORMAT_SQL,
-                )
-            )
-            _validate_schema_format([row["format"] for row in rows])
+            await connection.run_sync(_validate_schema_on_connection)
 
         await _run_connection_operation(
             engine,
@@ -496,9 +536,18 @@ class PostgresBackend:
             write=False,
         )
         self = object.__new__(cls)
-        self._engine = engine
+        self._async_engine = engine
+        self._sync_engine = None
         self._batch_chunk_size = batch_chunk_size
         return self
+
+    def _require_async_engine(self) -> AsyncEngine:
+        if self._async_engine is None:
+            raise RuntimeError(
+                "async PostgreSQL backend operations require "
+                "'await PostgresBackend.open(async_engine)'"
+            )
+        return self._async_engine
 
     def _chunks[T](self, values: tuple[T, ...]) -> Iterator[tuple[T, ...]]:
         yield from _chunked(values, batch_chunk_size=self._batch_chunk_size)
@@ -524,7 +573,7 @@ class PostgresBackend:
             )
 
         return await _run_connection_operation(
-            self._engine,
+            self._require_async_engine(),
             put,
             write=True,
         )
@@ -565,7 +614,7 @@ class PostgresBackend:
             )
 
         return await _run_connection_operation(
-            self._engine,
+            self._require_async_engine(),
             get,
             write=False,
         )
@@ -607,7 +656,7 @@ class PostgresBackend:
             )
 
         return await _run_connection_operation(
-            self._engine,
+            self._require_async_engine(),
             bind_key,
             write=True,
         )
@@ -642,7 +691,7 @@ class PostgresBackend:
             )
 
         return await _run_connection_operation(
-            self._engine,
+            self._require_async_engine(),
             get,
             write=False,
         )
@@ -680,7 +729,7 @@ class PostgresBackend:
             )
 
         return await _run_connection_operation(
-            self._engine,
+            self._require_async_engine(),
             get,
             write=False,
         )
@@ -724,7 +773,7 @@ class PostgresBackend:
             )
 
         return await _run_connection_operation(
-            self._engine,
+            self._require_async_engine(),
             put,
             write=True,
         )

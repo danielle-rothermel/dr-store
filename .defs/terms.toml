@@ -179,21 +179,25 @@ name = "PostgreSQL backend"
 definition = """
 A persistent shared storage capability whose fixed `dr_store` schema and exact \
 schema-format marker are installed explicitly in a caller-selected PostgreSQL \
-database through one caller-owned SQLAlchemy asynchronous engine. Table \
-definitions are exported as SQLAlchemy metadata for platform Alembic ownership. \
-Auto-acquire operations use the awaited backend protocol. Sync enlisted methods \
-accept an explicit SQLAlchemy Core ``Connection`` so evidence writes can join a \
-caller-owned checkpoint transaction; ``ObjectStore`` sync enlisted helpers \
-require ``PostgresBackend`` as the checkpoint integration surface. Enlisted \
+database through one caller-owned SQLAlchemy engine. Table definitions are \
+exported as SQLAlchemy metadata for platform Alembic ownership. \
+``PostgresBackend.open_sync`` validates the marker on a sync ``Engine`` for \
+checkpoint-first assembly; ``await PostgresBackend.open`` validates it on an \
+``AsyncEngine`` for awaited auto-acquire operations. Auto-acquire operations \
+use the awaited backend protocol. Sync enlisted methods accept an explicit \
+SQLAlchemy Core ``Connection`` so evidence writes can join a caller-owned \
+checkpoint transaction; ``ObjectStore`` sync enlisted helpers require \
+``PostgresBackend`` as the checkpoint integration surface. Enlisted \
 ``get_bound_objects_enlisted`` observes one caller-transaction snapshot. \
-Awaited opening validates the marker before independently running clients \
-observe the same asynchronous backend semantics, without PostgreSQL-specific \
-behavior entering the record cache surface."""
+Opening validates the marker before independently running clients observe the \
+same backend semantics, without PostgreSQL-specific behavior entering the \
+record cache surface."""
 exported_symbols = [
   "PostgresBackend",
   "POSTGRES_METADATA",
   "POSTGRES_SCHEMA_FORMAT",
   "install_postgres",
+  "install_postgres_sync",
 ]
 categories = ["object storage"]
 is_a = ["backend"]

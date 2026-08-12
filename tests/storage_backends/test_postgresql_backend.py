@@ -55,9 +55,21 @@ async def postgres_backend(
 
 def test_direct_construction_is_not_public() -> None:
     with pytest.raises(
-        TypeError, match=r"use 'await PostgresBackend\.open\(engine\)'"
+        TypeError,
+        match=(
+            r"use 'PostgresBackend\.open_sync\(engine\)' or "
+            r"'await PostgresBackend\.open\(engine\)'"
+        ),
     ):
         PostgresBackend(cast("AsyncEngine", object()))
+
+
+def test_open_sync_rejects_non_engine_without_connection_work() -> None:
+    with pytest.raises(
+        TypeError,
+        match=r"engine must be a sqlalchemy\.engine\.Engine",
+    ):
+        PostgresBackend.open_sync(cast("Engine", object()))
 
 
 async def test_open_rejects_non_engine_without_connection_work() -> None:
@@ -72,9 +84,64 @@ async def test_direct_construction_rejects_a_real_engine(
     postgres_engine: AsyncEngine,
 ) -> None:
     with pytest.raises(
-        TypeError, match=r"use 'await PostgresBackend\.open\(engine\)'"
+        TypeError,
+        match=(
+            r"use 'PostgresBackend\.open_sync\(engine\)' or "
+            r"'await PostgresBackend\.open\(engine\)'"
+        ),
     ):
         PostgresBackend(postgres_engine)
+
+
+def test_open_sync_rejects_nonpositive_batch_chunk_size(
+    postgres_sync_engine: Engine,
+) -> None:
+    from dr_store import install_postgres_sync
+
+    install_postgres_sync(postgres_sync_engine)
+    with pytest.raises(ValueError, match="batch_chunk_size must be positive"):
+        PostgresBackend.open_sync(postgres_sync_engine, batch_chunk_size=0)
+    with pytest.raises(ValueError, match="batch_chunk_size must be positive"):
+        PostgresBackend.open_sync(postgres_sync_engine, batch_chunk_size=-1)
+
+
+def test_open_sync_enlisted_put_works(postgres_sync_engine: Engine) -> None:
+    from dr_store import install_postgres_sync
+
+    install_postgres_sync(postgres_sync_engine)
+    backend = PostgresBackend.open_sync(postgres_sync_engine)
+    with postgres_sync_engine.connect() as connection, connection.begin():
+        outcome = backend.put_object_enlisted(
+            schema=SCHEMA,
+            content_hash=CONTENT_HASH,
+            canonical=CANONICAL,
+            connection=connection,
+        )
+        assert outcome.inserted
+        stored = backend.get_object_enlisted(
+            schema=SCHEMA,
+            content_hash=CONTENT_HASH,
+            connection=connection,
+        )
+        assert stored == (SCHEMA, CANONICAL)
+
+
+async def test_async_put_on_sync_opened_backend_raises(
+    postgres_sync_engine: Engine,
+) -> None:
+    from dr_store import install_postgres_sync
+
+    install_postgres_sync(postgres_sync_engine)
+    backend = PostgresBackend.open_sync(postgres_sync_engine)
+    with pytest.raises(
+        RuntimeError,
+        match="async PostgreSQL backend operations require",
+    ):
+        await backend.put_object(
+            schema=SCHEMA,
+            content_hash=CONTENT_HASH,
+            canonical=CANONICAL,
+        )
 
 
 async def test_open_rejects_nonpositive_batch_chunk_size(
@@ -211,7 +278,8 @@ async def test_backend_does_not_stringify_retain_or_dispose_engine(
     monkeypatch.setattr(AsyncEngine, "__str__", fail_stringification)
     backend = await PostgresBackend.open(postgres_engine)
     assert backend.__dict__ == {
-        "_engine": postgres_engine,
+        "_async_engine": postgres_engine,
+        "_sync_engine": None,
         "_batch_chunk_size": 512,
     }
     assert await backend.get_binding(key="missing") is None

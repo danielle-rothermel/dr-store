@@ -460,22 +460,24 @@ check = "uv run pytest -q tests/document_directory/test_directory.py"
 [[contracts]]
 title = "PostgreSQL schema installation is explicit"
 statement = """
-PostgreSQL schema installation occurs only through the public asynchronous \
-`install_postgres(engine)` operation against a caller-owned SQLAlchemy \
-`AsyncEngine`. It supports PostgreSQL 16 through 18 databases whose server \
-encoding is UTF-8, requires the fixed `dr_store` namespace to be absent, and \
-creates that namespace and all storage tables together with exactly one \
-schema-format marker row in one transaction from exported SQLAlchemy metadata. \
-The marker is exactly `dr-store-postgresql-v1`, and its persisted literal is \
-pinned by a golden contract test. A repeated installation fails visibly rather \
-than adopting or verifying existing objects. Direct `PostgresBackend(...)` \
-construction is unsupported; `await PostgresBackend.open(engine)` returns only \
-after reading and exactly validating the marker. A missing, malformed, or \
-unsupported marker fails before the backend can perform ordinary storage work. \
-Opening and ordinary operations never create, alter, adopt, or upgrade \
-storage. The namespace is not configurable, dr-store ships no migration chain \
-of its own, and the storage contract defines no schema inspection framework, \
-compatibility negotiation, migration, or upgrade path."""
+PostgreSQL schema installation occurs only through the public synchronous \
+`install_postgres_sync(engine)` or asynchronous `install_postgres(engine)` \
+operations against a caller-owned SQLAlchemy `Engine` or `AsyncEngine`. It \
+supports PostgreSQL 16 through 18 databases whose server encoding is UTF-8, \
+requires the fixed `dr_store` namespace to be absent, and creates that \
+namespace and all storage tables together with exactly one schema-format marker \
+row in one transaction from exported SQLAlchemy metadata. The marker is exactly \
+`dr-store-postgresql-v1`, and its persisted literal is pinned by a golden \
+contract test. A repeated installation fails visibly rather than adopting or \
+verifying existing objects. Direct `PostgresBackend(...)` construction is \
+unsupported; `PostgresBackend.open_sync(engine)` or \
+`await PostgresBackend.open(engine)` returns only after reading and exactly \
+validating the marker. A missing, malformed, or unsupported marker fails before \
+the backend can perform ordinary storage work. Opening and ordinary operations \
+never create, alter, adopt, or upgrade storage. The namespace is not \
+configurable, dr-store ships no migration chain of its own, and the storage \
+contract defines no schema inspection framework, compatibility negotiation, \
+migration, or upgrade path."""
 rationale = """
 Explicit installation keeps deployment privileges and failure recovery outside \
 arbitrary application startup. One absent-only namespace gives installation a \
@@ -489,19 +491,21 @@ check = "scripts/test-postgres.sh"
 title = "PostgreSQL uses one caller-owned engine and sync enlisted connections"
 statement = """
 `sqlalchemy[asyncio]` and `psycopg` are required runtime dependencies. \
-`PostgresBackend` accepts a caller-owned SQLAlchemy `AsyncEngine` only through \
-its awaited `open` operation as its default connection source for auto-acquire \
-operations. Sync enlisted methods accept one explicit SQLAlchemy Core \
-``Connection``; when provided, the operation runs on it and never commits, \
-rolls back, or releases it. Enlisted ``get_bound_objects_enlisted`` fetches \
-bindings and referenced objects on that connection and observes one \
-caller-transaction snapshot, including uncommitted writes in that transaction. \
-Auto-acquire operations acquire a connection, use one transaction for non-empty \
-writes, and release the connection before the operation completes. The backend \
-never closes or disposes the caller-owned engine. It defines no custom \
-connection-source Protocol, DSN acceptance or ownership, second managed-source \
-lifecycle API, ambient transaction context, ORM Session surface, savepoint API, \
-or distributed-transaction machinery."""
+`PostgresBackend` accepts a caller-owned SQLAlchemy `Engine` through \
+`open_sync` or an `AsyncEngine` through its awaited `open` operation as its \
+connection source. Backends opened with `open_sync` support sync enlisted \
+methods and raise on awaited auto-acquire operations; backends opened with \
+`open` support both paths. Sync enlisted methods accept one explicit \
+SQLAlchemy Core ``Connection``; when provided, the operation runs on it and \
+never commits, rolls back, or releases it. Enlisted \
+``get_bound_objects_enlisted`` fetches bindings and referenced objects on that \
+connection and observes one caller-transaction snapshot, including uncommitted \
+writes in that transaction. Auto-acquire operations acquire a connection, use \
+one transaction for non-empty writes, and release the connection before the \
+operation completes. The backend never closes or disposes the caller-owned \
+engine. It defines no custom connection-source Protocol, DSN acceptance or \
+ownership, second managed-source lifecycle API, ambient transaction context, \
+ORM Session surface, savepoint API, or distributed-transaction machinery."""
 rationale = """
 One engine boundary matches platform ownership while a narrow per-call enlisted \
 connection supports ledger-coordinated evidence reads and writes without \

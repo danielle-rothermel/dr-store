@@ -22,7 +22,7 @@ document artifacts:
   supply the Object Store's atomic, append-only point and batch operations.
   `MemoryBackend` is process-local; `SqliteBackend` persists committed data for
   cross-process use; `PostgresBackend` shares committed data through a
-  caller-owned SQLAlchemy asynchronous engine.
+  caller-owned SQLAlchemy engine opened synchronously or asynchronously.
 - **[Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)**
   memoizes records under opaque caller-owned keys. Reads return typed hits;
   absent, missing, or unverifiable stored values are misses, while invalid
@@ -48,9 +48,39 @@ dr-store requires Python 3.12 or newer.
 python -m pip install dr-store
 ```
 
-PostgreSQL 16 through 18 installations use SQLAlchemy async with psycopg and an
+PostgreSQL 16 through 18 installations use SQLAlchemy with psycopg and an
 explicit, absent-only schema installation step. The caller creates and owns the
-engine; dr-store neither accepts a DSN nor disposes the engine:
+engine; dr-store neither accepts a DSN nor disposes the engine.
+
+Sync-first platform assembly (checkpoint enlistment and ordinary auto-acquire
+operations on the same engine):
+
+```python
+import os
+
+from sqlalchemy import create_engine
+
+from dr_store import (
+    ObjectStore,
+    POSTGRES_METADATA,
+    PostgresBackend,
+    install_postgres_sync,
+)
+
+engine = create_engine(
+    os.environ["DATABASE_URL"].replace(
+        "postgresql://",
+        "postgresql+psycopg://",
+        1,
+    )
+)
+install_postgres_sync(engine)
+backend = PostgresBackend.open_sync(engine)
+store = ObjectStore(backend)
+```
+
+Async auto-acquire operations use the same schema marker through an
+``AsyncEngine``:
 
 ```python
 import asyncio
@@ -90,16 +120,17 @@ asyncio.run(main())
 ```
 
 `POSTGRES_METADATA` exports the fixed `dr_store` table definitions for platform
-Alembic ownership. `install_postgres` is a one-time deployment operation that
-creates the namespace, its tables, and the exact
+Alembic ownership. `install_postgres_sync` and `install_postgres` are one-time
+deployment operations that create the namespace, its tables, and the exact
 `dr-store-postgresql-v1` schema-format marker in one transaction on a UTF-8
 database. Repeating installation is an error.
-`await PostgresBackend.open(engine)` validates that marker before returning a
-backend for the same awaited point and batch operations as the other backends;
-it acquires and releases connections without disposing the engine. PostgreSQL
-sync enlisted methods accept an explicit SQLAlchemy Core ``Connection`` so
-evidence reads and writes can join a caller-owned checkpoint transaction;
-dr-store never commits that connection. Enlisted
+`PostgresBackend.open_sync(engine)` or `await PostgresBackend.open(engine)`
+validates that marker before returning a backend. Backends opened with
+``open_sync`` support sync enlisted methods and raise on awaited auto-acquire
+operations; backends opened with ``open`` support both paths.
+PostgreSQL sync enlisted methods accept an explicit SQLAlchemy Core
+``Connection`` so evidence reads and writes can join a caller-owned checkpoint
+transaction; dr-store never commits that connection. Enlisted
 ``get_bound_objects_enlisted`` observes one caller-transaction snapshot.
 Enlisted writes share the caller transaction; dr-store defines no savepoint
 API. Opening never installs, alters, adopts, or upgrades storage.
@@ -372,6 +403,13 @@ class Backend(Protocol):
 
 class MemoryBackend: ...
 class PostgresBackend:
+    @classmethod
+    def open_sync(
+        cls,
+        engine: Engine,
+        *,
+        batch_chunk_size: int = 512,
+    ) -> PostgresBackend: ...
     @classmethod
     async def open(
         cls,

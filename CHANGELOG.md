@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Added sync `install_postgres_sync(engine)` and `PostgresBackend.open_sync(engine)`
+  for sync-first platform assembly without an `AsyncEngine`.
 - Added sync PostgreSQL enlisted methods (`*_enlisted`) that run on a
   caller-owned SQLAlchemy Core `Connection` without commit, rollback, or
   release.
@@ -23,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Hard-cut PostgreSQL enlistment from async `AsyncConnection` to sync Core
   `Connection` for platform checkpoint composition.
+- Async `install_postgres` and `PostgresBackend.open` remain for awaited
+  auto-acquire operations; backends opened via `open_sync` raise on those paths.
 
 ### Removed
 

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator  # noqa: TC003
+from collections.abc import AsyncIterator, Iterator  # noqa: TC003
 from contextlib import asynccontextmanager
 from pathlib import Path  # noqa: TC003
+from typing import TYPE_CHECKING
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
 
 from dr_store import (
     Backend,
@@ -98,6 +102,20 @@ async def _postgres_engine() -> AsyncIterator[AsyncEngine]:
 async def postgres_engine() -> AsyncIterator[AsyncEngine]:
     async with _postgres_engine() as engine:
         yield engine
+
+
+@pytest.fixture
+def postgres_sync_engine(postgres_engine: AsyncEngine) -> Iterator[Engine]:
+    del postgres_engine
+    dsn = os.environ["DR_STORE_POSTGRES_DSN"]
+    engine = create_engine(
+        _sync_dsn(dsn),
+        connect_args={"options": "-c search_path=pg_catalog"},
+    )
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

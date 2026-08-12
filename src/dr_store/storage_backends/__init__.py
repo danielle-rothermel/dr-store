@@ -13,6 +13,7 @@ from dr_store.storage_backends.postgresql import (
     POSTGRES_SCHEMA_FORMAT,
     PostgresBackend,
     install_postgres,
+    install_postgres_sync,
 )
 from dr_store.storage_backends.sqlite import SqliteBackend
 
@@ -28,4 +29,5 @@ __all__ = [
     "PutOutcome",
     "SqliteBackend",
     "install_postgres",
+    "install_postgres_sync",
 ]

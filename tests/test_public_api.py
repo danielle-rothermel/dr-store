@@ -98,6 +98,7 @@ def test_postgresql_public_surface_is_exact() -> None:
         POSTGRES_SCHEMA_FORMAT,
         PostgresBackend,
         install_postgres,
+        install_postgres_sync,
     )
     from dr_store.storage_backends import (
         PostgresBackend as BackendType,
@@ -106,19 +107,28 @@ def test_postgresql_public_surface_is_exact() -> None:
         install_postgres as backend_install,
     )
     from dr_store.storage_backends import (
+        install_postgres_sync as backend_install_sync,
+    )
+    from dr_store.storage_backends import (
         postgresql,
     )
 
     assert backend_install is install_postgres
+    assert backend_install_sync is install_postgres_sync
     assert BackendType is PostgresBackend
     assert postgresql.__all__ == [
         "POSTGRES_METADATA",
         "POSTGRES_SCHEMA_FORMAT",
         "PostgresBackend",
         "install_postgres",
+        "install_postgres_sync",
     ]
     assert inspect.iscoroutinefunction(install_postgres)
+    assert not inspect.iscoroutinefunction(install_postgres_sync)
     assert list(inspect.signature(install_postgres).parameters) == ["engine"]
+    assert list(inspect.signature(install_postgres_sync).parameters) == [
+        "engine"
+    ]
     assert list(inspect.signature(PostgresBackend).parameters) == ["engine"]
     public = {
         name for name in dir(PostgresBackend) if not name.startswith("_")
@@ -133,6 +143,7 @@ def test_postgresql_public_surface_is_exact() -> None:
         "get_object",
         "get_object_enlisted",
         "open",
+        "open_sync",
         "put_bound_objects",
         "put_bound_objects_enlisted",
         "put_object",
@@ -156,16 +167,21 @@ def test_postgresql_public_surface_is_exact() -> None:
         "put_bound_objects_enlisted",
         "put_object_enlisted",
     }
+    sync_methods = {"open_sync", *enlisted_methods}
     assert all(
         inspect.iscoroutinefunction(getattr(PostgresBackend, name))
         for name in async_methods
     )
     assert all(
         not inspect.iscoroutinefunction(getattr(PostgresBackend, name))
-        for name in enlisted_methods
+        for name in sync_methods
     )
     open_parameters = list(inspect.signature(PostgresBackend.open).parameters)
     assert open_parameters == ["engine", "batch_chunk_size"]
+    open_sync_parameters = list(
+        inspect.signature(PostgresBackend.open_sync).parameters
+    )
+    assert open_sync_parameters == ["engine", "batch_chunk_size"]
     assert POSTGRES_SCHEMA_FORMAT == "dr-store-postgresql-v1"
     assert POSTGRES_METADATA is postgresql.POSTGRES_METADATA
 

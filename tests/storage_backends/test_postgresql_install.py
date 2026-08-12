@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import psycopg.errors
 import pytest
@@ -10,7 +10,10 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from dr_store import install_postgres
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
+
+from dr_store import install_postgres, install_postgres_sync
 from dr_store.storage_backends import postgresql
 from dr_store.storage_backends.postgresql_schema import POSTGRES_SCHEMA_FORMAT
 
@@ -40,11 +43,20 @@ async def test_rejects_non_engine_without_connection_work() -> None:
         await install_postgres(cast("AsyncEngine", object()))
 
 
+def test_rejects_non_sync_engine_without_connection_work() -> None:
+    with pytest.raises(
+        TypeError,
+        match=r"engine must be a sqlalchemy\.engine\.Engine",
+    ):
+        install_postgres_sync(cast("Engine", object()))
+
+
 def test_installer_has_no_credential_bearing_api_or_state() -> None:
-    signature = inspect.signature(install_postgres)
-    assert list(signature.parameters) == ["engine"]
-    assert install_postgres.__closure__ is None
-    assert install_postgres.__dict__ == {}
+    for installer in (install_postgres, install_postgres_sync):
+        signature = inspect.signature(installer)
+        assert list(signature.parameters) == ["engine"]
+        assert installer.__closure__ is None
+        assert installer.__dict__ == {}
     assert "dsn" not in inspect.getsource(postgresql).casefold()
 
 
@@ -81,6 +93,34 @@ async def test_installs_absent_fixed_schema_transactionally(
                         "SELECT singleton, format FROM dr_store.schema_format"
                     )
                 )
+            ).mappings()
+        ]
+        assert format_rows == [(True, "dr-store-postgresql-v1")]
+
+
+def test_installs_absent_fixed_schema_transactionally_sync(
+    postgres_sync_engine: Engine,
+) -> None:
+    install_postgres_sync(postgres_sync_engine)
+
+    with postgres_sync_engine.connect() as connection:
+        assert connection.scalar(text("SHOW search_path")) == "pg_catalog"
+        tables = connection.scalar(
+            text(
+                """
+                SELECT pg_catalog.array_agg(
+                    tables.table_name ORDER BY tables.table_name
+                )
+                FROM information_schema.tables
+                WHERE tables.table_schema = 'dr_store'
+                """
+            )
+        )
+        assert tables == "{bindings,objects,schema_format}"
+        format_rows = [
+            tuple(row.values())
+            for row in connection.execute(
+                text("SELECT singleton, format FROM dr_store.schema_format")
             ).mappings()
         ]
         assert format_rows == [(True, "dr-store-postgresql-v1")]
