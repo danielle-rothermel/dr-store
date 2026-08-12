@@ -8,7 +8,7 @@ import psycopg.errors
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from dr_store import install_postgres
 from dr_store.storage_backends import postgresql
@@ -90,11 +90,19 @@ async def test_installation_rolls_back_every_object_on_ddl_failure(
     postgres_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def failing_create(connection: AsyncConnection) -> None:
-        await connection.execute(text("CREATE SCHEMA dr_store"))
-        await connection.execute(text("SELECT 1 / 0"))
+    def failing_create(connection: object) -> None:
+        from sqlalchemy import text
+        from sqlalchemy.engine import Connection
 
-    monkeypatch.setattr(postgresql, "_create_storage_tables", failing_create)
+        assert isinstance(connection, Connection)
+        connection.execute(text("CREATE SCHEMA dr_store"))
+        connection.execute(text("SELECT 1 / 0"))
+
+    monkeypatch.setattr(
+        postgresql,
+        "_create_storage_tables_sync",
+        failing_create,
+    )
 
     with pytest.raises(DBAPIError):
         await install_postgres(postgres_engine)

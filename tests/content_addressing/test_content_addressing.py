@@ -8,12 +8,15 @@ from dr_serialize import StrictJsonError
 
 from dr_store import (
     CONTENT_HASH_LENGTH,
+    OBJECT_REFERENCE_PREFIX,
     ContentHashMismatchError,
     ContentMismatchReason,
     ObjectReference,
     ReferenceValidationError,
     compute_content_hash,
+    format_object_reference,
     is_content_hash,
+    parse_object_reference,
 )
 
 if TYPE_CHECKING:
@@ -112,3 +115,30 @@ def test_for_record_matches_verify_record() -> None:
         ref.verify_record({"a": 2})
     assert caught.value.reason is ContentMismatchReason.HASH_MISMATCH
     assert caught.value.actual is not None
+
+
+def test_object_reference_prefix_wire_literal_is_pinned() -> None:
+    assert OBJECT_REFERENCE_PREFIX == "dr-store-object:v1"
+
+
+def test_format_and_parse_object_reference_round_trip() -> None:
+    reference = ObjectReference(
+        schema="example.record", content_hash=VALID_HASH
+    )
+    wire = format_object_reference(reference)
+    assert wire == f"dr-store-object:v1:example.record:{VALID_HASH}"
+    assert parse_object_reference(wire) == reference
+
+
+@pytest.mark.parametrize(
+    "bad_wire",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("other-prefix:schema:hash", id="wrong-prefix"),
+        pytest.param("dr-store-object:v1:", id="missing-parts"),
+        pytest.param(f"dr-store-object:v1:schema:{'g' * 64}", id="bad-hash"),
+    ],
+)
+def test_parse_object_reference_rejects_malformed_wire(bad_wire: str) -> None:
+    with pytest.raises(ReferenceValidationError):
+        parse_object_reference(bad_wire)

@@ -56,11 +56,15 @@ def test_object_store_public_surface_is_exact() -> None:
     public = {name for name in dir(ObjectStore) if not name.startswith("_")}
     assert public == {
         "bind",
+        "bind_enlisted",
         "get",
         "get_bound_objects",
+        "get_bound_objects_enlisted",
         "get_many",
         "put",
+        "put_enlisted",
         "put_many",
+        "put_many_enlisted",
         "resolve",
         "verify_stored_record",
     }
@@ -121,6 +125,22 @@ def test_postgresql_public_surface_is_exact() -> None:
     }
     expected = {
         "bind",
+        "bind_enlisted",
+        "get_binding",
+        "get_binding_enlisted",
+        "get_bound_objects",
+        "get_bound_objects_enlisted",
+        "get_object",
+        "get_object_enlisted",
+        "open",
+        "put_bound_objects",
+        "put_bound_objects_enlisted",
+        "put_object",
+        "put_object_enlisted",
+    }
+    assert public == expected
+    async_methods = {
+        "bind",
         "get_binding",
         "get_bound_objects",
         "get_object",
@@ -128,10 +148,21 @@ def test_postgresql_public_surface_is_exact() -> None:
         "put_bound_objects",
         "put_object",
     }
-    assert public == expected
+    enlisted_methods = {
+        "bind_enlisted",
+        "get_binding_enlisted",
+        "get_bound_objects_enlisted",
+        "get_object_enlisted",
+        "put_bound_objects_enlisted",
+        "put_object_enlisted",
+    }
     assert all(
         inspect.iscoroutinefunction(getattr(PostgresBackend, name))
-        for name in expected
+        for name in async_methods
+    )
+    assert all(
+        not inspect.iscoroutinefunction(getattr(PostgresBackend, name))
+        for name in enlisted_methods
     )
     open_parameters = list(inspect.signature(PostgresBackend.open).parameters)
     assert open_parameters == ["engine", "batch_chunk_size"]
@@ -156,14 +187,24 @@ def test_sqlite_record_cache_open_exposes_busy_timeout_knob() -> None:
     )
 
 
-def test_postgres_backend_read_methods_expose_connection_kwarg() -> None:
-    from dr_store import PostgresBackend
+def test_public_exports_include_object_reference_wire_format() -> None:
+    import dr_store
 
-    for name in ("get_object", "get_binding", "get_bound_objects"):
-        assert (
-            "connection"
-            in inspect.signature(getattr(PostgresBackend, name)).parameters
-        )
+    assert dr_store.OBJECT_REFERENCE_PREFIX == "dr-store-object:v1"
+    assert callable(dr_store.format_object_reference)
+    assert callable(dr_store.parse_object_reference)
+
+
+def test_object_store_enlisted_methods_are_sync() -> None:
+    from dr_store import ObjectStore
+
+    for name in (
+        "put_enlisted",
+        "bind_enlisted",
+        "put_many_enlisted",
+        "get_bound_objects_enlisted",
+    ):
+        assert not inspect.iscoroutinefunction(getattr(ObjectStore, name))
 
 
 def test_record_cache_public_surface_is_exact() -> None:

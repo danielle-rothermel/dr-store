@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dr_store.content_addressing import (
     CONTENT_HASH_LENGTH,
+    OBJECT_REFERENCE_PREFIX,
     ObjectReference,
     compute_content_hash,
+    format_object_reference,
     is_content_hash,
+    parse_object_reference,
 )
 from dr_store.core.errors import (
     AllocationError,
@@ -70,6 +73,7 @@ from dr_store.storage_backends import (
 
 __all__ = [
     "CONTENT_HASH_LENGTH",
+    "OBJECT_REFERENCE_PREFIX",
     "POSTGRES_METADATA",
     "POSTGRES_SCHEMA_FORMAT",
     "AllocationError",
@@ -119,7 +123,9 @@ __all__ = [
     "VerifiedRegularChildReadError",
     "compute_content_hash",
     "derive_cache_key",
+    "format_object_reference",
     "install_postgres",
     "is_content_hash",
+    "parse_object_reference",
     "read_verified_regular_child",
 ]

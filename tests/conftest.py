@@ -27,6 +27,10 @@ def _async_dsn(dsn: str) -> str:
     return dsn
 
 
+def _sync_dsn(dsn: str) -> str:
+    return _async_dsn(dsn)
+
+
 def _backend_params() -> list[object]:
     params: list[object] = [
         pytest.param("memory", id="memory"),
@@ -94,6 +98,12 @@ async def _postgres_engine() -> AsyncIterator[AsyncEngine]:
 async def postgres_engine() -> AsyncIterator[AsyncEngine]:
     async with _postgres_engine() as engine:
         yield engine
+
+
+@pytest.fixture
+async def postgres_backend(postgres_engine: AsyncEngine) -> PostgresBackend:
+    await install_postgres(postgres_engine)
+    return await PostgresBackend.open(postgres_engine)
 
 
 @pytest.fixture(params=_backend_params())

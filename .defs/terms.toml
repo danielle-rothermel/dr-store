@@ -106,7 +106,13 @@ name = "object reference"
 definition = """
 A validated content-addressed handle composed of a schema from the shared text \
 domain and the full content hash of one record."""
-exported_symbols = ["ObjectReference", "ReferenceValidationError"]
+exported_symbols = [
+  "ObjectReference",
+  "ReferenceValidationError",
+  "OBJECT_REFERENCE_PREFIX",
+  "format_object_reference",
+  "parse_object_reference",
+]
 categories = ["content addressing", "object storage"]
 part_of = ["binding"]
 
@@ -175,13 +181,13 @@ A persistent shared storage capability whose fixed `dr_store` schema and exact \
 schema-format marker are installed explicitly in a caller-selected PostgreSQL \
 database through one caller-owned SQLAlchemy asynchronous engine. Table \
 definitions are exported as SQLAlchemy metadata for platform Alembic ownership. \
-Mutating operations optionally accept an explicit SQLAlchemy Core connection so \
-evidence writes can join a caller-owned transaction. Read operations accept the \
-same optional connection for same-transaction visibility; enlisted \
-`get_bound_objects` observes one caller-transaction snapshot. Awaited opening \
-validates the marker before independently running clients observe the same \
-asynchronous backend semantics, without PostgreSQL-specific behavior entering \
-the object store or record cache surfaces."""
+Auto-acquire operations use the awaited backend protocol. Sync enlisted methods \
+accept an explicit SQLAlchemy Core ``Connection`` so evidence writes can join a \
+caller-owned checkpoint transaction; enlisted ``get_bound_objects_enlisted`` \
+observes one caller-transaction snapshot. Awaited opening validates the marker \
+before independently running clients observe the same asynchronous backend \
+semantics, without PostgreSQL-specific behavior entering the object store or \
+record cache surfaces."""
 exported_symbols = [
   "PostgresBackend",
   "POSTGRES_METADATA",

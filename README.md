@@ -97,11 +97,12 @@ database. Repeating installation is an error.
 `await PostgresBackend.open(engine)` validates that marker before returning a
 backend for the same awaited point and batch operations as the other backends;
 it acquires and releases connections without disposing the engine. PostgreSQL
-backend methods accept an optional explicit SQLAlchemy Core connection so
-evidence reads and writes can join a caller-owned transaction; when provided,
-dr-store never commits that connection. Enlisted `get_bound_objects` observes
-one caller-transaction snapshot. Opening never installs, alters, adopts, or
-upgrades storage.
+sync enlisted methods accept an explicit SQLAlchemy Core ``Connection`` so
+evidence reads and writes can join a caller-owned checkpoint transaction;
+dr-store never commits that connection. Enlisted
+``get_bound_objects_enlisted`` observes one caller-transaction snapshot.
+Enlisted writes share the caller transaction; dr-store defines no savepoint
+API. Opening never installs, alters, adopts, or upgrades storage.
 
 ## Testing
 
@@ -234,7 +235,15 @@ class ObjectReference:
 
 def compute_content_hash(record: Jsonable) -> str: ...
 def is_content_hash(value: str) -> bool: ...
+
+OBJECT_REFERENCE_PREFIX = "dr-store-object:v1"
+
+def format_object_reference(reference: ObjectReference) -> str: ...
+def parse_object_reference(value: str) -> ObjectReference: ...
 ```
+
+``format_object_reference`` and ``parse_object_reference`` pin the opaque wire
+string that platform consumers store as evidence or output references.
 
 ## Object Store
 
@@ -277,6 +286,20 @@ class ObjectStore:
         self, key: str, reference: ObjectReference
     ) -> BindStatus: ...
     async def resolve(self, key: str) -> ObjectReference | None: ...
+    def put_enlisted(
+        self, connection: Connection, schema: str, record: Jsonable
+    ) -> tuple[ObjectReference, PutStatus]: ...
+    def bind_enlisted(
+        self, connection: Connection, key: str, reference: ObjectReference
+    ) -> BindStatus: ...
+    def put_many_enlisted(
+        self,
+        connection: Connection,
+        entries: Mapping[str, tuple[str, Jsonable]],
+    ) -> dict[str, ObjectReference]: ...
+    def get_bound_objects_enlisted(
+        self, connection: Connection, keys: Iterable[str]
+    ) -> Mapping[str, BoundObjectRow]: ...
 ```
 
 `get_bound_objects` deduplicates requested keys and returns joined binding/object
@@ -357,45 +380,55 @@ class PostgresBackend:
         batch_chunk_size: int = 512,
     ) -> PostgresBackend: ...
     async def put_object(
+        self, *, schema: str, content_hash: str, canonical: str
+    ) -> PutOutcome: ...
+    def put_object_enlisted(
         self,
         *,
         schema: str,
         content_hash: str,
         canonical: str,
-        connection: AsyncConnection | None = None,
+        connection: Connection,
     ) -> PutOutcome: ...
     async def bind(
+        self, *, key: str, schema: str, content_hash: str
+    ) -> BindOutcome: ...
+    def bind_enlisted(
         self,
         *,
         key: str,
         schema: str,
         content_hash: str,
-        connection: AsyncConnection | None = None,
+        connection: Connection,
     ) -> BindOutcome: ...
     async def put_bound_objects(
+        self, *, entries: tuple[BoundObjectWrite, ...]
+    ) -> dict[str, BindOutcome]: ...
+    def put_bound_objects_enlisted(
         self,
         *,
         entries: tuple[BoundObjectWrite, ...],
-        connection: AsyncConnection | None = None,
+        connection: Connection,
     ) -> dict[str, BindOutcome]: ...
     async def get_object(
+        self, *, schema: str, content_hash: str
+    ) -> tuple[str, str] | None: ...
+    def get_object_enlisted(
         self,
         *,
         schema: str,
         content_hash: str,
-        connection: AsyncConnection | None = None,
+        connection: Connection,
     ) -> tuple[str, str] | None: ...
-    async def get_binding(
-        self,
-        *,
-        key: str,
-        connection: AsyncConnection | None = None,
+    async def get_binding(self, *, key: str) -> tuple[str, str] | None: ...
+    def get_binding_enlisted(
+        self, *, key: str, connection: Connection
     ) -> tuple[str, str] | None: ...
     async def get_bound_objects(
-        self,
-        *,
-        keys: tuple[str, ...],
-        connection: AsyncConnection | None = None,
+        self, *, keys: tuple[str, ...]
+    ) -> dict[str, BoundObjectRow]: ...
+    def get_bound_objects_enlisted(
+        self, *, keys: tuple[str, ...], connection: Connection
     ) -> dict[str, BoundObjectRow]: ...
 
 class SqliteBackend:

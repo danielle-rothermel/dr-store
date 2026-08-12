@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncEngine,
     create_async_engine,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Mapping
+
+    from sqlalchemy.engine import Connection, Engine
 
 from dr_store import (
     BindOutcome,
@@ -21,15 +27,22 @@ from dr_store import (
     install_postgres,
 )
 from dr_store.storage_backends import postgresql
-from tests.conftest import _async_dsn
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
+from tests.conftest import _async_dsn, _sync_dsn
 
 SCHEMA = "example.record"
 CONTENT_HASH = "a" * 64
 CANONICAL = '{"value":"stored"}'
 WATCHDOG_SECONDS = 15
+
+
+def _postgres_sync_engine() -> Engine:
+    dsn = os.environ.get("DR_STORE_POSTGRES_DSN")
+    if dsn is None:
+        pytest.skip("DR_STORE_POSTGRES_DSN is not configured")
+    return create_engine(
+        _sync_dsn(dsn),
+        connect_args={"options": "-c search_path=pg_catalog"},
+    )
 
 
 @pytest.fixture
@@ -294,29 +307,30 @@ async def test_cancelled_open_releases_connection_for_engine_reuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await install_postgres(postgres_engine)
-    gate = asyncio.Event()
     started = asyncio.Event()
+    release = asyncio.Event()
     gated_calls = 0
+    original_run = postgresql._run_connection_operation
 
-    original_fetch = postgresql._fetch
-
-    async def gated_fetch(
-        connection: AsyncConnection,
-        query: str,
-        parameters: dict[str, object] | None = None,
-    ) -> list[Mapping[str, object]]:
+    async def gated_run[T](
+        engine: AsyncEngine,
+        operation: Callable[[AsyncConnection], Awaitable[T]],
+        *,
+        write: bool,
+    ) -> T:
         nonlocal gated_calls
-        if "schema_format" in query:
+        if not write:
             gated_calls += 1
             if gated_calls == 1:
                 started.set()
-                await gate.wait()
-        return await original_fetch(connection, query, parameters)
+                await release.wait()
+        return await original_run(engine, operation, write=write)
 
-    monkeypatch.setattr(postgresql, "_fetch", gated_fetch)
+    monkeypatch.setattr(postgresql, "_run_connection_operation", gated_run)
     operation = asyncio.create_task(PostgresBackend.open(postgres_engine))
     await started.wait()
     operation.cancel()
+    release.set()
     with pytest.raises(asyncio.CancelledError):
         await operation
 
@@ -358,44 +372,47 @@ async def test_cancelled_locked_write_releases_connection_for_engine_reuse(
 
 
 async def test_enlisted_write_is_not_visible_before_caller_commits(
-    postgres_engine: AsyncEngine,
     postgres_backend: PostgresBackend,
 ) -> None:
-    async with postgres_engine.connect() as connection, connection.begin():
-        outcome = await postgres_backend.put_object(
-            schema=SCHEMA,
-            content_hash=CONTENT_HASH,
-            canonical=CANONICAL,
-            connection=connection,
-        )
-        assert outcome.inserted
-        assert (
-            await postgres_backend.get_object(
+    engine = _postgres_sync_engine()
+    try:
+        with engine.connect() as connection, connection.begin():
+            outcome = postgres_backend.put_object_enlisted(
                 schema=SCHEMA,
                 content_hash=CONTENT_HASH,
+                canonical=CANONICAL,
+                connection=connection,
             )
-            is None
-        )
-        assert await postgres_backend.get_object(
-            schema=SCHEMA,
-            content_hash=CONTENT_HASH,
-            connection=connection,
-        ) == (SCHEMA, CANONICAL)
-        row = await connection.scalar(
-            text(
-                """
+            assert outcome.inserted
+            assert (
+                await postgres_backend.get_object(
+                    schema=SCHEMA,
+                    content_hash=CONTENT_HASH,
+                )
+                is None
+            )
+            assert postgres_backend.get_object_enlisted(
+                schema=SCHEMA,
+                content_hash=CONTENT_HASH,
+                connection=connection,
+            ) == (SCHEMA, CANONICAL)
+            row = connection.scalar(
+                text(
+                    """
                     SELECT canonical
                     FROM dr_store.objects
                     WHERE content_hash = :content_hash
                         AND schema = :schema
                     """
-            ),
-            {
-                "content_hash": CONTENT_HASH,
-                "schema": SCHEMA,
-            },
-        )
-        assert row == CANONICAL
+                ),
+                {
+                    "content_hash": CONTENT_HASH,
+                    "schema": SCHEMA,
+                },
+            )
+            assert row == CANONICAL
+    finally:
+        engine.dispose()
 
     assert await postgres_backend.get_object(
         schema=SCHEMA,
@@ -403,34 +420,52 @@ async def test_enlisted_write_is_not_visible_before_caller_commits(
     ) == (SCHEMA, CANONICAL)
 
 
-async def test_enlisted_write_does_not_commit_or_close_caller_connection(
-    postgres_engine: AsyncEngine,
+def test_enlisted_write_does_not_commit_or_close_caller_connection(
     postgres_backend: PostgresBackend,
 ) -> None:
-    async with postgres_engine.connect() as connection:
-        transaction = await connection.begin()
-        try:
-            await postgres_backend.bind(
+    engine = _postgres_sync_engine()
+    try:
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            try:
+                postgres_backend.bind_enlisted(
+                    key="enlisted",
+                    schema=SCHEMA,
+                    content_hash=CONTENT_HASH,
+                    connection=connection,
+                )
+                assert postgres_backend.get_binding_enlisted(
+                    key="enlisted",
+                    connection=connection,
+                ) == (SCHEMA, CONTENT_HASH)
+                transaction.rollback()
+            finally:
+                assert not connection.closed
+    finally:
+        engine.dispose()
+
+
+async def test_enlisted_write_is_invisible_after_rollback(
+    postgres_backend: PostgresBackend,
+) -> None:
+    engine = _postgres_sync_engine()
+    try:
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            postgres_backend.bind_enlisted(
                 key="enlisted",
                 schema=SCHEMA,
                 content_hash=CONTENT_HASH,
                 connection=connection,
             )
-            assert await postgres_backend.get_binding(key="enlisted") is None
-            assert await postgres_backend.get_binding(
-                key="enlisted",
-                connection=connection,
-            ) == (SCHEMA, CONTENT_HASH)
-            await transaction.rollback()
-        finally:
-            assert not connection.closed
-            await connection.close()
+            transaction.rollback()
+    finally:
+        engine.dispose()
 
     assert await postgres_backend.get_binding(key="enlisted") is None
 
 
-async def test_enlisted_batch_read_sees_snapshot_before_caller_commits(
-    postgres_engine: AsyncEngine,
+def test_enlisted_batch_read_sees_snapshot_before_caller_commits(
     postgres_backend: PostgresBackend,
 ) -> None:
     entry = BoundObjectWrite(
@@ -439,106 +474,125 @@ async def test_enlisted_batch_read_sees_snapshot_before_caller_commits(
         content_hash=CONTENT_HASH,
         canonical=CANONICAL,
     )
-    async with postgres_engine.connect() as connection, connection.begin():
-        await postgres_backend.put_bound_objects(
-            entries=(entry,),
-            connection=connection,
-        )
-        assert (
-            await postgres_backend.get_bound_objects(keys=("batch-enlisted",))
-            == {}
-        )
-        rows = await postgres_backend.get_bound_objects(
-            keys=("batch-enlisted",),
-            connection=connection,
-        )
-        assert rows["batch-enlisted"].canonical == CANONICAL
-        assert rows["batch-enlisted"].binding_content_hash == CONTENT_HASH
+    engine = _postgres_sync_engine()
+    try:
+        with engine.connect() as connection, connection.begin():
+            postgres_backend.put_bound_objects_enlisted(
+                entries=(entry,),
+                connection=connection,
+            )
+            assert (
+                postgres_backend.get_bound_objects_enlisted(
+                    keys=("batch-enlisted",),
+                    connection=connection,
+                )["batch-enlisted"].canonical
+                == CANONICAL
+            )
+    finally:
+        engine.dispose()
 
 
-async def test_enlisted_batch_conflict_retains_object_inserts(
-    postgres_engine: AsyncEngine,
+def test_enlisted_batch_conflict_retains_object_inserts(
     postgres_backend: PostgresBackend,
 ) -> None:
     other_hash = "b" * 64
-    await postgres_backend.put_object(
-        schema=SCHEMA,
-        content_hash=other_hash,
-        canonical='{"value":"other"}',
-    )
-    async with postgres_engine.connect() as connection:
-        transaction = await connection.begin()
-        try:
-            with pytest.raises(ObjectConflictError):
-                await postgres_backend.put_bound_objects(
-                    entries=(
-                        BoundObjectWrite(
-                            "first-key",
-                            SCHEMA,
-                            CONTENT_HASH,
-                            CANONICAL,
+    engine = _postgres_sync_engine()
+    try:
+        with engine.connect() as connection:
+            postgres_backend.put_object_enlisted(
+                schema=SCHEMA,
+                content_hash=other_hash,
+                canonical='{"value":"other"}',
+                connection=connection,
+            )
+            connection.commit()
+            transaction = connection.begin()
+            try:
+                with pytest.raises(ObjectConflictError):
+                    postgres_backend.put_bound_objects_enlisted(
+                        entries=(
+                            BoundObjectWrite(
+                                "first-key",
+                                SCHEMA,
+                                CONTENT_HASH,
+                                CANONICAL,
+                            ),
+                            BoundObjectWrite(
+                                "second-key",
+                                SCHEMA,
+                                other_hash,
+                                '{"value":"tampered"}',
+                            ),
                         ),
-                        BoundObjectWrite(
-                            "second-key",
-                            SCHEMA,
-                            other_hash,
-                            '{"value":"tampered"}',
-                        ),
+                        connection=connection,
+                    )
+                row = connection.scalar(
+                    text(
+                        """
+                        SELECT canonical
+                        FROM dr_store.objects
+                        WHERE content_hash = :content_hash AND schema = :schema
+                        """
                     ),
-                    connection=connection,
+                    {"content_hash": CONTENT_HASH, "schema": SCHEMA},
                 )
-            row = await connection.scalar(
-                text(
-                    """
-                    SELECT canonical
-                    FROM dr_store.objects
-                    WHERE content_hash = :content_hash AND schema = :schema
-                    """
-                ),
-                {"content_hash": CONTENT_HASH, "schema": SCHEMA},
-            )
-            assert row == CANONICAL
-            assert (
-                await postgres_backend.get_binding(
-                    key="first-key",
-                    connection=connection,
+                assert row == CANONICAL
+                assert (
+                    postgres_backend.get_binding_enlisted(
+                        key="first-key",
+                        connection=connection,
+                    )
+                    is None
                 )
-                is None
-            )
-        finally:
-            await transaction.rollback()
-
-    assert (
-        await postgres_backend.get_object(
-            schema=SCHEMA,
-            content_hash=CONTENT_HASH,
-        )
-        is None
-    )
+            finally:
+                transaction.rollback()
+    finally:
+        engine.dispose()
 
 
-async def test_enlisted_read_does_not_close_caller_connection(
-    postgres_engine: AsyncEngine,
+def test_enlisted_read_does_not_close_caller_connection(
     postgres_backend: PostgresBackend,
 ) -> None:
-    async with postgres_engine.connect() as connection:
-        transaction = await connection.begin()
-        try:
-            await postgres_backend.put_object(
-                schema=SCHEMA,
-                content_hash=CONTENT_HASH,
-                canonical=CANONICAL,
-                connection=connection,
-            )
-            assert await postgres_backend.get_object(
-                schema=SCHEMA,
-                content_hash=CONTENT_HASH,
-                connection=connection,
-            ) == (SCHEMA, CANONICAL)
-            await transaction.rollback()
-        finally:
-            assert not connection.closed
-            await connection.close()
+    engine = _postgres_sync_engine()
+    try:
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            try:
+                postgres_backend.put_object_enlisted(
+                    schema=SCHEMA,
+                    content_hash=CONTENT_HASH,
+                    canonical=CANONICAL,
+                    connection=connection,
+                )
+                assert postgres_backend.get_object_enlisted(
+                    schema=SCHEMA,
+                    content_hash=CONTENT_HASH,
+                    connection=connection,
+                ) == (SCHEMA, CANONICAL)
+                transaction.rollback()
+            finally:
+                assert not connection.closed
+    finally:
+        engine.dispose()
+
+
+def test_async_methods_do_not_accept_connection_kwarg(
+    postgres_backend: PostgresBackend,
+) -> None:
+    for name in (
+        "put_object",
+        "get_object",
+        "bind",
+        "get_binding",
+        "get_bound_objects",
+        "put_bound_objects",
+    ):
+        assert (
+            "connection"
+            not in inspect.signature(
+                getattr(postgres_backend, name)
+            ).parameters
+        )
 
 
 async def test_batch_statements_scale_with_chunks_and_distinct_objects(
@@ -552,30 +606,30 @@ async def test_batch_statements_scale_with_chunks_and_distinct_objects(
     )
     statements: list[str] = []
     fetched_object_rows: list[int] = []
-    execute = postgresql._execute
-    fetch = postgresql._fetch
+    execute_sync = postgresql._execute_sync
+    fetch_sync = postgresql._fetch_sync
 
-    async def counted_execute(
-        connection: AsyncConnection,
+    def counted_execute_sync(
+        connection: Connection,
         query: str,
         parameters: dict[str, object] | None = None,
     ) -> None:
         statements.append(query)
-        await execute(connection, query, parameters)
+        execute_sync(connection, query, parameters)
 
-    async def counted_fetch(
-        connection: AsyncConnection,
+    def counted_fetch_sync(
+        connection: Connection,
         query: str,
         parameters: dict[str, object] | None = None,
     ) -> list[Mapping[str, object]]:
         statements.append(query)
-        rows = await fetch(connection, query, parameters)
+        rows = fetch_sync(connection, query, parameters)
         if query == postgresql._FETCH_OBJECTS_SQL:
             fetched_object_rows.append(len(rows))
         return rows
 
-    monkeypatch.setattr(postgresql, "_execute", counted_execute)
-    monkeypatch.setattr(postgresql, "_fetch", counted_fetch)
+    monkeypatch.setattr(postgresql, "_execute_sync", counted_execute_sync)
+    monkeypatch.setattr(postgresql, "_fetch_sync", counted_fetch_sync)
 
     repeated = BoundObjectWrite(
         key="repeated-0",

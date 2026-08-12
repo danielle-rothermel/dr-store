@@ -13,11 +13,13 @@ from dr_serialize import (
     canonical_json,
     validate_strict_json,
 )
+from sqlalchemy.engine import Connection  # noqa: TC002
 
 from dr_store.content_addressing import (
     ObjectReference,
     _hash_canonical,
     _prepare_record,
+    _PreparedRecord,
     validate_binding_key,
     validate_reference_schema,
 )
@@ -32,7 +34,9 @@ from dr_store.core.errors import (
 from dr_store.storage_backends.contract import (
     BoundObjectRow,
     BoundObjectWrite,
+    PutOutcome,
 )
+from dr_store.storage_backends.postgresql import PostgresBackend
 
 if TYPE_CHECKING:
     from dr_store.storage_backends.contract import Backend
@@ -61,6 +65,33 @@ class ObjectStore:
     def __init__(self, backend: Backend) -> None:
         self._backend = backend
 
+    def _require_postgres_backend(self) -> PostgresBackend:
+        if not isinstance(self._backend, PostgresBackend):
+            raise TypeError(
+                "enlisted operations require a PostgresBackend instance"
+            )
+        return self._backend
+
+    def _put_from_prepared(
+        self,
+        *,
+        schema: str,
+        prepared: _PreparedRecord,
+        put_outcome: PutOutcome,
+    ) -> tuple[ObjectReference, PutStatus]:
+        reference = ObjectReference(
+            schema=schema,
+            content_hash=prepared.content_hash,
+        )
+        if put_outcome.inserted:
+            return reference, PutStatus.STORED
+        if put_outcome.stored_canonical == prepared.canonical:
+            return reference, PutStatus.IDEMPOTENT
+        raise ObjectConflictError(
+            schema=schema,
+            content_hash=reference.content_hash,
+        )
+
     async def put(
         self,
         schema: str,
@@ -71,24 +102,39 @@ class ObjectStore:
         Identical canonical text is idempotent; different text at the same
         schema and content-hash pair raises :class:`ObjectConflictError`.
         """
+        validate_reference_schema(schema)
         prepared = _prepare_record(record)
-        reference = ObjectReference(
-            schema=schema,
-            content_hash=prepared.content_hash,
-        )
         outcome = await self._backend.put_object(
             schema=schema,
-            content_hash=reference.content_hash,
+            content_hash=prepared.content_hash,
             canonical=prepared.canonical,
         )
-        if outcome.inserted:
-            return reference, PutStatus.STORED
-        # Distinguish an idempotent replay from a hash collision.
-        if outcome.stored_canonical == prepared.canonical:
-            return reference, PutStatus.IDEMPOTENT
-        raise ObjectConflictError(
+        return self._put_from_prepared(
             schema=schema,
-            content_hash=reference.content_hash,
+            prepared=prepared,
+            put_outcome=outcome,
+        )
+
+    def put_enlisted(
+        self,
+        connection: Connection,
+        schema: str,
+        record: Jsonable,
+    ) -> tuple[ObjectReference, PutStatus]:
+        """Store a record on a caller-owned sync transaction connection."""
+        validate_reference_schema(schema)
+        prepared = _prepare_record(record)
+        backend = self._require_postgres_backend()
+        outcome = backend.put_object_enlisted(
+            schema=schema,
+            content_hash=prepared.content_hash,
+            canonical=prepared.canonical,
+            connection=connection,
+        )
+        return self._put_from_prepared(
+            schema=schema,
+            prepared=prepared,
+            put_outcome=outcome,
         )
 
     async def get(self, reference: ObjectReference) -> Jsonable:
@@ -223,6 +269,42 @@ class ObjectStore:
             for key, outcome in outcomes.items()
         }
 
+    def put_many_enlisted(
+        self,
+        connection: Connection,
+        entries: Mapping[str, tuple[str, Jsonable]],
+    ) -> dict[str, ObjectReference]:
+        """Store records on a caller-owned sync transaction connection."""
+        writes: list[BoundObjectWrite] = []
+        for key, (schema, record) in entries.items():
+            validate_binding_key(key)
+            prepared = _prepare_record(record)
+            reference = ObjectReference(
+                schema=schema,
+                content_hash=prepared.content_hash,
+            )
+            writes.append(
+                BoundObjectWrite(
+                    key=key,
+                    schema=reference.schema,
+                    content_hash=reference.content_hash,
+                    canonical=prepared.canonical,
+                )
+            )
+
+        backend = self._require_postgres_backend()
+        outcomes = backend.put_bound_objects_enlisted(
+            entries=tuple(writes),
+            connection=connection,
+        )
+        return {
+            key: ObjectReference(
+                schema=outcome.existing_schema,
+                content_hash=outcome.existing_content_hash,
+            )
+            for key, outcome in outcomes.items()
+        }
+
     async def get_bound_objects(
         self,
         keys: Iterable[str],
@@ -232,6 +314,21 @@ class ObjectStore:
         for key in distinct:
             validate_binding_key(key)
         return await self._backend.get_bound_objects(keys=distinct)
+
+    def get_bound_objects_enlisted(
+        self,
+        connection: Connection,
+        keys: Iterable[str],
+    ) -> Mapping[str, BoundObjectRow]:
+        """Return joined binding/object rows on a caller-owned connection."""
+        distinct = tuple(dict.fromkeys(keys))
+        for key in distinct:
+            validate_binding_key(key)
+        backend = self._require_postgres_backend()
+        return backend.get_bound_objects_enlisted(
+            keys=distinct,
+            connection=connection,
+        )
 
     async def bind(
         self,
@@ -248,6 +345,35 @@ class ObjectStore:
             key=key,
             schema=reference.schema,
             content_hash=reference.content_hash,
+        )
+        if outcome.bound:
+            return BindStatus.BOUND
+        existing = ObjectReference(
+            schema=outcome.existing_schema,
+            content_hash=outcome.existing_content_hash,
+        )
+        if existing == reference:
+            return BindStatus.IDEMPOTENT
+        raise BindingConflictError(
+            key=key,
+            existing=existing,
+            requested=reference,
+        )
+
+    def bind_enlisted(
+        self,
+        connection: Connection,
+        key: str,
+        reference: ObjectReference,
+    ) -> BindStatus:
+        """Bind an opaque key on a caller-owned sync transaction connection."""
+        validate_binding_key(key)
+        backend = self._require_postgres_backend()
+        outcome = backend.bind_enlisted(
+            key=key,
+            schema=reference.schema,
+            content_hash=reference.content_hash,
+            connection=connection,
         )
         if outcome.bound:
             return BindStatus.BOUND
