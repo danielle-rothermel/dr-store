@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and the bundle failure taxonomy.
 - Added `pydantic>=2.0` as a declared runtime dependency; the bundle boundary
   models import it directly rather than relying on a transitive resolution.
+- Added `dr_store.document_file.is_reserved_document_temp_name(name)`, the
+  public predicate for the case-insensitive `.dr-store-document-` namespace
+  that manifest publication reserves. Bundle artifact names, document-directory
+  sidecar names, and canonical document names are all refused through it, so
+  one source of truth covers every layer that creates children beside a
+  published document.
 
 ### Changed
 
@@ -37,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   bytes that fail descriptor verification are never delivered.
 - The document-directory granularity contract now names artifact bundles as
   one publication packaged over a document directory.
+- Bundle publication bounds the encoded manifest by a fixed 1 GiB package
+  ceiling and refuses a larger manifest at `encode_manifest` with
+  `ReplacementState.NOT_REPLACED`, while readers keep bounding the manifest by
+  their own `BundleReadLimits.manifest_max_bytes`.
 
 ## [0.2.2] - 2026-08-12
 

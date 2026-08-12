@@ -15,13 +15,18 @@ from dr_serialize import canonical_json_bytes, validate_strict_json
 from dr_store import (
     ArtifactBundlePublication,
     ArtifactBundleReader,
+    ArtifactDescriptor,
     BundleIncompleteError,
     BundleReadError,
     BundleReadLimits,
     BundleVerificationError,
     BundleVerificationReason,
+    DocumentFileError,
+    RegularChildFailureReason,
+    VerifiedRegularChildReadError,
     VerifyingArtifactReader,
 )
+from dr_store.artifact_bundle import reading as reading_module
 from dr_store.core import descriptor_io as descriptor_io_module
 from dr_store.core import filesystem as filesystem_module
 from dr_store.core import verified_read as verified_read_module
@@ -780,6 +785,80 @@ def test_reader_fails_closed_without_required_descriptor_support(
     with pytest.raises(BundleReadError) as caught:
         _reader(publication.path).audit()
     assert isinstance(caught.value.__cause__, OSError)
+
+
+def test_consumption_fails_closed_without_required_descriptor_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = _publish(tmp_path)
+    for module in (
+        filesystem_module,
+        verified_read_module,
+        document_file_module,
+    ):
+        monkeypatch.setattr(
+            module,
+            "_pinned_read_support_detail",
+            lambda: "O_NOFOLLOW",
+        )
+    with pytest.raises(BundleReadError) as caught:
+        _reader(publication.path).consume_and_verify_artifact(
+            "stdout.bin",
+            _consume_nothing,
+        )
+    assert type(caught.value) is BundleReadError
+    assert isinstance(caught.value.__cause__, OSError)
+
+
+def test_unsupported_platform_artifact_read_is_not_a_verification_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = _publish(tmp_path)
+    monkeypatch.setattr(
+        verified_read_module,
+        "_pinned_read_support_detail",
+        lambda: "os.open(dir_fd=...)",
+    )
+    with pytest.raises(BundleReadError) as caught:
+        reading_module._read_verified_artifact(
+            publication.path,
+            ArtifactDescriptor(
+                name="stdout.bin",
+                sha256=hashlib.sha256(b"output").hexdigest(),
+                byte_length=len(b"output"),
+            ),
+            max_bytes=LIMITS.max_bytes_per_artifact,
+        )
+    assert type(caught.value) is BundleReadError
+    cause = caught.value.__cause__
+    assert isinstance(cause, VerifiedRegularChildReadError)
+    assert cause.reason is RegularChildFailureReason.UNSUPPORTED_PLATFORM
+    assert (
+        RegularChildFailureReason.UNSUPPORTED_PLATFORM
+        not in reading_module._VERIFICATION_REASON_BY_CHILD_REASON
+    )
+
+
+@pytest.mark.parametrize("existing_bytes", [None, b"not a directory"])
+def test_unopenable_bundle_directory_reports_the_innermost_cause(
+    tmp_path: Path,
+    existing_bytes: bytes | None,
+) -> None:
+    bundle_path = tmp_path / "bundle"
+    if existing_bytes is not None:
+        bundle_path.write_bytes(existing_bytes)
+
+    with pytest.raises(BundleReadError) as caught:
+        _reader(bundle_path).audit()
+
+    assert type(caught.value) is BundleReadError
+    cause = caught.value.__cause__
+    # The chain is AllocationError <- DocumentFileError with nothing beneath
+    # it, so the innermost layering error is reported, not the outer wrapper.
+    assert type(cause) is DocumentFileError
+    assert cause.__cause__ is None
 
 
 def test_consumption_uses_total_bound_when_it_is_lower_than_per_file_bound(

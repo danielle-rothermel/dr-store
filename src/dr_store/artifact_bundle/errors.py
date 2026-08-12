@@ -18,6 +18,9 @@ class BundlePublicationPhase(StrEnum):
     ENCODE_MANIFEST = "encode_manifest"
     CREATE_TEMP = "create_temp"
     WRITE_TEMP = "write_temp"
+    # The manifest temporary descriptor is closed within the document-directory
+    # write stage, so a close failure reports WRITE_TEMP. CLOSE_TEMP is a
+    # public member that no path emits.
     CLOSE_TEMP = "close_temp"
     REPLACE_MANIFEST = "replace_manifest"
 

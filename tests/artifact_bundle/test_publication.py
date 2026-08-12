@@ -16,7 +16,9 @@ from dr_store import (
     BundleAllocationError,
     BundlePublicationPhase,
     BundlePublishError,
+    ReplacementState,
 )
+from dr_store.artifact_bundle import publication as publication_module
 from dr_store.document_directory import directory as directory_module
 
 if TYPE_CHECKING:
@@ -103,6 +105,30 @@ def test_rejected_artifact_name_does_not_poison_publication(
 
     publication.publish(None)
     assert (publication.path / "manifest.json").is_file()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "manifest.json",
+        ".dr-store-artifact-bundle-owned",
+        ".dr-store-document-owned",
+        ".DR-STORE-DOCUMENT-owned",
+        ".dr-store-document-deadbeefdeadbeef-abc.tmp",
+    ],
+)
+def test_reserved_artifact_names_are_refused_before_any_child_is_created(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    publication = _allocate(tmp_path)
+
+    with pytest.raises(BundleAllocationError, match="invalid bundle artifact"):
+        publication.open_artifact(name)
+
+    assert list(publication.path.iterdir()) == []
+    publication.publish(None)
+    assert _read_manifest(publication)["artifacts"] == []
 
 
 def test_writer_streams_exact_bytes_and_finalizes_descriptor(
@@ -211,6 +237,29 @@ def test_invalid_payload_refusal_is_nonterminal_and_preserves_cause(
 
     publication.publish({"valid": True})
     assert _read_manifest(publication)["payload"] == {"valid": True}
+
+
+def test_manifest_publication_ceiling_is_one_pinned_gibibyte() -> None:
+    assert publication_module.MANIFEST_PUBLICATION_MAX_BYTES == 1073741824
+
+
+def test_manifest_over_the_publication_ceiling_is_refused_before_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        publication_module,
+        "MANIFEST_PUBLICATION_MAX_BYTES",
+        64,
+    )
+    publication = _allocate(tmp_path)
+
+    with pytest.raises(BundlePublishError) as caught:
+        publication.publish({"payload": "x" * 128})
+
+    assert caught.value.phase is BundlePublicationPhase.ENCODE_MANIFEST
+    assert caught.value.replacement_state is ReplacementState.NOT_REPLACED
+    assert list(publication.path.iterdir()) == []
 
 
 def test_successful_publish_is_terminal_for_every_mutation(

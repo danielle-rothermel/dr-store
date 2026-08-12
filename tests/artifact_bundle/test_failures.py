@@ -11,6 +11,7 @@ from dr_store import (
     BundleAllocationError,
     BundlePublicationPhase,
     BundlePublishError,
+    PublicationStage,
     ReplacementState,
 )
 from dr_store.artifact_bundle import publication as publication_module
@@ -246,6 +247,17 @@ def test_terminal_manifest_close_failure_is_known_not_replaced(
     assert caught.value.replacement_state is ReplacementState.NOT_REPLACED
     assert caught.value.__cause__ is close_failure
     assert list(publication.path.iterdir()) == []
+
+
+def test_close_temp_phase_is_public_and_never_emitted() -> None:
+    assert BundlePublicationPhase.CLOSE_TEMP.value == "close_temp"
+    assert (
+        BundlePublicationPhase.CLOSE_TEMP
+        not in publication_module._PUBLICATION_PHASE_BY_STAGE.values()
+    )
+    assert set(publication_module._PUBLICATION_PHASE_BY_STAGE) == set(
+        PublicationStage
+    )
 
 
 def test_replace_failure_reports_unknown_and_is_not_retryable(

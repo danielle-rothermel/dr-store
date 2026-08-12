@@ -88,6 +88,8 @@ def test_descriptor_is_strict_and_closed(arguments: dict[str, Any]) -> None:
         "nul\x00name",
         "manifest.json",
         ".dr-store-artifact-bundle-owned",
+        ".dr-store-document-owned",
+        ".DR-STORE-DOCUMENT-owned",
     ],
 )
 def test_descriptor_rejects_unsafe_and_reserved_names(name: str) -> None:

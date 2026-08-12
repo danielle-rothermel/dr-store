@@ -34,9 +34,9 @@ from dr_store.document_file import (
     DocumentFileError,
     DocumentPublishError,
     DocumentReadError,
+    is_reserved_document_temp_name,
 )
 from dr_store.document_file.canonical_json import (
-    _is_reserved_document_temp_name,
     _validate_canonical_json_file_configuration,
 )
 
@@ -157,7 +157,7 @@ class DocumentDirectory:
         sidecar_path = self._path / name
         if (
             name.casefold() == self._manifest.path.name.casefold()
-            or _is_reserved_document_temp_name(name)
+            or is_reserved_document_temp_name(name)
         ):
             if error is SidecarVerificationError:
                 raise SidecarVerificationError(

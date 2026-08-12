@@ -503,13 +503,21 @@ a valid publish call after every admitted writer finalized successfully begins \
 the one deterministic manifest attempt and makes the publication terminal. That \
 attempt orders descriptors by exact name, runs as one document-directory \
 Manifest publication, and exposes no retry, replacement, append, truncation, \
-retention, or later mutation operation."""
+retention, or later mutation operation. Publication bounds the encoded manifest \
+by one fixed package ceiling of 1 GiB rather than a caller-supplied limit, and \
+an encoded manifest above that ceiling is refused at `encode_manifest` with \
+`ReplacementState.NOT_REPLACED`. Readers bound the manifest by their own \
+`BundleReadLimits.manifest_max_bytes`, so a caller whose payload exceeds the \
+read limit it later supplies publishes a bundle it cannot read back."""
 rationale = """
 One API-level terminal transition distinguishes interrupted work from a \
 completed publication without claiming a durable cross-process once-only lock. \
 Independent distinct-name writers support concurrent producers without making \
 the bundle a scheduler, and delegating the terminal attempt keeps exactly one \
-atomic same-directory replacement implementation in the package."""
+atomic same-directory replacement implementation in the package. A fixed \
+publication ceiling keeps the publisher from accepting a manifest no bounded \
+reader could recover, while leaving read bounds with the caller who owns the \
+payload."""
 date = "2026-08-12"
 check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_failures.py"
 
@@ -533,15 +541,20 @@ check = "uv run pytest -q tests/artifact_bundle/test_publication.py tests/artifa
 title = "Bundle artifact names are safe exact direct children"
 statement = """
 Every artifact name is one non-empty relative path segment. Publication and \
-reading reject absolute paths, dot segments, separators, `manifest.json`, and \
-the reserved bundle temporary namespace. Descriptor names are unique by exact \
-string, and artifact creation is exclusive and never replaces an existing \
-child. The format defines no cross-platform case-folding or Unicode-normalization \
-profile."""
+reading reject absolute paths, dot segments, separators, `manifest.json`, the \
+case-insensitive `.dr-store-document-` temporary namespace that manifest \
+publication reserves, and the `.dr-store-artifact-bundle-` prefix. Descriptor \
+names are unique by exact string, and artifact creation is exclusive and never \
+replaces an existing child. The format defines no cross-platform case-folding \
+or Unicode-normalization profile."""
 rationale = """
 Restricting artifacts to exclusively created direct children prevents lexical \
 traversal and replacement without introducing a portable-filename subsystem \
-merely to predict every filesystem's aliasing rules."""
+merely to predict every filesystem's aliasing rules. Reserving the document \
+temporary namespace through the document layer's own public predicate keeps \
+one source of truth for the names publication may create, and reserving the \
+bundle prefix keeps every name an earlier release refused refused, so bundle \
+names stay symmetric across releases."""
 date = "2026-08-12"
 check = "uv run pytest -q tests/artifact_bundle/test_models.py tests/artifact_bundle/test_publication.py tests/artifact_bundle/test_reading.py"
 
@@ -619,7 +632,10 @@ a publication precondition or terminal-manifest phase through public \
 `phase: BundlePublicationPhase` and \
 `replacement_state: ReplacementState | None` fields. Replacement state is \
 absent for a precondition refusal and uses the existing public \
-`ReplacementState` for a terminal manifest attempt. `BundleReadError` reports \
+`ReplacementState` for a terminal manifest attempt. The manifest temporary \
+descriptor is closed within the document-directory write stage, so a close \
+failure reports `write_temp`; `close_temp` remains a public member of \
+`BundlePublicationPhase` that no path emits. `BundleReadError` reports \
 manifest, filesystem, or consumer failure; `BundleIncompleteError` and \
 `BundleVerificationError` specialize it for a missing valid terminal manifest \
 and a selected or declared artifact mismatch or incomplete consumption. \

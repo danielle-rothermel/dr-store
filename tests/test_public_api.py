@@ -318,6 +318,7 @@ def test_artifact_bundle_public_surfaces_are_exact() -> None:
         BundleArtifactWriter,
         BundleIncompleteError,
         BundleManifest,
+        BundlePublicationPhase,
         BundlePublishError,
         BundleReadError,
         BundleReadLimits,
@@ -381,6 +382,14 @@ def test_artifact_bundle_public_surfaces_are_exact() -> None:
         "mismatch",
         "bounds_exceeded",
         "incomplete_consumption",
+    ]
+    assert [(phase.name, phase.value) for phase in BundlePublicationPhase] == [
+        ("PRECONDITION", "precondition"),
+        ("ENCODE_MANIFEST", "encode_manifest"),
+        ("CREATE_TEMP", "create_temp"),
+        ("WRITE_TEMP", "write_temp"),
+        ("CLOSE_TEMP", "close_temp"),
+        ("REPLACE_MANIFEST", "replace_manifest"),
     ]
     assert list(inspect.signature(BundlePublishError).parameters) == [
         "path",
