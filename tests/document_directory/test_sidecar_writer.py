@@ -299,7 +299,7 @@ def test_a_failed_finalize_is_typed_and_closes_the_handle(
             self.closed = True
             self._wrapped.close()
 
-    def open_sidecar(  # noqa: PLR0913
+    def open_sidecar(  # noqa: PLR0913, PLR0917
         self: Path,
         mode: str = "r",
         buffering: int = -1,

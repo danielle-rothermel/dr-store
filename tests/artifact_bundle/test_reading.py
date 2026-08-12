@@ -358,12 +358,18 @@ def test_nested_bundle_read_failure_is_translated_to_outer_bundle(
     "raw",
     [
         b'{"artifacts":[],"format":"unknown","payload":null}',
-        b'{"artifacts":[],"format":"dr-store-artifact-bundle-v1",'
-        b'"payload":null,"unknown":true}',
-        b'{"artifacts":[],"format":"dr-store-artifact-bundle-v1",'
-        b'"payload":null,"payload":true}',
-        b'{"artifacts": [], "format":"dr-store-artifact-bundle-v1",'
-        b'"payload":null}',
+        (
+            b'{"artifacts":[],"format":"dr-store-artifact-bundle-v1",'
+            b'"payload":null,"unknown":true}'
+        ),
+        (
+            b'{"artifacts":[],"format":"dr-store-artifact-bundle-v1",'
+            b'"payload":null,"payload":true}'
+        ),
+        (
+            b'{"artifacts": [], "format":"dr-store-artifact-bundle-v1",'
+            b'"payload":null}'
+        ),
         _manifest_bytes([_descriptor("b", b"b"), _descriptor("a", b"a")]),
         _manifest_bytes([_descriptor("a", b"a"), _descriptor("a", b"a")]),
     ],

@@ -65,7 +65,7 @@ cd -- "${repository_root}"
 
 uv sync --locked
 uv run pre-commit run --all-files
-uvx tombi@1.2.5 lint --offline .defs/terms.toml
+uvx tombi@1.3.2 lint --offline .defs/terms.toml
 
 temporary_base="${TMPDIR:-/tmp}"
 temporary_base="$(

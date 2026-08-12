@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.2.3] - 2026-08-12
 
+### Changed
+
+- Toolchain refreshed to current releases: ruff 0.16, ty 0.0.70, pre-commit
+  4.6.2, tombi 1.3.2; runtime floors raised to the tested minimums
+  (pydantic 2.13, psycopg 3.3). Runtime resolutions were already latest.
+
 ### Added
 
 - Added the `dr_store.artifact_bundle` package and its fifteen public names
