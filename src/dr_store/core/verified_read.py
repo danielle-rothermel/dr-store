@@ -17,7 +17,7 @@ from dr_store.core.errors import (
     RegularChildFailureReason,
     VerifiedRegularChildReadError,
 )
-from dr_store.core.filesystem import UnsafeNameError, check_safe_name
+from dr_store.core.filesystem import UnsafeNameError, check_regular_child_name
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -122,7 +122,7 @@ def read_verified_regular_child(
     )
     child_path = directory / name
     try:
-        check_safe_name(name, role="child name")
+        check_regular_child_name(name)
     except UnsafeNameError as exc:
         raise VerifiedRegularChildReadError(
             exc.message,

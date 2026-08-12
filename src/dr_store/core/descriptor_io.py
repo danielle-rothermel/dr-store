@@ -22,34 +22,6 @@ def open_child_descriptor(
     return os.open(name, flags, dir_fd=directory_descriptor)
 
 
-def open_pinned_child(
-    directory: Path,
-    name: str,
-    *,
-    directory_flags: int,
-    child_flags: int,
-) -> tuple[int, int, os.stat_result]:
-    """Return ``(directory_fd, child_fd, child_metadata)``.
-
-    Caller owns cleanup.
-    """
-    directory_descriptor = open_directory_descriptor(
-        directory,
-        flags=directory_flags,
-    )
-    try:
-        child_descriptor = open_child_descriptor(
-            name,
-            flags=child_flags,
-            directory_descriptor=directory_descriptor,
-        )
-    except BaseException:
-        os.close(directory_descriptor)
-        raise
-    metadata = os.fstat(child_descriptor)
-    return directory_descriptor, child_descriptor, metadata
-
-
 def read_bounded_child_descriptor(
     child_descriptor: int,
     *,

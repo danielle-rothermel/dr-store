@@ -41,3 +41,26 @@ def validate_safe_name(
         check_safe_name(name, role=role)
     except UnsafeNameError as exc:
         raise error(exc.message) from None
+
+
+def check_regular_child_name(name: str) -> None:
+    """Require one safe regular-child name segment."""
+    check_safe_name(name, role="child name")
+
+
+def validate_directory_prefix(
+    prefix: str,
+    *,
+    error: type[Exception] = AllocationError,
+) -> None:
+    """Require one safe document-directory allocation prefix."""
+    validate_safe_name(prefix, role="prefix", error=error)
+
+
+def validate_lexical_sidecar_name(
+    name: str,
+    *,
+    error: type[Exception] = AllocationError,
+) -> None:
+    """Require one safe sidecar name segment."""
+    validate_safe_name(name, role="sidecar name", error=error)

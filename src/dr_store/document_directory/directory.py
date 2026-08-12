@@ -17,7 +17,10 @@ from dr_store.core.errors import (
     RegularChildFailureReason,
     SidecarVerificationError,
 )
-from dr_store.core.filesystem import validate_safe_name
+from dr_store.core.filesystem import (
+    validate_directory_prefix,
+    validate_lexical_sidecar_name,
+)
 from dr_store.document_directory.sidecar import (
     SidecarWriter,
 )
@@ -87,7 +90,7 @@ class DocumentDirectory:
         The caller-owned root is not flushed, so its new entry may not survive
         loss of the machine or filesystem cache.
         """
-        validate_safe_name(prefix, role="prefix", error=AllocationError)
+        validate_directory_prefix(prefix, error=AllocationError)
         try:
             _validate_canonical_json_file_configuration(
                 manifest_name,
@@ -160,7 +163,7 @@ class DocumentDirectory:
                     RegularChildFailureReason.BOUNDS_EXCEEDED,
                 )
             return
-        validate_safe_name(name, role="sidecar name", error=error)
+        validate_lexical_sidecar_name(name, error=error)
         if (
             name.casefold() == self._manifest.path.name.casefold()
             or _is_reserved_document_temp_name(name)
