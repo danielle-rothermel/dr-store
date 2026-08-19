@@ -9,8 +9,8 @@
 [Changelog](https://github.com/danielle-rothermel/dr-store/blob/main/CHANGELOG.md) ·
 [dr-serialize](https://github.com/danielle-rothermel/dr-serialize)
 
-dr-store provides domain-neutral storage primitives for immutable records and
-document artifacts:
+dr-store provides domain-neutral storage primitives for immutable evidence
+records, document artifacts, and mutable keyed coordination:
 
 - **[Content addressing](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/content_addressing.py)**
   identifies complete records by their declared schemas and SHA-256 hashes of
@@ -24,6 +24,21 @@ document artifacts:
   `MemoryBackend` is process-local; `SqliteBackend` persists committed data for
   cross-process use; `PostgresBackend` shares committed data through a
   caller-owned SQLAlchemy engine opened synchronously or asynchronously.
+- **[Sync facade](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/sync)**
+  exposes a blocking `ObjectStore` session API for tests, CLI tools, and other
+  synchronous callers. A dedicated event-loop thread runs async backend
+  operations via `run_coroutine_threadsafe`. This is distinct from the
+  PostgreSQL **enlisted** surface, which joins a caller-owned SQLAlchemy
+  transaction for evidence checkpoint integration.
+- **[Lease authority](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/lease)**
+  implements keyed lease, renew, and terminal semantics for exactly-once side
+  effects. Memory, SQLite, and PostgreSQL backends share one contract;
+  authority time comes from an injected clock (memory) or the database clock
+  (persistent backends).
+- **[Relational infrastructure](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/relational)**
+  supplies shared schema metadata, contract introspection, structured mismatch
+  errors, and transaction observer hooks for typed-row persistence layers such
+  as the lease authority.
 - **[Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)**
   memoizes records under opaque caller-owned keys. Reads return typed hits;
   absent, missing, or unverifiable stored values are misses, while invalid

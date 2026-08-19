@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-19
+
+### Added
+
+- Added `dr_store.sync` with `BlockingObjectStore`, SQLite session openers, and
+  persistent-session lifecycle helpers for synchronous callers over the async
+  `ObjectStore`.
+- Added `dr_store.relational` shared schema metadata, SQLite and PostgreSQL
+  contract introspection, structured `RelationalContractMismatchError`, decode
+  guards, and transaction observer hooks.
+- Added `dr_store.lease` with `LeaseAuthority`, `LeaseMaintenance`, memory,
+  SQLite, and PostgreSQL backends, and fresh contract tests for acquire,
+  renew, terminalize, and maintenance semantics.
+- Added `dr_store.testing` helpers (`FakeClock`, temporary store and lease
+  authority fixtures) for consumer unit tests.
+
+### Changed
+
+- README and `.defs` now describe immutable evidence together with mutable
+  keyed coordination primitives.
+
 ## [0.2.3] - 2026-08-12
 
 ### Changed
