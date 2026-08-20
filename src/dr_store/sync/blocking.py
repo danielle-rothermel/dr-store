@@ -233,7 +233,11 @@ class _StoreSession:
 
     def close(self) -> None:
         with self._open_lock:
-            if self._closed and not self._thread.is_alive():
+            if (
+                self._closed
+                and not self._thread.is_alive()
+                and self._backend is None
+            ):
                 return
             with self._futures_lock:
                 self._closed = True
@@ -246,7 +250,6 @@ class _StoreSession:
                         self._backend.aclose(),
                         self._loop,
                     ).result()
-                    self._backend = None
             except Exception as exc:  # noqa: BLE001 - preserve close failure for reraise
                 close_error = exc
             finally:
@@ -260,6 +263,7 @@ class _StoreSession:
                         )
                 if not self._thread.is_alive() and not self._loop.is_closed():
                     self._loop.close()
+                self._backend = None
                 self.store = None
             if close_error is not None:
                 raise close_error
