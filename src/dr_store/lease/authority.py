@@ -155,7 +155,7 @@ class LeaseMaintenance:
 
     def _abort_terminalization(self) -> None:
         with self._lock:
-            if self._terminalization_started:
+            if self._terminalization_started or not self._terminalizing:
                 return
             self._terminalizing = False
             self._stop.clear()
