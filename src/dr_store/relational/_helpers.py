@@ -75,13 +75,15 @@ def is_exact_component_metadata(
     component: str,
     version: int,
 ) -> bool:
-    return (
-        len(rows) == 1
-        and len(rows[0]) == 2
-        and type(rows[0][0]) is str
-        and type(rows[0][1]) is int
-        and rows[0] == (component, version)
-    )
+    matching = [
+        row
+        for row in rows
+        if len(row) == 2
+        and type(row[0]) is str
+        and type(row[1]) is int
+        and row[0] == component
+    ]
+    return len(matching) == 1 and matching[0] == (component, version)
 
 
 def raise_owned_table_inventory_mismatch(

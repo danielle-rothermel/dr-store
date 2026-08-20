@@ -13,6 +13,7 @@ from contextlib import AbstractContextManager
 from datetime import datetime, timedelta
 from typing import Any, Protocol, cast
 
+from dr_store.lease._schema import reraise_schema_mismatch
 from dr_store.lease._storage import (
     _T,
     _decode_row,
@@ -27,8 +28,9 @@ from dr_store.lease.models import (
     _require_text,
     _require_utc,
 )
-from dr_store.relational import (
-    RelationalContractMismatchError,
+from dr_store.relational.errors import RelationalContractMismatchError
+from dr_store.relational.postgres import (
+    ConnectFactory,
     create_component_metadata,
     verify_component_metadata,
     verify_postgres_table,
@@ -271,7 +273,7 @@ class _PostgreSQLStore:
         self,
         dsn: str,
         *,
-        connect: _Connect | None = None,
+        connect: ConnectFactory | None = None,
     ) -> None:
         _require_text(dsn, field="PostgreSQL DSN", maximum=16_384)
         self._dsn = dsn
@@ -285,60 +287,63 @@ class _PostgreSQLStore:
 
             self._connect = cast("_Connect", psycopg_connect)
         else:
-            self._connect = connect
+            self._connect = cast("_Connect", connect)
 
     def initialize(self) -> None:
-        with self._connect(self._dsn) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(_POSTGRES_SELECT_SERVER_ENCODING)
-                encoding = cursor.fetchone()
-                if encoding != ("UTF8",):
-                    raise RelationalContractMismatchError(
-                        table="<database>",
-                        aspect="server_encoding",
-                        expected="UTF8",
-                        actual=encoding,
+        try:
+            with self._connect(self._dsn) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(_POSTGRES_SELECT_SERVER_ENCODING)
+                    encoding = cursor.fetchone()
+                    if encoding != ("UTF8",):
+                        raise RelationalContractMismatchError(
+                            table="<database>",
+                            aspect="server_encoding",
+                            expected="UTF8",
+                            actual=encoding,
+                        )
+                    cursor.execute(_POSTGRES_INIT_LOCK)
+                    cursor.execute(
+                        _POSTGRES_SELECT_TABLES,
+                        (_TABLE_NAME, _METADATA_TABLE_NAME),
                     )
-                cursor.execute(_POSTGRES_INIT_LOCK)
-                cursor.execute(
-                    _POSTGRES_SELECT_TABLES,
-                    (_TABLE_NAME, _METADATA_TABLE_NAME),
-                )
-                tables = {str(row[0]) for row in cursor.fetchall()}
-                if not tables:
-                    cursor.execute(_POSTGRES_CREATE_TABLE)
-                    cursor.execute(_POSTGRES_CREATE_METADATA_TABLE)
-                    create_component_metadata(
+                    tables = {str(row[0]) for row in cursor.fetchall()}
+                    if not tables:
+                        cursor.execute(_POSTGRES_CREATE_TABLE)
+                        cursor.execute(_POSTGRES_CREATE_METADATA_TABLE)
+                        create_component_metadata(
+                            connection,
+                            metadata_table=_METADATA_TABLE_NAME,
+                            component=_COMPONENT,
+                            version=_SCHEMA_VERSION,
+                        )
+                    elif tables != {_TABLE_NAME, _METADATA_TABLE_NAME}:
+                        raise RelationalContractMismatchError(
+                            table="<database>",
+                            aspect="owned table inventory",
+                            expected={_TABLE_NAME, _METADATA_TABLE_NAME},
+                            actual=sorted(tables),
+                        )
+                    verify_postgres_table(
+                        connection,
+                        table=_TABLE_NAME,
+                        columns=_POSTGRES_TABLE_COLUMNS,
+                        constraints=_POSTGRES_TABLE_CONSTRAINTS,
+                    )
+                    verify_postgres_table(
+                        connection,
+                        table=_METADATA_TABLE_NAME,
+                        columns=_POSTGRES_METADATA_COLUMNS,
+                        constraints=_POSTGRES_METADATA_CONSTRAINTS,
+                    )
+                    verify_component_metadata(
                         connection,
                         metadata_table=_METADATA_TABLE_NAME,
                         component=_COMPONENT,
                         version=_SCHEMA_VERSION,
                     )
-                elif tables != {_TABLE_NAME, _METADATA_TABLE_NAME}:
-                    raise RelationalContractMismatchError(
-                        table="<database>",
-                        aspect="owned table inventory",
-                        expected={_TABLE_NAME, _METADATA_TABLE_NAME},
-                        actual=sorted(tables),
-                    )
-                verify_postgres_table(
-                    connection,
-                    table=_TABLE_NAME,
-                    columns=_POSTGRES_TABLE_COLUMNS,
-                    constraints=_POSTGRES_TABLE_CONSTRAINTS,
-                )
-                verify_postgres_table(
-                    connection,
-                    table=_METADATA_TABLE_NAME,
-                    columns=_POSTGRES_METADATA_COLUMNS,
-                    constraints=_POSTGRES_METADATA_CONSTRAINTS,
-                )
-                verify_component_metadata(
-                    connection,
-                    metadata_table=_METADATA_TABLE_NAME,
-                    component=_COMPONENT,
-                    version=_SCHEMA_VERSION,
-                )
+        except RelationalContractMismatchError as exc:
+            reraise_schema_mismatch(exc)
 
     def validate_lease_duration(self, duration: timedelta) -> timedelta:
         return duration

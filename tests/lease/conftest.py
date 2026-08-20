@@ -159,6 +159,11 @@ def authority_fixture(
     else:
         dsn = os.environ.get("DR_STORE_POSTGRES_DSN")
         if dsn is None:
+            if os.environ.get("DR_STORE_REQUIRE_POSTGRES") == "1":
+                pytest.fail(
+                    "DR_STORE_REQUIRE_POSTGRES=1 requires "
+                    "DR_STORE_POSTGRES_DSN"
+                )
             pytest.skip("DR_STORE_POSTGRES_DSN is not configured")
         authority = LeaseAuthority.postgresql(dsn)
         fixture = AuthorityFixture(

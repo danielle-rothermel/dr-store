@@ -16,6 +16,13 @@ from dr_store.lease.models import (
     _require_utc,
     _StoredState,
 )
+from dr_store.relational._helpers import (
+    require_persisted_integer as _relational_require_persisted_integer,
+)
+from dr_store.relational._helpers import (
+    require_persisted_text as _relational_require_persisted_text,
+)
+from dr_store.relational.errors import RelationalContractMismatchError
 
 _T = TypeVar("_T")
 _Transition = Callable[
@@ -88,19 +95,21 @@ def _row_match_values(row: _LeaseRow) -> tuple[Any, ...]:
 
 
 def _require_persisted_text(value: object, *, field: str) -> str:
-    if type(value) is not str:
+    try:
+        return _relational_require_persisted_text(value, field=field)
+    except RelationalContractMismatchError as exc:
         raise _AuthorityCorruptionError(
             f"persisted {field} must have text storage"
-        )
-    return value
+        ) from exc
 
 
 def _require_persisted_integer(value: object, *, field: str) -> int:
-    if type(value) is not int:
+    try:
+        return _relational_require_persisted_integer(value, field=field)
+    except RelationalContractMismatchError as exc:
         raise _AuthorityCorruptionError(
             f"persisted {field} must have integer storage"
-        )
-    return value
+        ) from exc
 
 
 def _decode_row(

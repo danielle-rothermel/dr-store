@@ -1,7 +1,16 @@
+"""Blocking sync facade over async ``ObjectStore``.
+
+``open_sqlite`` and ``persistent_sqlite`` own a dedicated event-loop thread and
+run backend operations through ``run_coroutine_threadsafe``. This is distinct
+from PostgreSQL **enlisted** methods, which join a caller-owned SQLAlchemy
+transaction for evidence checkpoint integration.
+"""
+
 from __future__ import annotations
 
 from dr_store.sync.blocking import (
     BlockingObjectStore,
+    SyncSessionClosedError,
     close_all_persistent,
     close_persistent,
     open_sqlite,
@@ -10,6 +19,7 @@ from dr_store.sync.blocking import (
 
 __all__ = [
     "BlockingObjectStore",
+    "SyncSessionClosedError",
     "close_all_persistent",
     "close_persistent",
     "open_sqlite",

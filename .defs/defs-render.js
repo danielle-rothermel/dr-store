@@ -30,6 +30,14 @@ function termRow(term) {
     );
     definition.append(el("div", "defs-symbols", symbols));
   }
+  if (term.submodule_exports?.length) {
+    const symbols = term.submodule_exports.flatMap((s, i) =>
+      i === 0 ? [code(s)] : [", ", code(s)],
+    );
+    definition.append(
+      el("div", "defs-symbols", ["Submodule: ", ...symbols]),
+    );
+  }
   const name = el("dfn", "term-name", [term.name]);
   name.id = `term-${term.name.replaceAll(" ", "-")}`;
   return el("tr", null, [el("td", null, [name]), definition]);

@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 from dr_store.relational._helpers import (
     SqliteColumnContract,
-    is_exact_component_metadata,
     is_exact_component_version_row,
     normalized_sql,
     raise_owned_table_inventory_mismatch,
@@ -159,20 +158,21 @@ def verify_component_metadata(
     component: str,
     version: int,
 ) -> None:
-    metadata = connection.execute(
+    row = connection.execute(
         f"""
         SELECT component, version FROM {metadata_table}
-        ORDER BY component
-        """
-    ).fetchall()
-    if not is_exact_component_metadata(
-        metadata, component=component, version=version
+        WHERE component = ?
+        """,
+        (component,),
+    ).fetchone()
+    if not is_exact_component_version_row(
+        row, component=component, version=version
     ):
         raise RelationalContractMismatchError(
             table=metadata_table,
             aspect="schema metadata",
-            expected=[(component, version)],
-            actual=metadata,
+            expected=(component, version),
+            actual=row,
         )
 
 

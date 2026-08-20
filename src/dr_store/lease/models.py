@@ -273,6 +273,27 @@ class LeaseAuthorityError(RuntimeError):
     pass
 
 
+class LeaseAuthoritySchemaMismatchError(LeaseAuthorityError):
+    """Owned lease table or metadata does not match the pinned contract."""
+
+    def __init__(
+        self,
+        *,
+        table: str,
+        aspect: str,
+        expected: object,
+        actual: object,
+    ) -> None:
+        self.table = table
+        self.aspect = aspect
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"incompatible lease authority table {table!r}: expected exact "
+            f"{aspect} {expected!r}, found {actual!r}"
+        )
+
+
 class StaleLeaseError(LeaseAuthorityError):
     pass
 

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
-
 from dr_store.relational._helpers import (
     require_persisted_integer,
     require_persisted_text,
@@ -39,7 +37,8 @@ __all__ = [
     "RelationalContractMismatchError",
     "TransactionObserver",
     "connect_sqlite",
-    "create_component_metadata",
+    "create_postgres_component_metadata",
+    "create_sqlite_component_metadata",
     "postgres_table_columns",
     "postgres_table_constraints",
     "raise_owned_table_inventory_mismatch",
@@ -47,53 +46,8 @@ __all__ = [
     "require_persisted_text",
     "sqlite_owned_tables",
     "sqlite_table_columns",
-    "verify_component_metadata",
+    "verify_postgres_component_metadata",
     "verify_postgres_table",
+    "verify_sqlite_component_metadata",
     "verify_sqlite_table",
 ]
-
-
-def create_component_metadata(
-    connection: object,
-    *,
-    metadata_table: str,
-    component: str,
-    version: int,
-) -> None:
-    if isinstance(connection, sqlite3.Connection):
-        create_sqlite_component_metadata(
-            connection,
-            metadata_table=metadata_table,
-            component=component,
-            version=version,
-        )
-        return
-    create_postgres_component_metadata(
-        connection,
-        metadata_table=metadata_table,
-        component=component,
-        version=version,
-    )
-
-
-def verify_component_metadata(
-    connection: object,
-    *,
-    metadata_table: str,
-    component: str,
-    version: int,
-) -> None:
-    if isinstance(connection, sqlite3.Connection):
-        verify_sqlite_component_metadata(
-            connection,
-            metadata_table=metadata_table,
-            component=component,
-            version=version,
-        )
-        return
-    verify_postgres_component_metadata(
-        connection,
-        metadata_table=metadata_table,
-        component=component,
-        version=version,
-    )

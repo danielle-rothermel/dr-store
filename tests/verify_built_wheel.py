@@ -34,6 +34,7 @@ FUNCTIONAL_MODULES = (
     "dr_store.lease",
     "dr_store.lease._memory",
     "dr_store.lease._postgres",
+    "dr_store.lease._schema",
     "dr_store.lease._sqlite",
     "dr_store.lease._storage",
     "dr_store.lease.authority",

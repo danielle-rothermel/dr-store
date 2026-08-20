@@ -8,6 +8,7 @@ import pytest
 
 from dr_store import PutStatus
 from dr_store.sync import (
+    SyncSessionClosedError,
     close_all_persistent,
     close_persistent,
     open_sqlite,
@@ -90,3 +91,82 @@ def test_error_propagation(sqlite_path: str) -> None:
         )
         with pytest.raises(ObjectNotFoundError):
             store.get(missing)
+
+
+def test_concurrent_persistent_sqlite_opens_once(sqlite_path: str) -> None:
+    import threading
+    from unittest.mock import AsyncMock, patch
+
+    from dr_store import SqliteBackend
+
+    original_open = SqliteBackend.open
+    call_count = 0
+    lock = threading.Lock()
+
+    async def counting_open(
+        path: str,
+        *,
+        busy_timeout_ms: int = 30_000,
+    ) -> SqliteBackend:
+        nonlocal call_count
+        with lock:
+            call_count += 1
+        return await original_open(path, busy_timeout_ms=busy_timeout_ms)
+
+    with patch.object(
+        SqliteBackend,
+        "open",
+        AsyncMock(side_effect=counting_open),
+    ):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            stores = list(
+                pool.map(lambda _: persistent_sqlite(sqlite_path), range(8))
+            )
+    assert call_count == 1
+    assert len({id(store) for store in stores}) == 1
+    close_persistent(sqlite_path)
+
+
+def test_persistent_open_failure_cleans_up(sqlite_path: str) -> None:
+    import threading
+    from unittest.mock import AsyncMock, patch
+
+    from dr_store import SqliteBackend
+
+    before = {
+        thread.name
+        for thread in threading.enumerate()
+        if thread.name == "dr-store-sqlite-loop"
+    }
+
+    async def failing_open(
+        _path: str,
+        *,
+        _busy_timeout_ms: int = 30_000,
+    ) -> SqliteBackend:
+        raise OSError("cannot open sqlite backend")
+
+    with patch.object(
+        SqliteBackend,
+        "open",
+        AsyncMock(side_effect=failing_open),
+    ):
+        with pytest.raises(OSError, match="cannot open sqlite backend"):
+            persistent_sqlite(sqlite_path)
+
+    after = {
+        thread.name
+        for thread in threading.enumerate()
+        if thread.name == "dr-store-sqlite-loop"
+    }
+    assert after == before
+
+
+def test_use_after_close_persistent_raises_typed_error(
+    sqlite_path: str,
+) -> None:
+    store = persistent_sqlite(sqlite_path)
+    reference, _ = store.put("demo.record", {"value": 1})
+    close_persistent(sqlite_path)
+    with pytest.raises(SyncSessionClosedError):
+        store.get(reference)

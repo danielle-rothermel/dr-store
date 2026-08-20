@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from dr_store.lease._schema import reraise_schema_mismatch
 from dr_store.lease._storage import (
     _T,
     _decode_row,
@@ -16,8 +17,8 @@ from dr_store.lease.models import (
     _AuthorityCorruptionError,
     _require_utc,
 )
-from dr_store.relational import (
-    TransactionObserver,
+from dr_store.relational.errors import RelationalContractMismatchError
+from dr_store.relational.sqlite import (
     connect_sqlite,
     create_component_metadata,
     raise_owned_table_inventory_mismatch,
@@ -28,6 +29,8 @@ from dr_store.relational import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from dr_store.relational.observer import TransactionObserver
 
 _TABLE_NAME = "dr_store_lease_authority"
 _METADATA_TABLE_NAME = "dr_store_lease_authority_metadata"
@@ -72,8 +75,10 @@ CREATE TABLE IF NOT EXISTS {_TABLE_NAME} (
 
 _SQLITE_CREATE_METADATA_TABLE = f"""
 CREATE TABLE IF NOT EXISTS {_METADATA_TABLE_NAME} (
-    component TEXT PRIMARY KEY CHECK (typeof(component) = 'text'),
-    version INTEGER NOT NULL CHECK (typeof(version) = 'integer')
+    component TEXT NOT NULL PRIMARY KEY CHECK (typeof(component) = 'text'),
+    version INTEGER NOT NULL CHECK (
+        typeof(version) = 'integer' AND version > 0
+    )
 )
 """
 
@@ -89,7 +94,7 @@ _SQLITE_TABLE_COLUMNS = (
     ("terminal_json", "TEXT", False, 0),
 )
 _SQLITE_METADATA_COLUMNS = (
-    ("component", "TEXT", False, 1),
+    ("component", "TEXT", True, 1),
     ("version", "INTEGER", True, 0),
 )
 
@@ -147,6 +152,8 @@ class _SQLiteStore:
         self._transaction_observer = transaction_observer
 
     def initialize(self) -> None:
+        # initialize() is deliberately unobserved: schema setup is not an
+        # authority transaction and must not count toward observer hooks.
         connection = connect_sqlite(self._path)
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -184,6 +191,9 @@ class _SQLiteStore:
                 version=_SCHEMA_VERSION,
             )
             connection.commit()
+        except RelationalContractMismatchError as exc:
+            connection.rollback()
+            reraise_schema_mismatch(exc)
         except BaseException:
             connection.rollback()
             raise

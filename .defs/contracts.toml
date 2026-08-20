@@ -908,19 +908,7 @@ Exactly-once coordination requires one authoritative state per semantic key. \
 Allowing both lease metadata and a terminal record on one row would make replay \
 and verification ambiguous."""
 date = "2026-08-19"
-check = "uv run pytest -q tests/lease/test_scenarios.py"
-
-[[contracts]]
-title = "Fence monotonicity is enforced at takeover"
-statement = """
-An expired lease takeover increments the fence by one. Takeover at fence 2^63−1 \
-raises rather than wrapping. Terminal publication pins the fence of the lease \
-being closed."""
-rationale = """
-Monotonic fences distinguish lease generations after expiry and prevent silent \
-reuse of stale holders."""
-date = "2026-08-19"
-check = "uv run pytest -q tests/lease/test_scenarios.py"
+check = "uv run pytest -q tests/lease/test_storage_decode.py tests/lease/test_scenarios.py"
 
 [[contracts]]
 title = "Replay policy governs expired lease behavior"
@@ -932,7 +920,19 @@ rationale = """
 Side-effect coordination must make redrive policy explicit so callers cannot \
 accidentally rerun non-idempotent work after an ambiguous expiry."""
 date = "2026-08-19"
-check = "uv run pytest -q tests/lease/test_scenarios.py tests/lease/test_golden.py"
+check = "uv run pytest -q tests/lease/test_golden.py tests/lease/test_scenarios.py::test_no_redrive_recovery_on_expired_lease"
+
+[[contracts]]
+title = "Fence monotonicity is enforced at takeover"
+statement = """
+An expired lease takeover increments the fence by one. Takeover at fence 2^63−1 \
+raises rather than wrapping. Terminal publication pins the fence of the lease \
+being closed."""
+rationale = """
+Monotonic fences distinguish lease generations after expiry and prevent silent \
+reuse of stale holders."""
+date = "2026-08-19"
+check = "uv run pytest -q tests/lease/test_scenarios.py::test_expired_takeover_increments_fence tests/lease/test_scenarios.py::test_fence_ceiling_raises"
 
 [[contracts]]
 title = "Lease authority PostgreSQL connections are independent"
@@ -945,4 +945,4 @@ Lease durability is the coordination mechanism itself. Joining a caller's object
 store transaction would defer or inherit rollback semantics that defeat independent \
 lease publication."""
 date = "2026-08-19"
-check = "uv run pytest -q tests/lease/test_scenarios.py"
+check = "scripts/test-postgres.sh -- uv run pytest -q tests/lease/test_postgres_connection.py"

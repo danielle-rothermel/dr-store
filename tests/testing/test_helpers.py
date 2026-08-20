@@ -50,9 +50,26 @@ def test_temp_sqlite_store_round_trip() -> None:
         assert store.get(reference) == {"value": 1}
 
 
-def test_temp_sqlite_lease_authority_initializes() -> None:
+def test_temp_sqlite_lease_authority_acquire_round_trip() -> None:
+    from datetime import timedelta
+
+    from dr_store.lease import AcquireOutcome
+
     with temp_sqlite_lease_authority() as authority:
         assert isinstance(authority, LeaseAuthority)
+        request = LeaseRequest(
+            semantic_key="testing.lease/key",
+            request_hash="2" * 64,
+            replay_policy=ReplayPolicy.IDEMPOTENT,
+        )
+        acquired = authority.acquire(
+            request,
+            owner_id="owner",
+            attempt_id="attempt",
+            lease_duration=timedelta(seconds=30),
+        )
+        assert acquired.outcome is AcquireOutcome.ACQUIRED
+        assert acquired.lease is not None
 
 
 def test_temp_lease_authority_exposes_fake_clock() -> None:

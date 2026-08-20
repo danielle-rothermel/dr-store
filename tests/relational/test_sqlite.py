@@ -10,11 +10,14 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 from dr_store.relational import (
-    RelationalContractMismatchError,
-    connect_sqlite,
-    create_component_metadata,
     require_persisted_integer,
     require_persisted_text,
+)
+from dr_store.relational.errors import RelationalContractMismatchError
+from dr_store.relational.sqlite import (
+    connect_sqlite,
+    create_component_metadata,
+    raise_owned_table_inventory_mismatch,
     sqlite_owned_tables,
     sqlite_table_columns,
     verify_component_metadata,
@@ -149,5 +152,135 @@ def test_owned_table_inventory(sqlite_path: str) -> None:
         )
         tables = sqlite_owned_tables(connection, (_METADATA_TABLE, "extra"))
         assert tables == {_METADATA_TABLE, "extra"}
+    finally:
+        connection.close()
+
+
+def test_shared_metadata_table_verifies_each_component(
+    sqlite_path: str,
+) -> None:
+    connection = connect_sqlite(sqlite_path)
+    try:
+        connection.execute(_CREATE_METADATA)
+        verify_sqlite_table(
+            connection,
+            table=_METADATA_TABLE,
+            create_sql=_CREATE_METADATA,
+            columns=_METADATA_COLUMNS,
+        )
+        create_component_metadata(
+            connection,
+            metadata_table=_METADATA_TABLE,
+            component="dr_store.a",
+            version=1,
+        )
+        create_component_metadata(
+            connection,
+            metadata_table=_METADATA_TABLE,
+            component="dr_store.b",
+            version=2,
+        )
+        verify_component_metadata(
+            connection,
+            metadata_table=_METADATA_TABLE,
+            component="dr_store.a",
+            version=1,
+        )
+        verify_component_metadata(
+            connection,
+            metadata_table=_METADATA_TABLE,
+            component="dr_store.b",
+            version=2,
+        )
+    finally:
+        connection.close()
+
+
+def test_column_drift_raises_mismatch(sqlite_path: str) -> None:
+    connection = connect_sqlite(sqlite_path)
+    try:
+        connection.execute(
+            f"""
+            CREATE TABLE {_METADATA_TABLE} (
+                component TEXT NOT NULL PRIMARY KEY,
+                version TEXT NOT NULL
+            )
+            """
+        )
+        with pytest.raises(RelationalContractMismatchError) as exc:
+            verify_sqlite_table(
+                connection,
+                table=_METADATA_TABLE,
+                create_sql=_CREATE_METADATA,
+                columns=_METADATA_COLUMNS,
+            )
+        assert exc.value.aspect == "columns"
+    finally:
+        connection.close()
+
+
+def test_table_definition_drift_raises_mismatch(sqlite_path: str) -> None:
+    connection = connect_sqlite(sqlite_path)
+    try:
+        connection.execute(
+            f"""
+            CREATE TABLE {_METADATA_TABLE} (
+                component TEXT NOT NULL PRIMARY KEY,
+                version INTEGER NOT NULL
+            )
+            """
+        )
+        with pytest.raises(RelationalContractMismatchError) as exc:
+            verify_sqlite_table(
+                connection,
+                table=_METADATA_TABLE,
+                create_sql=_CREATE_METADATA,
+                columns=_METADATA_COLUMNS,
+            )
+        assert exc.value.aspect == "table definition"
+    finally:
+        connection.close()
+
+
+def test_missing_table_raises_mismatch(sqlite_path: str) -> None:
+    connection = connect_sqlite(sqlite_path)
+    try:
+        with pytest.raises(RelationalContractMismatchError) as exc:
+            verify_sqlite_table(
+                connection,
+                table=_METADATA_TABLE,
+                create_sql=_CREATE_METADATA,
+                columns=_METADATA_COLUMNS,
+            )
+        assert exc.value.aspect == "columns"
+    finally:
+        connection.close()
+
+
+def test_partial_owned_table_inventory_raises(sqlite_path: str) -> None:
+    connection = connect_sqlite(sqlite_path)
+    try:
+        connection.execute(_CREATE_METADATA)
+        tables = sqlite_owned_tables(connection, (_METADATA_TABLE, "missing"))
+        with pytest.raises(RelationalContractMismatchError) as exc:
+            raise_owned_table_inventory_mismatch(
+                tables=tables,
+                allowed=({_METADATA_TABLE, "missing"},),
+            )
+        assert exc.value.aspect == "owned table inventory"
+    finally:
+        connection.close()
+
+
+def test_create_if_not_exists_normalization(sqlite_path: str) -> None:
+    connection = connect_sqlite(sqlite_path)
+    try:
+        connection.execute(_CREATE_METADATA)
+        verify_sqlite_table(
+            connection,
+            table=_METADATA_TABLE,
+            create_sql=_CREATE_METADATA,
+            columns=_METADATA_COLUMNS,
+        )
     finally:
         connection.close()

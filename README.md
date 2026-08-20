@@ -56,6 +56,82 @@ records, document artifacts, and mutable keyed coordination:
   groups one canonical JSON Manifest with streamed binary Sidecars for one task,
   run, or result publication.
 
+## Sync facade
+
+The [sync facade](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/sync)
+runs async storage on a dedicated event-loop thread and exposes a blocking API:
+
+```python
+from dr_store.sync import open_sqlite, persistent_sqlite, close_persistent
+
+with open_sqlite("/path/store.sqlite3") as store:
+    reference, status = store.put("demo.record", {"value": 1})
+    store.bind("key", reference)
+
+store = persistent_sqlite("/path/store.sqlite3")
+close_persistent("/path/store.sqlite3")
+```
+
+Use `open_sqlite` for scoped sessions and `persistent_sqlite` for process-lifetime
+handles keyed by path. After `close_persistent`, a previously returned handle raises
+`SyncSessionClosedError`. This facade is distinct from PostgreSQL enlisted methods,
+which join a caller-owned SQLAlchemy transaction.
+
+## Lease authority
+
+[Lease authority](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/lease)
+coordinates keyed side effects with acquire, renew, and terminal publication:
+
+```python
+from datetime import timedelta
+
+from dr_store.lease import LeaseAuthority, LeaseRequest, ReplayPolicy
+
+authority = LeaseAuthority.sqlite("/path/lease.sqlite3")
+result = authority.acquire(
+    LeaseRequest(
+        semantic_key="work.item/123",
+        request_hash="a" * 64,
+        replay_policy=ReplayPolicy.IDEMPOTENT,
+    ),
+    owner_id="worker-a",
+    attempt_id="try-1",
+    lease_duration=timedelta(seconds=30),
+)
+```
+
+Memory backends accept an injected clock through `LeaseAuthority.memory(clock=...)`.
+SQLite and PostgreSQL read authority time from the database. PostgreSQL opens a fresh
+raw psycopg connection per authority transaction and never enlists in caller evidence
+transactions. `LeaseMaintenance` terminalizes only through the handle returned from
+a successful acquire.
+
+## Relational infrastructure
+
+[Relational helpers](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/relational)
+pin owned-table contracts, component metadata, and structured mismatch errors for
+typed persistence layers such as lease authority:
+
+```python
+from dr_store.relational.sqlite import (
+    connect_sqlite,
+    create_component_metadata,
+    verify_component_metadata,
+    verify_sqlite_table,
+)
+```
+
+Dialect modules (`dr_store.relational.sqlite`, `dr_store.relational.postgres`) own
+metadata create/verify paths; callers choose the backend explicitly rather than
+through connection-type dispatch.
+
+## Submodule imports
+
+Version 0.2.4 adds `dr_store.sync`, `dr_store.lease`, `dr_store.relational`, and
+`dr_store.testing` as explicit submodule imports. The root `dr_store` package export
+surface is unchanged from pre-0.2.4 releases; import the submodule that owns the API
+you need.
+
 ## Installation
 
 dr-store requires Python 3.12 or newer.

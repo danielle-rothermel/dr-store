@@ -2,29 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from typing import Any, Protocol
+from typing import Any
 
 from dr_store.relational._helpers import (
     PostgresColumnContract,
     PostgresConstraintContract,
-    is_exact_component_metadata,
     is_exact_component_version_row,
 )
 from dr_store.relational.errors import RelationalContractMismatchError
 
 type ConnectFactory = Callable[[str], AbstractContextManager[Any]]
-
-
-class _Cursor(Protocol):
-    rowcount: int
-
-    def execute(
-        self, query: str, params: tuple[Any, ...] | None = None
-    ) -> Any: ...
-
-    def fetchone(self) -> tuple[Any, ...] | None: ...
-
-    def fetchall(self) -> list[tuple[Any, ...]]: ...
 
 
 _POSTGRES_COLUMNS_SQL = """
@@ -340,16 +327,17 @@ def verify_component_metadata(
         cursor.execute(
             f"""
             SELECT component, version FROM {metadata_table}
-            ORDER BY component
-            """
+            WHERE component = %s
+            """,
+            (component,),
         )
-        metadata = cursor.fetchall()
-    if not is_exact_component_metadata(
-        metadata, component=component, version=version
+        row = cursor.fetchone()
+    if not is_exact_component_version_row(
+        row, component=component, version=version
     ):
         raise RelationalContractMismatchError(
             table=metadata_table,
             aspect="schema metadata",
-            expected=[(component, version)],
-            actual=metadata,
+            expected=(component, version),
+            actual=row,
         )

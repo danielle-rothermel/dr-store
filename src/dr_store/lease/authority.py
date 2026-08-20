@@ -201,7 +201,7 @@ class LeaseMaintenance:
                     current,
                     lease_duration=self._lease_duration,
                 )
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001 - record any renewal loss
                 with self._lock:
                     self._loss = exc
                 self._stop_renewer()
