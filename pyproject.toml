@@ -1,7 +1,7 @@
 [project]
 name = "dr-store"
-version = "0.2.3"
-description = "Storage primitives for content-addressed records and document artifacts."
+version = "0.2.4"
+description = "Storage primitives for content-addressed records, document artifacts, and keyed coordination."
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -13,6 +13,8 @@ keywords = [
     "object-store",
     "append-only",
     "immutable",
+    "lease",
+    "coordination",
     "storage",
     "hashing",
 ]
@@ -107,7 +109,18 @@ select = [
 ignore = ["PLR1711", "S101", "TRY003"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["PLR2004", "PLC0415"]
+"tests/**/*.py" = ["PLR2004", "PLC0415", "DTZ001", "SIM117", "S608"]
+"src/dr_store/lease/**/*.py" = [
+    "S608",
+    "TRY301",
+    "TRY300",
+    "TRY004",
+    "PLC0415",
+    "SIM117",
+    "PLR0911",
+    "PLR2004",
+]
+"src/dr_store/relational/**/*.py" = ["S608", "PLR2004"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-decorators = ["dataclasses.dataclass"]

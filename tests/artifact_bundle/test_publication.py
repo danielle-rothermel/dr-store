@@ -360,3 +360,127 @@ def test_concurrent_exact_name_reservation_admits_one_writer(
     assert isinstance(failures[0], BundleAllocationError)
     writers[0].finalize()
     publication.publish(None)
+
+
+def test_concurrent_open_artifact_distinct_names_do_not_block(
+    tmp_path: Path,
+) -> None:
+    publication = _allocate(tmp_path)
+    release_slow = threading.Event()
+    slow_started = threading.Event()
+    original_open = publication_module._open_exclusive_binary
+
+    def gated_open(path: Path) -> object:
+        if path.name == "slow.bin":
+            slow_started.set()
+            assert release_slow.wait(WATCHDOG_SECONDS), (
+                "slow artifact open was not released"
+            )
+        return original_open(path)
+
+    opened = threading.Event()
+    open_error: list[BaseException] = []
+
+    def open_slow() -> None:
+        try:
+            publication.open_artifact("slow.bin")
+        except Exception as exc:  # noqa: BLE001 - collect opener failures
+            open_error.append(exc)
+        finally:
+            release_slow.set()
+
+    def open_fast() -> None:
+        try:
+            writer = publication.open_artifact("fast.bin")
+            writer.finalize()
+        except Exception as exc:  # noqa: BLE001 - collect opener failures
+            open_error.append(exc)
+        finally:
+            opened.set()
+
+    try:
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                publication_module,
+                "_open_exclusive_binary",
+                gated_open,
+            )
+            slow_thread = threading.Thread(target=open_slow)
+            fast_thread = threading.Thread(target=open_fast)
+            slow_thread.start()
+            assert slow_started.wait(timeout=WATCHDOG_SECONDS)
+            fast_thread.start()
+            assert opened.wait(timeout=WATCHDOG_SECONDS)
+            assert not open_error
+            release_slow.set()
+            slow_thread.join(timeout=WATCHDOG_SECONDS)
+            fast_thread.join(timeout=WATCHDOG_SECONDS)
+    finally:
+        release_slow.set()
+
+
+def test_concurrent_open_does_not_return_writer_after_poison(
+    tmp_path: Path,
+) -> None:
+    publication = _allocate(tmp_path)
+    release_slow = threading.Event()
+    slow_started = threading.Event()
+    poisoned = threading.Event()
+    original_open = publication_module._open_exclusive_binary
+
+    def gated_open(path: Path) -> object:
+        if path.name == "slow.bin":
+            slow_started.set()
+            assert release_slow.wait(WATCHDOG_SECONDS), (
+                "slow artifact open was not released"
+            )
+            raise OSError("cannot create slow.bin")
+        if path.name == "fast.bin":
+            assert poisoned.wait(WATCHDOG_SECONDS), (
+                "fast artifact open started before publication poisoned"
+            )
+        return original_open(path)
+
+    slow_errors: list[BaseException] = []
+    fast_errors: list[BaseException] = []
+    fast_writers: list[BundleArtifactWriter] = []
+
+    def open_slow() -> None:
+        try:
+            publication.open_artifact("slow.bin")
+        except Exception as exc:  # noqa: BLE001 - collect opener failures
+            slow_errors.append(exc)
+        finally:
+            poisoned.set()
+            release_slow.set()
+
+    def open_fast() -> None:
+        try:
+            fast_writers.append(publication.open_artifact("fast.bin"))
+        except Exception as exc:  # noqa: BLE001 - collect opener failures
+            fast_errors.append(exc)
+
+    try:
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                publication_module,
+                "_open_exclusive_binary",
+                gated_open,
+            )
+            slow_thread = threading.Thread(target=open_slow)
+            fast_thread = threading.Thread(target=open_fast)
+            slow_thread.start()
+            assert slow_started.wait(timeout=WATCHDOG_SECONDS)
+            fast_thread.start()
+            release_slow.set()
+            slow_thread.join(timeout=WATCHDOG_SECONDS)
+            fast_thread.join(timeout=WATCHDOG_SECONDS)
+    finally:
+        release_slow.set()
+        poisoned.set()
+
+    assert len(slow_errors) == 1
+    assert isinstance(slow_errors[0], BundleAllocationError)
+    assert len(fast_errors) == 1
+    assert isinstance(fast_errors[0], BundleAllocationError)
+    assert not fast_writers

@@ -155,8 +155,8 @@ long-lived resource; no supported path opens and closes it around one record \
 operation. `aclose()` rejects new work, waits for every admitted operation and \
 its cleanup to settle, closes the connection and worker, and leaves the instance \
 terminal; successful close is idempotent. A raw backend storage operation after \
-close raises `RuntimeError`; no new public backend-closed exception is defined. \
-Async context exit performs the same close, while direct construction, lazy \
+close raises `SqliteBackendClosedError`. Async context exit performs the same \
+close, while direct construction, lazy \
 first-use initialization, and context-entry-only initialization are not public \
 paths."""
 rationale = """
@@ -896,3 +896,53 @@ caller detect that its own write lost and reconcile, so it is pinned against a \
 real database rather than inferred from a fake."""
 date = "2026-08-12"
 check = "scripts/test-postgres.sh tests/storage_backends/test_postgresql_backend.py::test_enlisted_batch_conflict_retains_object_inserts tests/object_store/test_enlisted.py"
+
+[[contracts]]
+title = "Leased and terminal rows are mutually exclusive"
+statement = """
+A persisted lease row carries an expiration timestamp and no terminal payload. A \
+persisted terminal row carries terminal JSON and no expiration timestamp. Database \
+CHECK constraints and row decode guards reject any mixed shape."""
+rationale = """
+Exactly-once coordination requires one authoritative state per semantic key. \
+Allowing both lease metadata and a terminal record on one row would make replay \
+and verification ambiguous."""
+date = "2026-08-19"
+check = "uv run pytest -q tests/lease/test_storage_decode.py tests/lease/test_scenarios.py"
+
+[[contracts]]
+title = "Replay policy governs expired lease behavior"
+statement = """
+Idempotent and durable-workflow policies allow a new lease after expiry. The \
+no-redrive policy publishes a deterministic recovery-required terminal instead \
+of granting a new lease when expiry occurs without a terminal outcome."""
+rationale = """
+Side-effect coordination must make redrive policy explicit so callers cannot \
+accidentally rerun non-idempotent work after an ambiguous expiry."""
+date = "2026-08-19"
+check = "uv run pytest -q tests/lease/test_golden.py tests/lease/test_scenarios.py::test_no_redrive_recovery_on_expired_lease"
+
+[[contracts]]
+title = "Fence monotonicity is enforced at takeover"
+statement = """
+An expired lease takeover increments the fence by one. Takeover at fence 2^63−1 \
+raises rather than wrapping. Terminal publication pins the fence of the lease \
+being closed."""
+rationale = """
+Monotonic fences distinguish lease generations after expiry and prevent silent \
+reuse of stale holders."""
+date = "2026-08-19"
+check = "uv run pytest -q tests/lease/test_scenarios.py::test_expired_takeover_increments_fence tests/lease/test_scenarios.py::test_fence_ceiling_raises"
+
+[[contracts]]
+title = "Lease authority PostgreSQL connections are independent"
+statement = """
+``LeaseAuthority.postgresql`` accepts a DSN and opens raw psycopg connections per \
+transaction. It never enlists in a caller-owned evidence transaction. Each \
+authority commit is independently authoritative for exactly-once semantics."""
+rationale = """
+Lease durability is the coordination mechanism itself. Joining a caller's object \
+store transaction would defer or inherit rollback semantics that defeat independent \
+lease publication."""
+date = "2026-08-19"
+check = "scripts/test-postgres.sh -- uv run pytest -q tests/lease/test_postgres_connection.py"

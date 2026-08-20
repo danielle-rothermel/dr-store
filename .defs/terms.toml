@@ -187,6 +187,7 @@ exported_symbols = [
   "Backend",
   "MemoryBackend",
   "SqliteBackend",
+  "SqliteBackendClosedError",
   "PutOutcome",
   "BindOutcome",
 ]
@@ -494,3 +495,80 @@ invalid requested schemas, cancellation, and operational backend faults remain \
 visible."""
 categories = ["record caching"]
 part_of = ["record cache"]
+
+[[terms]]
+name = "lease authority"
+definition = """
+Keyed lease, renew, and terminal coordination for exactly-once side effects across \
+memory, SQLite, and PostgreSQL backends."""
+categories = ["lease authority"]
+submodule_exports = ["dr_store.lease.LeaseAuthority"]
+
+[[terms]]
+name = "lease"
+definition = """
+A time-bounded exclusive hold on one semantic key that authorizes one owner and \
+one attempt identity to publish exactly one terminal outcome before expiry."""
+categories = ["lease authority"]
+submodule_exports = ["dr_store.lease.Lease"]
+part_of = ["lease authority"]
+
+[[terms]]
+name = "terminal"
+definition = """
+The immutable published outcome for one leased semantic key: succeeded with a \
+result reference, failed with a result reference and structured failure, or \
+recovery-required with a structured failure when redrive is forbidden."""
+categories = ["lease authority"]
+submodule_exports = [
+    "dr_store.lease.Terminal",
+    "dr_store.lease.TerminalOutcome",
+    "dr_store.lease.TerminalFailure",
+]
+part_of = ["lease authority"]
+
+[[terms]]
+name = "fence"
+definition = """
+A monotonic positive signed 64-bit integer associated with one lease generation. \
+Takeover after expiry increments the fence; terminal publication pins the fence \
+of the authoritative lease."""
+categories = ["lease authority"]
+part_of = ["lease authority"]
+
+[[terms]]
+name = "replay policy"
+definition = """
+The caller-declared rule for how an expired or replayed lease may be redriven: \
+idempotent replay, durable workflow redrive, or no redrive."""
+categories = ["lease authority"]
+submodule_exports = ["dr_store.lease.ReplayPolicy"]
+part_of = ["lease authority"]
+
+[[terms]]
+name = "semantic key"
+definition = """
+A non-empty opaque text key naming one leased coordination slot. It contains no \
+NUL bytes or unpaired surrogate code points and is bounded in length; storage \
+does not parse its domain meaning."""
+categories = ["lease authority"]
+submodule_exports = ["dr_store.lease.LeaseRequest"]
+part_of = ["lease authority"]
+
+[[terms]]
+name = "owner identity"
+definition = """
+A non-empty bounded text label naming the worker or process that holds a lease. \
+It contains no NUL bytes or unpaired surrogate code points. Together with \
+attempt identity it distinguishes concurrent holders of the same semantic key."""
+categories = ["lease authority"]
+part_of = ["lease authority"]
+
+[[terms]]
+name = "attempt identity"
+definition = """
+A non-empty bounded text label naming one execution try within an owner. It \
+contains no NUL bytes or unpaired surrogate code points. Re-acquire with the \
+same owner and attempt returns the existing unexpired lease."""
+categories = ["lease authority"]
+part_of = ["lease authority"]

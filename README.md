@@ -9,8 +9,8 @@
 [Changelog](https://github.com/danielle-rothermel/dr-store/blob/main/CHANGELOG.md) ·
 [dr-serialize](https://github.com/danielle-rothermel/dr-serialize)
 
-dr-store provides domain-neutral storage primitives for immutable records and
-document artifacts:
+dr-store provides domain-neutral storage primitives for immutable evidence
+records, document artifacts, and mutable keyed coordination:
 
 - **[Content addressing](https://github.com/danielle-rothermel/dr-store/blob/main/src/dr_store/content_addressing.py)**
   identifies complete records by their declared schemas and SHA-256 hashes of
@@ -24,6 +24,21 @@ document artifacts:
   `MemoryBackend` is process-local; `SqliteBackend` persists committed data for
   cross-process use; `PostgresBackend` shares committed data through a
   caller-owned SQLAlchemy engine opened synchronously or asynchronously.
+- **[Sync facade](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/sync)**
+  exposes a blocking `ObjectStore` session API for tests, CLI tools, and other
+  synchronous callers. A dedicated event-loop thread runs async backend
+  operations via `run_coroutine_threadsafe`. This is distinct from the
+  PostgreSQL **enlisted** surface, which joins a caller-owned SQLAlchemy
+  transaction for evidence checkpoint integration.
+- **[Lease authority](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/lease)**
+  implements keyed lease, renew, and terminal semantics for exactly-once side
+  effects. Memory, SQLite, and PostgreSQL backends share one contract;
+  authority time comes from an injected clock (memory) or the database clock
+  (persistent backends).
+- **[Relational infrastructure](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/relational)**
+  supplies shared schema metadata, contract introspection, structured mismatch
+  errors, and transaction observer hooks for typed-row persistence layers such
+  as the lease authority.
 - **[Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)**
   memoizes records under opaque caller-owned keys. Reads return typed hits;
   absent, missing, or unverifiable stored values are misses, while invalid
@@ -40,6 +55,112 @@ document artifacts:
 - **[Document Directory](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/document_directory)**
   groups one canonical JSON Manifest with streamed binary Sidecars for one task,
   run, or result publication.
+
+## Sync facade
+
+The [sync facade](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/sync)
+runs async storage on a dedicated event-loop thread and exposes a blocking API:
+
+```python
+from dr_store.sync import open_sqlite, persistent_sqlite, close_persistent
+
+with open_sqlite("/path/store.sqlite3") as store:
+    reference, status = store.put("demo.record", {"value": 1})
+    store.bind("key", reference)
+
+store = persistent_sqlite("/path/store.sqlite3")
+reference, _ = store.put("demo.record", {"value": 1})
+# ... later, at process shutdown:
+close_persistent("/path/store.sqlite3")
+```
+
+Use `open_sqlite` for scoped sessions and `persistent_sqlite` for process-lifetime
+handles keyed by path. Close waits for in-flight operations to finish before
+stopping the event-loop thread; quiesce callers first if you need prompt teardown.
+After `close_persistent` or after an `open_sqlite` context
+exits, a previously returned handle raises `SyncSessionClosedError`. Use
+`close_all_persistent()` at process shutdown to close every persistent session;
+one close failure re-raises that exception, multiple failures raise
+`ExceptionGroup`. This facade is
+distinct from PostgreSQL enlisted methods,
+which join a caller-owned SQLAlchemy transaction.
+
+## Lease authority
+
+[Lease authority](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/lease)
+coordinates keyed side effects with acquire, renew, and terminal publication:
+
+```python
+from datetime import timedelta
+
+from dr_store.content_addressing import ObjectReference
+from dr_store.lease import LeaseAuthority, LeaseRequest, ReplayPolicy
+
+authority = LeaseAuthority.sqlite("/path/lease.sqlite3")
+result = authority.acquire(
+    LeaseRequest(
+        semantic_key="work.item/123",
+        request_hash="a" * 64,
+        replay_policy=ReplayPolicy.IDEMPOTENT,
+    ),
+    owner_id="worker-a",
+    attempt_id="try-1",
+    lease_duration=timedelta(seconds=30),
+)
+if result.lease is not None:
+    with authority.maintain(
+        result.lease,
+        lease_duration=timedelta(seconds=30),
+    ) as maintenance:
+        maintenance.succeed(
+            result_ref=ObjectReference(
+                schema="demo.record",
+                content_hash="b" * 64,
+            ),
+        )
+```
+
+Memory backends accept an injected clock through `LeaseAuthority.memory(clock=...)`.
+SQLite and PostgreSQL read authority time from the database. PostgreSQL opens a fresh
+raw psycopg connection per authority transaction and never enlists in caller evidence
+transactions. `LeaseAuthority.maintain(lease, lease_duration=...)` returns a
+`LeaseMaintenance` context manager that renews at `duration/3` on a background
+thread; terminalize through `maintenance.succeed(...)` / `maintenance.fail(...)`,
+which stop the renewer before publishing. A clean context exit requires prior
+terminal publication; renewal loss surfaces via `check()`, the `lease` property, or
+context exit. `LeaseAuthority.succeed` / `fail` remain the direct path for callers
+not using maintenance. If terminal publication fails with a transient authority
+error, the renewer may restart so the caller can retry while the context remains
+open. A `LeaseMaintenance` handle is single-threaded: `__enter__`, `succeed`, `fail`,
+`check`, and `__exit__` must all run on one thread; only the internal renewal thread
+runs concurrently.
+
+## Relational infrastructure
+
+[Relational helpers](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/relational)
+pin owned-table contracts, component metadata, and structured mismatch errors for
+typed persistence layers such as lease authority:
+
+```python
+from dr_store.relational.sqlite import (
+    connect_sqlite,
+    create_component_metadata,
+    verify_component_metadata,
+    verify_sqlite_table,
+)
+```
+
+Dialect modules (`dr_store.relational.sqlite`, `dr_store.relational.postgres`) own
+metadata create/verify paths; callers choose the backend explicitly rather than
+through connection-type dispatch. Metadata verification assumes `component` is
+the metadata table primary key.
+
+## Submodule imports
+
+Version 0.2.4 adds `dr_store.sync`, `dr_store.lease`, `dr_store.relational`, and
+`dr_store.testing` as explicit submodule imports. The root `dr_store` package export
+surface is unchanged from pre-0.2.4 releases; import the submodule that owns the API
+you need.
 
 ## Installation
 

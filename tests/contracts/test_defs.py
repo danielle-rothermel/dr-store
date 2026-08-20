@@ -147,3 +147,29 @@ def test_exported_symbols_are_unique_and_exactly_public() -> None:
         f"Unmapped: {sorted(public_symbols - mapped_symbols)}. "
         f"Non-public: {sorted(mapped_symbols - public_symbols)}."
     )
+
+
+def test_submodule_exports_resolve() -> None:
+    import importlib
+
+    terms = _load_toml("terms.toml")["terms"]
+    symbol_terms: dict[str, list[str]] = defaultdict(list)
+    for term in terms:
+        for symbol in term.get("submodule_exports", []):
+            symbol_terms[symbol].append(term["name"])
+
+    duplicates = {
+        symbol: names
+        for symbol, names in symbol_terms.items()
+        if len(names) > 1
+    }
+    assert not duplicates, (
+        f"Submodule exports mapped more than once: {duplicates}"
+    )
+
+    for qualified in symbol_terms:
+        module_name, _, attribute = qualified.rpartition(".")
+        module = importlib.import_module(module_name)
+        assert hasattr(module, attribute), (
+            f"{qualified} is not exported from {module_name}"
+        )

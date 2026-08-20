@@ -6,6 +6,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-19
+
+### Added
+
+- Added `dr_store.sync` with `BlockingObjectStore`, SQLite session openers, and
+  persistent-session lifecycle helpers for synchronous callers over the async
+  `ObjectStore`.
+- Added `dr_store.relational` shared schema metadata, SQLite and PostgreSQL
+  contract introspection, structured `RelationalContractMismatchError`, decode
+  guards, and transaction observer hooks.
+- Added `dr_store.lease` with `LeaseAuthority`, `LeaseMaintenance`, memory,
+  SQLite, and PostgreSQL backends, and fresh contract tests for acquire,
+  renew, terminalize, and maintenance semantics.
+- Added `dr_store.testing` helpers (`FakeClock`, temporary store and lease
+  authority fixtures) for consumer unit tests.
+- Added `SqliteBackendClosedError` as a root export (subclass of `StoreError`;
+  sibling of `SqliteRecordCacheClosedError`).
+
+### Changed
+
+- README and `.defs` now describe immutable evidence together with mutable
+  keyed coordination primitives.
+- Post-close `SqliteBackend` operations, and `async with` entry on a closed
+  backend, now raise `SqliteBackendClosedError`; callers catching
+  `RuntimeError` for this case must catch the new type (or `StoreError`).
+- `SqliteRecordCache.aclose` is idempotent when already `CLOSED`; a close after
+  a previously failed close raises `SqliteRecordCacheCloseError` instead of
+  silently succeeding.
+- `ArtifactBundlePublication` creates artifact files outside the publication
+  lock so distinct artifact names no longer serialize on file I/O; a post-open
+  re-check closes the handle, releases the name reservation, and re-raises if
+  the publication was poisoned during the open.
+- `SqliteBackend` close path awaits connection-close settling cancellation-safely
+  (`_await_settled`) instead of a bare future read.
+- Sync facade post-close use raises `SyncSessionClosedError` from any handle —
+  scoped (`open_sqlite`) or persistent (`persistent_sqlite`).
+- `LeaseMaintenance` may restart its renewer after a transient terminalization
+  failure so callers can retry `succeed` / `fail` while the context remains
+  open; this is a deliberate extension beyond the whetstone original.
+- `close_all_persistent` closes every registered session; one failure re-raises
+  that exception, multiple failures raise `ExceptionGroup`.
+
 ## [0.2.3] - 2026-08-12
 
 ### Changed

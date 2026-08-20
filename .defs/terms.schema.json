@@ -45,6 +45,10 @@
           "$ref": "#/$defs/nonEmptyUniqueStrings",
           "description": "Public symbols, script entrypoints, or commands that implement the term."
         },
+        "submodule_exports": {
+          "$ref": "#/$defs/nonEmptyUniqueStrings",
+          "description": "Public symbols from a submodule that implement the term."
+        },
         "categories": {
           "$ref": "#/$defs/nonEmptyUniqueStrings",
           "description": "Non-exclusive subject areas used to group related terms."
