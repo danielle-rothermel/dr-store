@@ -102,6 +102,10 @@ class BindingConflictError(StoreError):
         )
 
 
+class SqliteBackendClosedError(StoreError):
+    """Raised when an operation is requested after close begins."""
+
+
 class SqliteRecordCacheClosedError(StoreError):
     """Raised when an operation is requested after closing begins."""
 

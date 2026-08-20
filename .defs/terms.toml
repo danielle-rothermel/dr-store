@@ -187,6 +187,7 @@ exported_symbols = [
   "Backend",
   "MemoryBackend",
   "SqliteBackend",
+  "SqliteBackendClosedError",
   "PutOutcome",
   "BindOutcome",
 ]

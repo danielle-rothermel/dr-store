@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import tempfile
-from typing import TYPE_CHECKING
+import threading
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from dr_store import PutStatus
 from dr_store.sync import (
+    BlockingObjectStore,
     SyncSessionClosedError,
     close_all_persistent,
     close_persistent,
@@ -16,11 +19,13 @@ from dr_store.sync import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Coroutine, Iterator
 
     from dr_serialize import Jsonable
 
     from dr_store.content_addressing import ObjectReference
+
+WATCHDOG_SECONDS = 15
 
 
 @pytest.fixture
@@ -34,15 +39,9 @@ def sqlite_path() -> Iterator[str]:
 
 @pytest.fixture(autouse=True)
 def _cleanup_persistent_registry() -> Iterator[None]:
-    import time
-
     yield
     close_all_persistent()
-    end = time.monotonic() + 5
-    while time.monotonic() < end:
-        if _loop_thread_count() == 0:
-            break
-        time.sleep(0.01)
+    assert _loop_thread_count() == 0
 
 
 def test_put_get_round_trip(sqlite_path: str) -> None:
@@ -206,7 +205,7 @@ def test_close_does_not_block_unrelated_paths() -> None:
 
     async def slow_aclose(self: SqliteBackend) -> None:
         close_started.set()
-        release_close.wait(timeout=5)
+        await asyncio.to_thread(release_close.wait, WATCHDOG_SECONDS)
         await original_aclose(self)
 
     opened = threading.Event()
@@ -230,75 +229,29 @@ def test_close_does_not_block_unrelated_paths() -> None:
             closer = threading.Thread(target=close_slow_path)
             opener = threading.Thread(target=open_fast_path)
             closer.start()
-            assert close_started.wait(timeout=5)
+            assert close_started.wait(timeout=WATCHDOG_SECONDS)
             opener.start()
-            assert opened.wait(timeout=5)
+            assert opened.wait(timeout=WATCHDOG_SECONDS)
             assert not opened_error
             release_close.set()
-            closer.join(timeout=5)
-            opener.join(timeout=5)
+            closer.join(timeout=WATCHDOG_SECONDS)
+            opener.join(timeout=WATCHDOG_SECONDS)
     finally:
         release_close.set()
         close_persistent(slow_path)
         close_persistent(fast_path)
 
 
-def test_close_during_first_open_does_not_hang() -> None:
-    import threading
-    from unittest.mock import patch
-
-    from dr_store import SqliteBackend
-
-    with tempfile.NamedTemporaryFile(suffix=".sqlite3") as handle:
-        path = handle.name
-
-    release_open = threading.Event()
-    open_started = threading.Event()
-    original_open = SqliteBackend.open
-
-    async def slow_open(
-        open_path: str,
-        *,
-        busy_timeout_ms: int = 30_000,
-    ) -> SqliteBackend:
-        open_started.set()
-        release_open.wait(timeout=5)
-        return await original_open(open_path, busy_timeout_ms=busy_timeout_ms)
-
-    opener_error: list[BaseException] = []
-
-    def open_path() -> None:
-        try:
-            persistent_sqlite(path)
-        except Exception as exc:  # noqa: BLE001 - collect opener failures
-            opener_error.append(exc)
-        finally:
-            release_open.set()
-
-    try:
-        with patch.object(SqliteBackend, "open", slow_open):
-            opener = threading.Thread(target=open_path)
-            closer = threading.Thread(target=lambda: close_persistent(path))
-            opener.start()
-            assert open_started.wait(timeout=5)
-            closer.start()
-            opener.join(timeout=5)
-            closer.join(timeout=5)
-        store = persistent_sqlite(path)
-        store.put("demo.record", {"value": 1})
-    finally:
-        release_open.set()
-        close_persistent(path)
-
-
-def test_use_during_close_raises_not_hang(sqlite_path: str) -> None:
-    import threading
+def test_close_waits_for_in_flight_put(sqlite_path: str) -> None:
     from unittest.mock import patch
 
     from dr_store import ObjectStore
 
-    release_put = threading.Event()
+    gate = threading.Event()
     put_started = threading.Event()
+    close_entered = threading.Event()
+    put_done = threading.Event()
+    close_done = threading.Event()
     original_put = ObjectStore.put
 
     async def slow_put(
@@ -307,33 +260,187 @@ def test_use_during_close_raises_not_hang(sqlite_path: str) -> None:
         record: Jsonable,
     ) -> object:
         put_started.set()
-        release_put.wait(timeout=5)
+        await asyncio.to_thread(gate.wait, WATCHDOG_SECONDS)
         return await original_put(self, schema, record)
+
+    store = persistent_sqlite(sqlite_path)
+    reference_holder: list[ObjectReference] = []
+    put_status_holder: list[PutStatus] = []
+    put_error: list[BaseException] = []
+
+    def run_put() -> None:
+        try:
+            reference, status = store.put("demo.record", {"value": 1})
+            reference_holder.append(reference)
+            put_status_holder.append(status)
+        except Exception as exc:  # noqa: BLE001 - collect caller failures
+            put_error.append(exc)
+        finally:
+            put_done.set()
+
+    def run_close() -> None:
+        close_entered.set()
+        close_persistent(sqlite_path)
+        close_done.set()
+
+    try:
+        with patch.object(ObjectStore, "put", slow_put):
+            worker = threading.Thread(target=run_put)
+            worker.start()
+            assert put_started.wait(timeout=WATCHDOG_SECONDS)
+            closer = threading.Thread(target=run_close)
+            closer.start()
+            assert close_entered.wait(timeout=WATCHDOG_SECONDS)
+            assert not put_done.is_set()
+            gate.set()
+            worker.join(timeout=WATCHDOG_SECONDS)
+            closer.join(timeout=WATCHDOG_SECONDS)
+        assert not put_error
+        assert put_status_holder == [PutStatus.STORED]
+        assert close_done.is_set()
+        with pytest.raises(SyncSessionClosedError):
+            store.get(reference_holder[0])
+    finally:
+        gate.set()
+        close_persistent(sqlite_path)
+
+
+def test_straggler_register_after_close_raises(sqlite_path: str) -> None:  # noqa: PLR0915
+    from unittest.mock import patch
+
+    from dr_store import ObjectStore
+    from dr_store.sync import blocking as blocking_module
+
+    register_gate = threading.Event()
+    close_ready = threading.Event()
+    original_put = ObjectStore.put
+
+    async def noop_put(
+        self: ObjectStore,
+        schema: str,
+        record: Jsonable,
+    ) -> object:
+        return await original_put(self, schema, record)
+
+    def gated_run(
+        self: blocking_module.BlockingObjectStore,
+        factory: Callable[[], Coroutine[Any, Any, object]],
+    ) -> object:
+        self._ensure_open()
+        future = asyncio.run_coroutine_threadsafe(factory(), self._loop)
+        close_ready.set()
+        assert register_gate.wait(timeout=WATCHDOG_SECONDS)
+        session = self._session
+        if session is not None:
+            with session._futures_lock:
+                if session.closed:
+                    future.cancel()
+                    raise blocking_module.SyncSessionClosedError(
+                        blocking_module._SESSION_CLOSED_MESSAGE
+                    )
+                session._futures.add(future)
+        try:
+            return future.result()
+        except concurrent.futures.CancelledError as exc:
+            if session is not None and session.closed:
+                raise blocking_module.SyncSessionClosedError(
+                    blocking_module._SESSION_CLOSED_MESSAGE
+                ) from exc
+            raise
+        finally:
+            if session is not None:
+                with session._futures_lock:
+                    session._futures.discard(future)
 
     put_error: list[BaseException] = []
 
     def run_put() -> None:
         try:
-            store = persistent_sqlite(sqlite_path)
-            store.put("demo.record", {"value": 1})
+            persistent_sqlite(sqlite_path).put("demo.record", {"value": 1})
         except Exception as exc:  # noqa: BLE001 - collect caller failures
             put_error.append(exc)
-        finally:
-            release_put.set()
+
+    def run_close() -> None:
+        assert close_ready.wait(timeout=WATCHDOG_SECONDS)
+        close_persistent(sqlite_path)
+        register_gate.set()
 
     try:
         persistent_sqlite(sqlite_path)
-        with patch.object(ObjectStore, "put", slow_put):
+        with (
+            patch.object(ObjectStore, "put", noop_put),
+            patch.object(
+                blocking_module.BlockingObjectStore, "_run", gated_run
+            ),
+        ):
             worker = threading.Thread(target=run_put)
+            closer = threading.Thread(target=run_close)
             worker.start()
-            assert put_started.wait(timeout=5)
-            close_persistent(sqlite_path)
-            worker.join(timeout=10)
+            closer.start()
+            worker.join(timeout=WATCHDOG_SECONDS)
+            closer.join(timeout=WATCHDOG_SECONDS)
         assert len(put_error) == 1
         assert isinstance(put_error[0], SyncSessionClosedError)
     finally:
-        release_put.set()
+        register_gate.set()
         close_persistent(sqlite_path)
+
+
+def test_open_close_race_allowed_outcomes() -> None:
+    from unittest.mock import patch
+
+    from dr_store import SqliteBackend
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite3") as handle:
+        path = handle.name
+
+    open_started = threading.Event()
+    release_open = threading.Event()
+    closer_done = threading.Event()
+    original_open = SqliteBackend.open
+    opener_store: list[BlockingObjectStore] = []
+    opener_error: list[BaseException] = []
+
+    async def slow_open(
+        open_path: str,
+        *,
+        busy_timeout_ms: int = 30_000,
+    ) -> SqliteBackend:
+        open_started.set()
+        await asyncio.to_thread(release_open.wait, WATCHDOG_SECONDS)
+        return await original_open(open_path, busy_timeout_ms=busy_timeout_ms)
+
+    def open_path() -> None:
+        try:
+            opener_store.append(persistent_sqlite(path))
+        except Exception as exc:  # noqa: BLE001 - collect opener failures
+            opener_error.append(exc)
+
+    def close_path() -> None:
+        assert open_started.wait(timeout=WATCHDOG_SECONDS)
+        close_persistent(path)
+        closer_done.set()
+
+    try:
+        with patch.object(SqliteBackend, "open", slow_open):
+            opener = threading.Thread(target=open_path)
+            closer = threading.Thread(target=close_path)
+            opener.start()
+            closer.start()
+            release_open.set()
+            opener.join(timeout=WATCHDOG_SECONDS)
+            closer.join(timeout=WATCHDOG_SECONDS)
+        assert closer_done.is_set()
+        if opener_store:
+            store = opener_store[0]
+            with pytest.raises(SyncSessionClosedError):
+                store.put("demo.record", {"value": 1})
+        else:
+            assert len(opener_error) == 1
+            assert isinstance(opener_error[0], SyncSessionClosedError)
+    finally:
+        release_open.set()
+        close_persistent(path)
 
 
 def test_concurrent_open_failure_waiter_gets_open_error() -> None:
@@ -357,7 +464,7 @@ def test_concurrent_open_failure_waiter_gets_open_error() -> None:
         raise OSError("cannot open sqlite backend")
 
     def open_path() -> None:
-        start.wait(timeout=5)
+        start.wait(timeout=WATCHDOG_SECONDS)
         try:
             persistent_sqlite(path)
         except Exception as exc:  # noqa: BLE001 - collect opener failures
@@ -372,9 +479,9 @@ def test_concurrent_open_failure_waiter_gets_open_error() -> None:
             threads = [threading.Thread(target=open_path) for _ in range(2)]
             for thread in threads:
                 thread.start()
-            start.wait(timeout=5)
+            start.wait(timeout=WATCHDOG_SECONDS)
             for thread in threads:
-                thread.join(timeout=5)
+                thread.join(timeout=WATCHDOG_SECONDS)
         assert len(errors) == 2
         assert all(
             isinstance(error, OSError)

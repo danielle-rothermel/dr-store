@@ -155,8 +155,8 @@ long-lived resource; no supported path opens and closes it around one record \
 operation. `aclose()` rejects new work, waits for every admitted operation and \
 its cleanup to settle, closes the connection and worker, and leaves the instance \
 terminal; successful close is idempotent. A raw backend storage operation after \
-close raises `RuntimeError`; no new public backend-closed exception is defined. \
-Async context exit performs the same close, while direct construction, lazy \
+close raises `SqliteBackendClosedError`. Async context exit performs the same \
+close, while direct construction, lazy \
 first-use initialization, and context-entry-only initialization are not public \
 paths."""
 rationale = """

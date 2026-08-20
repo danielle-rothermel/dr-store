@@ -38,7 +38,6 @@ class SqliteRecordCache(RecordCache):
     _loop: asyncio.AbstractEventLoop
     _state: _Lifecycle
     _operation_tasks: set[asyncio.Task[object]]
-    _admission_lock: asyncio.Lock
     _drained: asyncio.Event
     _close_task: asyncio.Task[None] | None
 
@@ -69,7 +68,6 @@ class SqliteRecordCache(RecordCache):
         self._loop = asyncio.get_running_loop()
         self._state = _Lifecycle.OPEN
         self._operation_tasks = set()
-        self._admission_lock = asyncio.Lock()
         self._drained = asyncio.Event()
         self._drained.set()
         self._close_task = None
@@ -84,16 +82,15 @@ class SqliteRecordCache(RecordCache):
 
     @asynccontextmanager
     async def _admit_operation(self) -> AsyncIterator[None]:
-        async with self._admission_lock:
-            self._check_loop()
-            if self._state is not _Lifecycle.OPEN:
-                raise SqliteRecordCacheClosedError(
-                    "SQLite record cache is closed"
-                )
-            task = asyncio.current_task()
-            assert task is not None
-            self._operation_tasks.add(task)
-            self._drained.clear()
+        # No await point may be introduced between the lifecycle check and the
+        # mutation; atomicity relies on it.
+        self._check_loop()
+        if self._state is not _Lifecycle.OPEN:
+            raise SqliteRecordCacheClosedError("SQLite record cache is closed")
+        task = asyncio.current_task()
+        assert task is not None
+        self._operation_tasks.add(task)
+        self._drained.clear()
         try:
             yield
         finally:
@@ -140,17 +137,22 @@ class SqliteRecordCache(RecordCache):
                 "cannot close SQLite record cache from an active operation"
             )
         if self._close_task is None:
-            async with self._admission_lock:
-                if self._state is _Lifecycle.CLOSED:
-                    return
-                if self._state is _Lifecycle.OPEN:
-                    self._state = _Lifecycle.CLOSING
-                elif self._state is not _Lifecycle.CLOSING:
-                    return
-                if self._close_task is None:
-                    self._close_task = self._loop.create_task(
-                        self._close_resources()
-                    )
+            # No await point may be introduced between the lifecycle check and
+            # the mutation; atomicity relies on it.
+            if self._state is _Lifecycle.CLOSED:
+                return
+            if self._state is _Lifecycle.OPEN:
+                self._state = _Lifecycle.CLOSING
+            elif self._state is _Lifecycle.CLOSING:
+                pass
+            else:
+                raise SqliteRecordCacheCloseError(
+                    "SQLite record cache close previously failed"
+                )
+            if self._close_task is None:
+                self._close_task = self._loop.create_task(
+                    self._close_resources()
+                )
         await _await_settled(self._close_task)
 
     async def _close_resources(self) -> None:

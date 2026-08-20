@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from dr_store import SqliteBackend
+from dr_store import SqliteBackend, SqliteBackendClosedError
 from dr_store.storage_backends import sqlite as sqlite_module
 from dr_store.storage_backends.sqlite import MINIMUM_SQLITE_VERSION
 
@@ -170,7 +170,7 @@ async def test_rows_persist_after_terminal_close_and_reopen(
     await first.aclose()
     await first.aclose()
 
-    with pytest.raises(RuntimeError, match="closed"):
+    with pytest.raises(SqliteBackendClosedError, match="closed"):
         await first.get_binding(key="\0")
 
     reopened = await SqliteBackend.open(path)
@@ -267,7 +267,7 @@ async def test_close_waits_for_admitted_work_and_rejects_new_work(
     await _thread_event(started)
     closing = asyncio.create_task(backend.aclose())
     await asyncio.wait_for(close_started.wait(), WATCHDOG_SECONDS)
-    with pytest.raises(RuntimeError, match="closed"):
+    with pytest.raises(SqliteBackendClosedError, match="closed"):
         await backend.get_binding(key="new")
     release.set()
     assert await operation is None
@@ -283,6 +283,34 @@ async def test_cross_loop_use_fails_visibly(tmp_path: Path) -> None:
         except BaseException as error:  # noqa: BLE001 - inspect boundary.
             return error
         raise AssertionError("cross-loop operation unexpectedly succeeded")
+
+    error = await asyncio.to_thread(other_loop)
+    assert isinstance(error, RuntimeError)
+    assert "event loop" in str(error)
+    await backend.aclose()
+
+
+async def test_async_with_closed_backend_raises(tmp_path: Path) -> None:
+    backend = await SqliteBackend.open(tmp_path / "store.db")
+    await backend.aclose()
+    with pytest.raises(SqliteBackendClosedError, match="closed"):
+        async with backend:
+            pass
+
+
+async def test_cross_loop_async_with_raises(tmp_path: Path) -> None:
+    backend = await SqliteBackend.open(tmp_path / "store.db")
+
+    def other_loop() -> BaseException:
+        async def enter() -> None:
+            async with backend:
+                pass
+
+        try:
+            asyncio.run(enter())
+        except BaseException as error:  # noqa: BLE001 - inspect boundary.
+            return error
+        raise AssertionError("cross-loop async with unexpectedly succeeded")
 
     error = await asyncio.to_thread(other_loop)
     assert isinstance(error, RuntimeError)

@@ -1,8 +1,21 @@
+"""Blocking sync facade over async ``ObjectStore``.
+
+``open_sqlite`` and ``persistent_sqlite`` own a dedicated event-loop thread.
+Close waits for every in-flight operation to settle before stopping the loop;
+callers needing prompt teardown should quiesce first. Post-close calls, and
+calls racing close after registration, raise ``SyncSessionClosedError`` rather
+than hanging. Cancel-on-close remains a future upgrade path if fast teardown
+is ever needed.
+"""
+
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import logging
 import threading
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from dr_store import (
@@ -11,6 +24,7 @@ from dr_store import (
     ObjectStore,
     PutStatus,
     SqliteBackend,
+    SqliteBackendClosedError,
 )
 
 if TYPE_CHECKING:
@@ -30,10 +44,11 @@ __all__ = [
 ]
 
 _T = TypeVar("_T")
-_RESULT_TIMEOUT_S = 5
+_LOGGER = logging.getLogger(__name__)
 _SESSION_CLOSED_MESSAGE = (
     "persistent SQLite session was closed; open a new handle"
 )
+_THREAD_JOIN_WATCHDOG_S = 5
 _sessions_lock = threading.Lock()
 
 
@@ -41,17 +56,17 @@ class SyncSessionClosedError(RuntimeError):
     """Raised when a persistent blocking handle is used after close."""
 
 
-def _blocking_result(
-    future: Any,
-    *,
-    session: _StoreSession | None = None,
-) -> _T:
-    try:
-        return future.result(timeout=_RESULT_TIMEOUT_S)
-    except TimeoutError:
-        if session is not None and session.closed:
-            raise SyncSessionClosedError(_SESSION_CLOSED_MESSAGE) from None
-        raise
+@dataclass(frozen=True, slots=True)
+class _OpenFailure:
+    exc_type: type[BaseException]
+    args: tuple[object, ...]
+
+    @classmethod
+    def capture(cls, exc: BaseException) -> _OpenFailure:
+        return cls(exc_type=type(exc), args=exc.args)
+
+    def reraise(self) -> None:
+        raise self.exc_type(*self.args)
 
 
 class BlockingObjectStore:
@@ -75,16 +90,27 @@ class BlockingObjectStore:
     def _run(self, factory: Callable[[], Coroutine[Any, Any, _T]]) -> _T:
         self._ensure_open()
         future = asyncio.run_coroutine_threadsafe(factory(), self._loop)
+        session = self._session
+        if session is not None:
+            with session._futures_lock:
+                if session.closed:
+                    future.cancel()
+                    raise SyncSessionClosedError(_SESSION_CLOSED_MESSAGE)
+                session._futures.add(future)
         try:
-            return _blocking_result(future, session=self._session)
-        except RuntimeError as exc:
-            if (
-                self._session is not None
-                and self._session.closed
-                and str(exc) == "SQLite backend is closed"
-            ):
-                raise SyncSessionClosedError(_SESSION_CLOSED_MESSAGE) from None
+            return future.result()
+        except concurrent.futures.CancelledError as exc:
+            if session is not None and session.closed:
+                raise SyncSessionClosedError(_SESSION_CLOSED_MESSAGE) from exc
             raise
+        except SqliteBackendClosedError as exc:
+            if session is not None and session.closed:
+                raise SyncSessionClosedError(_SESSION_CLOSED_MESSAGE) from exc
+            raise
+        finally:
+            if session is not None:
+                with session._futures_lock:
+                    session._futures.discard(future)
 
     def put(
         self, schema: str, record: Jsonable
@@ -108,6 +134,8 @@ class _StoreSession:
     def __init__(self, path: str) -> None:
         self._path = path
         self._open_lock = threading.Lock()
+        self._futures_lock = threading.Lock()
+        self._futures: set[concurrent.futures.Future[Any]] = set()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._loop.run_forever,
@@ -117,7 +145,7 @@ class _StoreSession:
         self._backend: SqliteBackend | None = None
         self.store: BlockingObjectStore | None = None
         self._closed = False
-        self._open_failure: BaseException | None = None
+        self._open_failure: _OpenFailure | None = None
 
     @property
     def closed(self) -> bool:
@@ -127,7 +155,7 @@ class _StoreSession:
         if not self._closed:
             return
         if self.store is None and self._open_failure is not None:
-            raise self._open_failure
+            self._open_failure.reraise()
         raise SyncSessionClosedError(_SESSION_CLOSED_MESSAGE)
 
     def open(self) -> BlockingObjectStore:
@@ -139,28 +167,22 @@ class _StoreSession:
             if self._closed:
                 self._raise_if_closed_during_open()
             if self._open_failure is not None:
-                raise self._open_failure
+                self._open_failure.reraise()
             if self._thread.ident is None:
                 self._thread.start()
             try:
-                backend = _blocking_result(
-                    asyncio.run_coroutine_threadsafe(
-                        SqliteBackend.open(self._path),
-                        self._loop,
-                    ),
-                    session=self,
-                )
-            except BaseException as exc:
-                self._open_failure = exc
+                backend = asyncio.run_coroutine_threadsafe(
+                    SqliteBackend.open(self._path),
+                    self._loop,
+                ).result()
+            except Exception as exc:
+                self._open_failure = _OpenFailure.capture(exc)
                 raise
             if self._closed:
-                _blocking_result(
-                    asyncio.run_coroutine_threadsafe(
-                        backend.aclose(),
-                        self._loop,
-                    ),
-                    session=self,
-                )
+                asyncio.run_coroutine_threadsafe(
+                    backend.aclose(),
+                    self._loop,
+                ).result()
                 self._raise_if_closed_during_open()
             self._backend = backend
             self.store = BlockingObjectStore(
@@ -174,19 +196,26 @@ class _StoreSession:
         with self._open_lock:
             if self._closed:
                 return
-            self._closed = True
+            with self._futures_lock:
+                self._closed = True
+                snapshot = frozenset(self._futures)
+            for future in snapshot:
+                with suppress(concurrent.futures.CancelledError):
+                    future.result()
             if self._backend is not None:
-                with suppress(TimeoutError):
-                    _blocking_result(
-                        asyncio.run_coroutine_threadsafe(
-                            self._backend.aclose(),
-                            self._loop,
-                        ),
-                    )
+                asyncio.run_coroutine_threadsafe(
+                    self._backend.aclose(),
+                    self._loop,
+                ).result()
                 self._backend = None
             if self._thread.is_alive():
                 self._loop.call_soon_threadsafe(self._loop.stop)
-                self._thread.join(timeout=5)
+                self._thread.join(timeout=_THREAD_JOIN_WATCHDOG_S)
+                if self._thread.is_alive():
+                    _LOGGER.warning(
+                        "SQLite event-loop thread did not stop within %ss",
+                        _THREAD_JOIN_WATCHDOG_S,
+                    )
             self.store = None
 
 
@@ -212,14 +241,12 @@ def persistent_sqlite(path: str) -> BlockingObjectStore:
             _sessions[path] = session
     try:
         return session.open()
-    except BaseException as exc:
+    finally:
         if session.store is None:
-            session._open_failure = exc
-        with _sessions_lock:
-            if _sessions.get(path) is session and session.store is None:
-                _sessions.pop(path, None)
-        session.close()
-        raise
+            with _sessions_lock:
+                if _sessions.get(path) is session:
+                    _sessions.pop(path, None)
+            session.close()
 
 
 def close_persistent(path: str) -> None:

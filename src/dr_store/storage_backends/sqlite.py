@@ -14,7 +14,7 @@ from dr_store.content_addressing import (
     validate_content_hash,
     validate_reference_schema,
 )
-from dr_store.core.errors import ObjectConflictError
+from dr_store.core.errors import ObjectConflictError, SqliteBackendClosedError
 from dr_store.storage_backends.contract import (
     BindOutcome,
     BoundObjectRow,
@@ -200,7 +200,7 @@ class SqliteBackend:
     def _check_operation(self) -> None:
         self._check_loop()
         if self._state is not _Lifecycle.OPEN:
-            raise RuntimeError("SQLite backend is closed")
+            raise SqliteBackendClosedError("SQLite backend is closed")
 
     async def _run[T](
         self, operation: Callable[..., T], /, *args: object
@@ -208,7 +208,7 @@ class SqliteBackend:
         self._check_loop()
         async with self._admission:
             if self._state is not _Lifecycle.OPEN:
-                raise RuntimeError("SQLite backend is closed")
+                raise SqliteBackendClosedError("SQLite backend is closed")
             concurrent = self._worker.submit(operation, *args)
             future = asyncio.wrap_future(concurrent, loop=self._loop)
             return await _await_settled(future)
@@ -496,6 +496,7 @@ class SqliteBackend:
             )
 
     async def __aenter__(self) -> Self:
+        self._check_operation()
         return self
 
     async def __aexit__(

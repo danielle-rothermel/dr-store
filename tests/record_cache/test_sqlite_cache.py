@@ -282,9 +282,11 @@ async def test_close_racing_admission_waits_for_operation(
     started = asyncio.Event()
     release = asyncio.Event()
     close_started = asyncio.Event()
+    close_resources_entered = asyncio.Event()
     backend_closed = asyncio.Event()
     original = cache._store.get_bound_objects
     original_backend_close = cache._sqlite_backend.aclose
+    original_close_resources = cache._close_resources
 
     async def gated_get(
         keys: tuple[str, ...],
@@ -297,10 +299,15 @@ async def test_close_racing_admission_waits_for_operation(
         await original_backend_close()
         backend_closed.set()
 
+    async def observed_close_resources() -> None:
+        close_resources_entered.set()
+        await original_close_resources()
+
     monkeypatch.setattr(cache._store, "get_bound_objects", gated_get)
     monkeypatch.setattr(
         cache._sqlite_backend, "aclose", observed_backend_close
     )
+    monkeypatch.setattr(cache, "_close_resources", observed_close_resources)
 
     async def close_when_started() -> None:
         await started.wait()
@@ -310,6 +317,7 @@ async def test_close_racing_admission_waits_for_operation(
     operation = asyncio.create_task(cache.get_many([KEY], schema=SCHEMA))
     closing = asyncio.create_task(close_when_started())
     await asyncio.wait_for(close_started.wait(), WATCHDOG_SECONDS)
+    await asyncio.wait_for(close_resources_entered.wait(), WATCHDOG_SECONDS)
     assert not backend_closed.is_set()
     release.set()
     assert await operation == {KEY: CacheHit(RECORD)}

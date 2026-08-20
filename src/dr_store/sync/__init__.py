@@ -1,8 +1,10 @@
 """Blocking sync facade over async ``ObjectStore``.
 
 ``open_sqlite`` and ``persistent_sqlite`` own a dedicated event-loop thread and
-run backend operations through ``run_coroutine_threadsafe``. This is distinct
-from PostgreSQL **enlisted** methods, which join a caller-owned SQLAlchemy
+run backend operations through ``run_coroutine_threadsafe``. Close waits for
+in-flight operations to settle; callers needing prompt teardown should quiesce
+first. Post-close use raises ``SyncSessionClosedError``. This is distinct from
+PostgreSQL **enlisted** methods, which join a caller-owned SQLAlchemy
 transaction for evidence checkpoint integration.
 """
 
