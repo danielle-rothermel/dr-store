@@ -122,8 +122,8 @@ def test_concurrent_persistent_sqlite_opens_once(sqlite_path: str) -> None:
             stores = list(
                 pool.map(lambda _: persistent_sqlite(sqlite_path), range(8))
             )
+    assert call_count == 1
     assert len({id(store) for store in stores}) == 1
-    assert call_count >= 1
     close_persistent(sqlite_path)
 
 

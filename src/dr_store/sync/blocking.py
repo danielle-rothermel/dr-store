@@ -83,6 +83,7 @@ class BlockingObjectStore:
 class _StoreSession:
     def __init__(self, path: str) -> None:
         self._path = path
+        self._open_lock = threading.Lock()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._loop.run_forever,
@@ -102,20 +103,33 @@ class _StoreSession:
             raise SyncSessionClosedError(
                 "persistent SQLite session was closed; open a new handle"
             )
-        if self.store is not None:
+        with self._open_lock:
+            if self.store is not None:
+                return self.store
+            if self._closed:
+                raise SyncSessionClosedError(
+                    "persistent SQLite session was closed; open a new handle"
+                )
+            self._thread.start()
+            backend = asyncio.run_coroutine_threadsafe(
+                SqliteBackend.open(self._path),
+                self._loop,
+            ).result()
+            if self._closed:
+                asyncio.run_coroutine_threadsafe(
+                    backend.aclose(),
+                    self._loop,
+                ).result()
+                raise SyncSessionClosedError(
+                    "persistent SQLite session was closed; open a new handle"
+                )
+            self._backend = backend
+            self.store = BlockingObjectStore(
+                ObjectStore(backend),
+                self._loop,
+                session=self,
+            )
             return self.store
-        self._thread.start()
-        backend = asyncio.run_coroutine_threadsafe(
-            SqliteBackend.open(self._path),
-            self._loop,
-        ).result()
-        self._backend = backend
-        self.store = BlockingObjectStore(
-            ObjectStore(backend),
-            self._loop,
-            session=self,
-        )
-        return self.store
 
     def close(self) -> None:
         if self._closed:
@@ -149,26 +163,18 @@ _sessions: dict[str, _StoreSession] = {}
 def persistent_sqlite(path: str) -> BlockingObjectStore:
     """Open or reuse a process-lifetime session keyed by path."""
     with _sessions_lock:
-        existing = _sessions.get(path)
-        if existing is not None:
-            assert existing.store is not None
-            return existing.store
-
-    session = _StoreSession(path)
+        session = _sessions.get(path)
+        if session is None:
+            session = _StoreSession(path)
+            _sessions[path] = session
     try:
-        store = session.open()
+        return session.open()
     except BaseException:
+        with _sessions_lock:
+            if _sessions.get(path) is session and session.store is None:
+                _sessions.pop(path, None)
         session.close()
         raise
-
-    with _sessions_lock:
-        existing = _sessions.get(path)
-        if existing is not None:
-            session.close()
-            assert existing.store is not None
-            return existing.store
-        _sessions[path] = session
-        return store
 
 
 def close_persistent(path: str) -> None:
