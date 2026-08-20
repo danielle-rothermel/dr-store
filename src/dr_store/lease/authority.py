@@ -120,6 +120,7 @@ class LeaseMaintenance:
         )
         self._entered = False
         self._exited = False
+        self._terminalizing = False
         self._terminalization_started = False
         self._terminalized = False
 
@@ -144,10 +145,34 @@ class LeaseMaintenance:
         self._stop.set()
         self._renewal_wait_strategy.wake()
 
-    def _lease_for_terminalization(self) -> Lease:
+    def _restart_renewer(self) -> None:
+        self._thread = Thread(
+            target=self._run,
+            name=f"effect-lease-{self._lease.attempt_id}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _abort_terminalization(self) -> None:
+        with self._lock:
+            if self._terminalization_started:
+                return
+            self._terminalizing = False
+            self._stop.clear()
+        self._restart_renewer()
+
+    def _commit_terminalization(self) -> None:
+        with self._lock:
+            self._terminalization_started = True
+            self._terminalized = True
+            self._terminalizing = False
+
+    def _prepare_for_terminalization(self) -> Lease:
         with self._lock:
             if self._terminalization_started:
                 raise RuntimeError("lease maintenance is already terminalized")
+            if self._terminalizing:
+                raise RuntimeError("terminalization already in progress")
             loss = self._loss
             if loss is None and (
                 not self._entered or self._exited or self._stop.is_set()
@@ -157,23 +182,30 @@ class LeaseMaintenance:
                     "context"
                 )
             if loss is None:
-                self._terminalization_started = True
+                self._terminalizing = True
                 self._stop_renewer()
 
-        if loss is not None:
-            self.check()
-            raise AssertionError("lease loss check returned unexpectedly")
+        try:
+            if loss is not None:
+                self.check()
+                raise AssertionError("lease loss check returned unexpectedly")
 
-        self._thread.join()
-        self.check()
-        with self._lock:
-            return self._lease
+            self._thread.join()
+            self.check()
+            with self._lock:
+                return self._lease
+        except BaseException:
+            self._abort_terminalization()
+            raise
 
     def succeed(self, *, result_ref: ObjectReference) -> Terminal:
-        lease = self._lease_for_terminalization()
-        terminal = self._authority.succeed(lease, result_ref=result_ref)
-        with self._lock:
-            self._terminalized = True
+        lease = self._prepare_for_terminalization()
+        try:
+            terminal = self._authority.succeed(lease, result_ref=result_ref)
+        except BaseException:
+            self._abort_terminalization()
+            raise
+        self._commit_terminalization()
         return terminal
 
     def fail(
@@ -182,14 +214,17 @@ class LeaseMaintenance:
         result_ref: ObjectReference,
         failure: TerminalFailure,
     ) -> Terminal:
-        lease = self._lease_for_terminalization()
-        terminal = self._authority.fail(
-            lease,
-            result_ref=result_ref,
-            failure=failure,
-        )
-        with self._lock:
-            self._terminalized = True
+        lease = self._prepare_for_terminalization()
+        try:
+            terminal = self._authority.fail(
+                lease,
+                result_ref=result_ref,
+                failure=failure,
+            )
+        except BaseException:
+            self._abort_terminalization()
+            raise
+        self._commit_terminalization()
         return terminal
 
     def _run(self) -> None:

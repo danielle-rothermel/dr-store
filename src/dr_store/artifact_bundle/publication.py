@@ -225,7 +225,13 @@ class ArtifactBundlePublication:
                 self._state = _PublicationState.POISONED
                 self._writer_failure = error
             raise error from exc
-        return BundleArtifactWriter(self, name, handle)
+        with self._lock:
+            if self._state is not _PublicationState.OPEN:
+                with suppress(OSError):
+                    handle.close()
+                self._writers.pop(name, None)
+                self._require_open_for_admission()
+            return BundleArtifactWriter(self, name, handle)
 
     def publish(self, payload: Jsonable) -> None:
         """Perform the publication's sole terminal manifest attempt."""

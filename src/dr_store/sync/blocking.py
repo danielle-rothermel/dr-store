@@ -15,7 +15,7 @@ import asyncio
 import concurrent.futures
 import logging
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -81,17 +81,21 @@ class _OpenFailure:
         )
 
     def reraise(self) -> None:
-        fresh: BaseException
+        fresh: BaseException | None = None
         kwargs = dict(self.kwargs)
-        try:
-            if kwargs:
-                fresh = self.exc_type(**kwargs)
-            else:
-                fresh = self.exc_type(*self.args)
-        except TypeError:
-            fresh = RuntimeError(self.message)
-        if self.cause is fresh:
-            raise fresh from None
+        for attempt in (
+            lambda: self.exc_type(**kwargs) if kwargs else None,
+            lambda: self.exc_type(*self.args),
+            lambda: RuntimeError(self.message),
+        ):
+            try:
+                candidate = attempt()
+                if candidate is not None:
+                    fresh = candidate
+                    break
+            except (TypeError, ValueError):
+                continue
+        assert fresh is not None
         raise fresh from self.cause
 
 
@@ -102,7 +106,8 @@ def _drain_inflight_futures(
         return
     done, _ = concurrent.futures.wait(snapshot)
     for future in done:
-        future.exception()
+        with suppress(concurrent.futures.CancelledError):
+            future.exception()
 
 
 class BlockingObjectStore:
@@ -228,27 +233,36 @@ class _StoreSession:
 
     def close(self) -> None:
         with self._open_lock:
-            if self._closed:
+            if self._closed and not self._thread.is_alive():
                 return
             with self._futures_lock:
                 self._closed = True
                 snapshot = frozenset(self._futures)
             _drain_inflight_futures(snapshot)
-            if self._backend is not None:
-                asyncio.run_coroutine_threadsafe(
-                    self._backend.aclose(),
-                    self._loop,
-                ).result()
-                self._backend = None
-            if self._thread.is_alive():
-                self._loop.call_soon_threadsafe(self._loop.stop)
-                self._thread.join(timeout=_THREAD_JOIN_WATCHDOG_S)
+            close_error: BaseException | None = None
+            try:
+                if self._backend is not None:
+                    asyncio.run_coroutine_threadsafe(
+                        self._backend.aclose(),
+                        self._loop,
+                    ).result()
+                    self._backend = None
+            except Exception as exc:  # noqa: BLE001 - preserve close failure for reraise
+                close_error = exc
+            finally:
                 if self._thread.is_alive():
-                    _LOGGER.warning(
-                        "SQLite event-loop thread did not stop within %ss",
-                        _THREAD_JOIN_WATCHDOG_S,
-                    )
-            self.store = None
+                    self._loop.call_soon_threadsafe(self._loop.stop)
+                    self._thread.join(timeout=_THREAD_JOIN_WATCHDOG_S)
+                    if self._thread.is_alive():
+                        _LOGGER.warning(
+                            "SQLite event-loop thread did not stop within %ss",
+                            _THREAD_JOIN_WATCHDOG_S,
+                        )
+                if not self._thread.is_alive() and not self._loop.is_closed():
+                    self._loop.close()
+                self.store = None
+            if close_error is not None:
+                raise close_error
 
 
 @contextmanager

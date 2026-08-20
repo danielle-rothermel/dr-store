@@ -8,11 +8,13 @@ import pytest
 
 from dr_store.content_addressing import ObjectReference
 from dr_store.lease import (
+    Lease,
     LeaseAuthority,
     LeaseAuthorityError,
     LeaseRequest,
     ReplayPolicy,
     StaleLeaseError,
+    Terminal,
 )
 from dr_store.testing import FakeClock
 
@@ -275,5 +277,48 @@ def test_maintenance_terminalize_after_exit_raises() -> None:
         maintenance.__exit__(None, None, None)
         with pytest.raises(RuntimeError, match="already terminalized"):
             entered.succeed(result_ref=RESULT_REF)
+    finally:
+        authority.close()
+
+
+def test_maintenance_terminalize_retries_after_transient_authority_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = ManualRenewalWaitStrategy()
+    authority = LeaseAuthority.memory(
+        clock=FakeClock().now,
+        _renewal_wait_strategy=strategy,
+    )
+    original_succeed = authority.succeed
+    attempts = {"count": 0}
+
+    def flaky_succeed(
+        lease: Lease,
+        *,
+        result_ref: ObjectReference,
+    ) -> Terminal:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise OSError("db down")
+        return original_succeed(lease, result_ref=result_ref)
+
+    monkeypatch.setattr(authority, "succeed", flaky_succeed)
+    try:
+        acquired = authority.acquire(
+            _request(),
+            owner_id="owner",
+            attempt_id="attempt",
+            lease_duration=LEASE_DURATION,
+        )
+        assert acquired.lease is not None
+        maintenance = authority.maintain(
+            acquired.lease,
+            lease_duration=LEASE_DURATION,
+        )
+        with maintenance:
+            with pytest.raises(OSError, match="db down"):
+                maintenance.succeed(result_ref=RESULT_REF)
+            terminal = maintenance.succeed(result_ref=RESULT_REF)
+        assert terminal.result_ref == RESULT_REF
     finally:
         authority.close()
