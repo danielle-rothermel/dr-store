@@ -69,23 +69,6 @@ def is_exact_component_version_row(
     )
 
 
-def is_exact_component_metadata(
-    rows: list[tuple[Any, ...]],
-    *,
-    component: str,
-    version: int,
-) -> bool:
-    matching = [
-        row
-        for row in rows
-        if len(row) == 2
-        and type(row[0]) is str
-        and type(row[1]) is int
-        and row[0] == component
-    ]
-    return len(matching) == 1 and matching[0] == (component, version)
-
-
 def raise_owned_table_inventory_mismatch(
     *,
     tables: set[str],

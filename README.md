@@ -69,6 +69,8 @@ with open_sqlite("/path/store.sqlite3") as store:
     store.bind("key", reference)
 
 store = persistent_sqlite("/path/store.sqlite3")
+reference, _ = store.put("demo.record", {"value": 1})
+# ... later, at process shutdown:
 close_persistent("/path/store.sqlite3")
 ```
 
@@ -123,7 +125,8 @@ from dr_store.relational.sqlite import (
 
 Dialect modules (`dr_store.relational.sqlite`, `dr_store.relational.postgres`) own
 metadata create/verify paths; callers choose the backend explicitly rather than
-through connection-type dispatch.
+through connection-type dispatch. Metadata verification assumes `component` is
+the metadata table primary key.
 
 ## Submodule imports
 

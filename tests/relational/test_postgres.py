@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import uuid
 from typing import TYPE_CHECKING
 
@@ -15,15 +14,12 @@ from dr_store.relational.postgres import (
     verify_component_metadata,
     verify_postgres_table,
 )
+from tests.conftest import require_postgres_dsn
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-if os.environ.get("DR_STORE_POSTGRES_DSN") is None:
-    pytest.skip(
-        "DR_STORE_POSTGRES_DSN is not configured",
-        allow_module_level=True,
-    )
+require_postgres_dsn(_module_level=True)
 
 _METADATA_TABLE = f"dr_store_test_metadata_{uuid.uuid4().hex}"
 _METADATA_COLUMNS = (
@@ -50,7 +46,7 @@ _METADATA_CONSTRAINTS: tuple[
 def postgres_connection() -> Iterator[object]:
     from psycopg import connect
 
-    dsn = os.environ["DR_STORE_POSTGRES_DSN"]
+    dsn = require_postgres_dsn()
     with connect(dsn) as connection:
         with connection.cursor() as cursor:
             cursor.execute(

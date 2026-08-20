@@ -25,6 +25,20 @@ from dr_store import (
 _DEDICATED_DATABASE = "dr_store_test"
 
 
+def require_postgres_dsn(*, _module_level: bool = False) -> str:
+    dsn = os.environ.get("DR_STORE_POSTGRES_DSN")
+    if dsn is None:
+        if os.environ.get("DR_STORE_REQUIRE_POSTGRES") == "1":
+            pytest.fail(
+                "DR_STORE_REQUIRE_POSTGRES=1 requires DR_STORE_POSTGRES_DSN"
+            )
+        pytest.skip(
+            "DR_STORE_POSTGRES_DSN is not configured",
+            allow_module_level=_module_level,
+        )
+    return dsn
+
+
 def _async_dsn(dsn: str) -> str:
     if dsn.startswith("postgresql://"):
         return "postgresql+psycopg://" + dsn.removeprefix("postgresql://")

@@ -14,7 +14,7 @@ from dr_store import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine, Iterator
+    from collections.abc import Callable, Coroutine, Iterator
 
     from dr_serialize import Jsonable
 
@@ -57,32 +57,27 @@ class BlockingObjectStore:
                 "persistent SQLite session was closed; open a new handle"
             )
 
-    def _run(self, coro: Coroutine[Any, Any, _T]) -> _T:
+    def _run(self, factory: Callable[[], Coroutine[Any, Any, _T]]) -> _T:
         self._ensure_open()
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        future = asyncio.run_coroutine_threadsafe(factory(), self._loop)
         return future.result()
 
     def put(
         self, schema: str, record: Jsonable
     ) -> tuple[ObjectReference, PutStatus]:
-        self._ensure_open()
-        return self._run(self._store.put(schema, record))
+        return self._run(lambda: self._store.put(schema, record))
 
     def get(self, reference: ObjectReference) -> Jsonable:
-        self._ensure_open()
-        return self._run(self._store.get(reference))
+        return self._run(lambda: self._store.get(reference))
 
     def bind(self, key: str, reference: ObjectReference) -> BindStatus:
-        self._ensure_open()
-        return self._run(self._store.bind(key, reference))
+        return self._run(lambda: self._store.bind(key, reference))
 
     def resolve(self, key: str) -> ObjectReference | None:
-        self._ensure_open()
-        return self._run(self._store.resolve(key))
+        return self._run(lambda: self._store.resolve(key))
 
     def evict_bindings(self, keys: list[str]) -> dict[str, EvictStatus]:
-        self._ensure_open()
-        return self._run(self._store.evict_bindings(keys))
+        return self._run(lambda: self._store.evict_bindings(keys))
 
 
 class _StoreSession:
@@ -154,29 +149,37 @@ _sessions: dict[str, _StoreSession] = {}
 def persistent_sqlite(path: str) -> BlockingObjectStore:
     """Open or reuse a process-lifetime session keyed by path."""
     with _sessions_lock:
-        session = _sessions.get(path)
-        if session is None:
-            session = _StoreSession(path)
-            try:
-                session.open()
-            except BaseException:
-                session.close()
-                raise
-            _sessions[path] = session
-        assert session.store is not None
-        return session.store
+        existing = _sessions.get(path)
+        if existing is not None:
+            assert existing.store is not None
+            return existing.store
+
+    session = _StoreSession(path)
+    try:
+        store = session.open()
+    except BaseException:
+        session.close()
+        raise
+
+    with _sessions_lock:
+        existing = _sessions.get(path)
+        if existing is not None:
+            session.close()
+            assert existing.store is not None
+            return existing.store
+        _sessions[path] = session
+        return store
 
 
 def close_persistent(path: str) -> None:
     with _sessions_lock:
         session = _sessions.pop(path, None)
-        if session is not None:
-            session.close()
+    if session is not None:
+        session.close()
 
 
 def close_all_persistent() -> None:
     with _sessions_lock:
-        for path in list(_sessions):
-            session = _sessions.pop(path, None)
-            if session is not None:
-                session.close()
+        sessions = [_sessions.pop(path) for path in list(_sessions)]
+    for session in sessions:
+        session.close()

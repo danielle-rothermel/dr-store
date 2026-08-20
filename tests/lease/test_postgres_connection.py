@@ -1,29 +1,27 @@
 from __future__ import annotations
 
-import os
 import uuid
 from contextlib import contextmanager
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
-import pytest
-
-from dr_store.lease import LeaseAuthority, LeaseRequest, ReplayPolicy
+from dr_store.lease import (
+    AcquireOutcome,
+    LeaseAuthority,
+    LeaseRequest,
+    ReplayPolicy,
+)
+from tests.conftest import require_postgres_dsn
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-if os.environ.get("DR_STORE_POSTGRES_DSN") is None:
-    pytest.skip(
-        "DR_STORE_POSTGRES_DSN is not configured",
-        allow_module_level=True,
-    )
+require_postgres_dsn(_module_level=True)
 
 
 class _ConnectionTracker:
     def __init__(self) -> None:
         self.connect_calls = 0
-        self.connection_ids: list[int] = []
 
     @contextmanager
     def connect(self, dsn: str) -> Iterator[Any]:
@@ -31,12 +29,11 @@ class _ConnectionTracker:
 
         self.connect_calls += 1
         with connect(dsn) as connection:
-            self.connection_ids.append(self.connect_calls)
             yield connection
 
 
 def test_postgres_authority_opens_fresh_connection_per_operation() -> None:
-    dsn = os.environ["DR_STORE_POSTGRES_DSN"]
+    dsn = require_postgres_dsn()
     tracker = _ConnectionTracker()
     semantic_key = f"test.connection/{uuid.uuid4().hex}"
     authority = LeaseAuthority.postgresql(dsn, _connect=tracker.connect)
@@ -63,4 +60,41 @@ def test_postgres_authority_opens_fresh_connection_per_operation() -> None:
         authority.close()
 
     assert tracker.connect_calls - init_calls == 2
-    assert tracker.connection_ids[-1] != tracker.connection_ids[-2]
+
+
+def test_lease_survives_caller_transaction_rollback() -> None:
+    from psycopg import connect
+
+    dsn = require_postgres_dsn()
+    semantic_key = f"test.rollback/{uuid.uuid4().hex}"
+    request = LeaseRequest(
+        semantic_key=semantic_key,
+        request_hash="e" * 64,
+        replay_policy=ReplayPolicy.IDEMPOTENT,
+    )
+
+    with connect(dsn) as caller:
+        caller.execute("BEGIN")
+        authority = LeaseAuthority.postgresql(dsn)
+        try:
+            acquired = authority.acquire(
+                request,
+                owner_id="owner",
+                attempt_id="attempt",
+                lease_duration=timedelta(seconds=30),
+            )
+        finally:
+            authority.close()
+        assert acquired.outcome is AcquireOutcome.ACQUIRED
+        caller.execute("ROLLBACK")
+
+    with connect(dsn) as observer:
+        row = observer.execute(
+            """
+            SELECT state FROM dr_store_lease_authority
+            WHERE semantic_key = %s
+            """,
+            (semantic_key,),
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "leased"

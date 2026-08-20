@@ -124,6 +124,11 @@ def create_component_metadata(
     component: str,
     version: int,
 ) -> None:
+    """Record or verify one component/version pair.
+
+    ``component`` must be the metadata table primary key. Duplicate rows for
+    the same component are undefined and are not detected here.
+    """
     row = connection.execute(
         f"""
         SELECT component, version FROM {metadata_table}
@@ -158,6 +163,11 @@ def verify_component_metadata(
     component: str,
     version: int,
 ) -> None:
+    """Verify one component/version pair.
+
+    ``component`` must be the metadata table primary key. Duplicate rows for
+    the same component are undefined and are not detected here.
+    """
     row = connection.execute(
         f"""
         SELECT component, version FROM {metadata_table}

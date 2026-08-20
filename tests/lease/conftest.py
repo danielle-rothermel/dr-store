@@ -12,6 +12,7 @@ import pytest
 
 from dr_store.lease import LeaseAuthority, LeaseRequest, ReplayPolicy
 from dr_store.testing import FakeClock
+from tests.conftest import require_postgres_dsn
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -157,14 +158,7 @@ def authority_fixture(
             sqlite_path=path,
         )
     else:
-        dsn = os.environ.get("DR_STORE_POSTGRES_DSN")
-        if dsn is None:
-            if os.environ.get("DR_STORE_REQUIRE_POSTGRES") == "1":
-                pytest.fail(
-                    "DR_STORE_REQUIRE_POSTGRES=1 requires "
-                    "DR_STORE_POSTGRES_DSN"
-                )
-            pytest.skip("DR_STORE_POSTGRES_DSN is not configured")
+        dsn = require_postgres_dsn()
         authority = LeaseAuthority.postgresql(dsn)
         fixture = AuthorityFixture(
             authority=authority,
