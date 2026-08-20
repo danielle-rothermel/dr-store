@@ -34,8 +34,15 @@ def sqlite_path() -> Iterator[str]:
 
 @pytest.fixture(autouse=True)
 def _cleanup_persistent_registry() -> Iterator[None]:
+    import time
+
     yield
     close_all_persistent()
+    end = time.monotonic() + 5
+    while time.monotonic() < end:
+        if _loop_thread_count() == 0:
+            break
+        time.sleep(0.01)
 
 
 def test_put_get_round_trip(sqlite_path: str) -> None:

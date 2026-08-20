@@ -138,7 +138,10 @@ class _StoreSession:
                 return self.store
             if self._closed:
                 self._raise_if_closed_during_open()
-            self._thread.start()
+            if self._open_failure is not None:
+                raise self._open_failure
+            if self._thread.ident is None:
+                self._thread.start()
             try:
                 backend = _blocking_result(
                     asyncio.run_coroutine_threadsafe(
