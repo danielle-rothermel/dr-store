@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from dr_store.lease import (
     AcquireOutcome,
     LeaseAuthority,
@@ -100,3 +102,53 @@ def test_lease_survives_caller_transaction_rollback(postgres_dsn: str) -> None:
         ).fetchone()
     assert row is not None
     assert row[0] == "leased"
+
+
+def test_maintenance_retry_after_transient_error_postgres(
+    postgres_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dr_store.content_addressing import ObjectReference
+    from dr_store.lease import Lease, Terminal
+
+    authority = LeaseAuthority.postgresql(postgres_dsn)
+    original_succeed = authority.succeed
+    attempts = {"count": 0}
+    result_ref = ObjectReference(schema="demo.record", content_hash="f" * 64)
+
+    def flaky_succeed(
+        lease: Lease,
+        *,
+        result_ref: ObjectReference,
+    ) -> Terminal:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise OSError("db down")
+        return original_succeed(lease, result_ref=result_ref)
+
+    monkeypatch.setattr(authority, "succeed", flaky_succeed)
+    semantic_key = f"test.maintenance.retry/{uuid.uuid4().hex}"
+    request = LeaseRequest(
+        semantic_key=semantic_key,
+        request_hash="a" * 64,
+        replay_policy=ReplayPolicy.IDEMPOTENT,
+    )
+    try:
+        acquired = authority.acquire(
+            request,
+            owner_id="owner",
+            attempt_id="attempt",
+            lease_duration=timedelta(seconds=30),
+        )
+        assert acquired.lease is not None
+        maintenance = authority.maintain(
+            acquired.lease,
+            lease_duration=timedelta(seconds=30),
+        )
+        with maintenance:
+            with pytest.raises(OSError, match="db down"):
+                maintenance.succeed(result_ref=result_ref)
+            terminal = maintenance.succeed(result_ref=result_ref)
+        assert terminal.result_ref == result_ref
+    finally:
+        authority.close()

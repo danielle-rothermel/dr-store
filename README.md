@@ -78,7 +78,10 @@ Use `open_sqlite` for scoped sessions and `persistent_sqlite` for process-lifeti
 handles keyed by path. Close waits for in-flight operations to finish before
 stopping the event-loop thread; quiesce callers first if you need prompt teardown.
 After `close_persistent` or after an `open_sqlite` context
-exits, a previously returned handle raises `SyncSessionClosedError`. This facade is
+exits, a previously returned handle raises `SyncSessionClosedError`. Use
+`close_all_persistent()` at process shutdown to close every persistent session;
+one close failure re-raises that exception, multiple failures raise
+`ExceptionGroup`. This facade is
 distinct from PostgreSQL enlisted methods,
 which join a caller-owned SQLAlchemy transaction.
 
@@ -90,6 +93,7 @@ coordinates keyed side effects with acquire, renew, and terminal publication:
 ```python
 from datetime import timedelta
 
+from dr_store.content_addressing import ObjectReference
 from dr_store.lease import LeaseAuthority, LeaseRequest, ReplayPolicy
 
 authority = LeaseAuthority.sqlite("/path/lease.sqlite3")
@@ -103,13 +107,33 @@ result = authority.acquire(
     attempt_id="try-1",
     lease_duration=timedelta(seconds=30),
 )
+if result.lease is not None:
+    with authority.maintain(
+        result.lease,
+        lease_duration=timedelta(seconds=30),
+    ) as maintenance:
+        maintenance.succeed(
+            result_ref=ObjectReference(
+                schema="demo.record",
+                content_hash="b" * 64,
+            ),
+        )
 ```
 
 Memory backends accept an injected clock through `LeaseAuthority.memory(clock=...)`.
 SQLite and PostgreSQL read authority time from the database. PostgreSQL opens a fresh
 raw psycopg connection per authority transaction and never enlists in caller evidence
-transactions. `LeaseMaintenance` terminalizes only through the handle returned from
-a successful acquire.
+transactions. `LeaseAuthority.maintain(lease, lease_duration=...)` returns a
+`LeaseMaintenance` context manager that renews at `duration/3` on a background
+thread; terminalize through `maintenance.succeed(...)` / `maintenance.fail(...)`,
+which stop the renewer before publishing. A clean context exit requires prior
+terminal publication; renewal loss surfaces via `check()`, the `lease` property, or
+context exit. `LeaseAuthority.succeed` / `fail` remain the direct path for callers
+not using maintenance. If terminal publication fails with a transient authority
+error, the renewer may restart so the caller can retry while the context remains
+open. A `LeaseMaintenance` handle is single-threaded: `__enter__`, `succeed`, `fail`,
+`check`, and `__exit__` must all run on one thread; only the internal renewal thread
+runs concurrently.
 
 ## Relational infrastructure
 

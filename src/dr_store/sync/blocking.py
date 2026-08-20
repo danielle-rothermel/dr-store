@@ -5,7 +5,10 @@ Close waits for every in-flight operation to finish before stopping the loop;
 operation failures are delivered only to their caller, not re-raised during
 close. Callers needing prompt teardown should quiesce first. Post-close calls,
 and calls racing close after registration, raise ``SyncSessionClosedError``
-rather than hanging. Cancel-on-close remains a future upgrade path if fast
+rather than hanging. ``close_all_persistent`` closes every registered session;
+one failure re-raises that exception, multiple failures raise
+``ExceptionGroup``.
+Cancel-on-close remains a future upgrade path if fast
 teardown is ever needed.
 """
 
@@ -93,7 +96,7 @@ class _OpenFailure:
                 if candidate is not None:
                     fresh = candidate
                     break
-            except (TypeError, ValueError):
+            except Exception:  # noqa: BLE001, S112 - hostile constructor
                 continue
         assert fresh is not None
         raise fresh from self.cause

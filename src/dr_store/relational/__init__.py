@@ -1,3 +1,11 @@
+"""Shared schema-contract infrastructure for typed-row persistence layers.
+
+Consumers import dialect modules explicitly
+(``dr_store.relational.sqlite``, ``dr_store.relational.postgres``) for
+connection helpers, table introspection, and component metadata. The component
+metadata helpers require ``component`` to be part of the table primary key.
+"""
+
 from __future__ import annotations
 
 from dr_store.relational._helpers import (

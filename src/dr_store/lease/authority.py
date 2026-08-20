@@ -1,3 +1,26 @@
+"""Lease authority: acquire, renew, and terminal publication.
+
+``LeaseAuthority`` coordinates exactly-once side effects across memory,
+SQLite, and PostgreSQL backends. Memory backends accept an injected clock;
+SQLite and PostgreSQL read authority time from the database. PostgreSQL opens
+a fresh raw psycopg connection per authority transaction and never enlists in
+caller-owned evidence transactions — independent commit is the exactly-once
+mechanism.
+
+``LeaseMaintenance`` renews a held lease on a background thread. Terminalize
+through ``maintenance.succeed(...)`` / ``maintenance.fail(...)``, which stop
+the renewer before publishing. A clean context exit requires prior terminal
+publication. If terminal publication fails with a transient authority error,
+``_abort_terminalization`` may restart the renewer so the caller can retry
+while the context remains open; restart is suppressed once terminalization
+committed, a renewal loss was recorded, or the context exited.
+
+A ``LeaseMaintenance`` handle is **single-threaded**: ``__enter__``,
+``succeed``, ``fail``, ``check``, and ``__exit__`` must all run on one
+thread; only the internal renewal thread runs concurrently. Behavior under
+multi-threaded handle use is undefined.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -96,6 +119,21 @@ def _acquire_terminal(
 
 
 class LeaseMaintenance:
+    """Renew a held lease and terminalize through the handle.
+
+    Single-threaded contract: ``__enter__``, ``succeed``, ``fail``, ``check``,
+    and ``__exit__`` must all be called from one thread; only the internal
+    renewal thread runs concurrently. Behavior under multi-threaded handle use
+    is undefined.
+
+    Terminal publication stops the renewer, joins it, then calls
+    ``LeaseAuthority.succeed`` / ``fail``. On transient authority failure,
+    ``_abort_terminalization`` clears the in-progress flag and may restart the
+    renewer so the caller can retry. Restart is skipped when terminalization
+    already committed (``_terminalization_started``), a renewal loss was
+    recorded (``_loss is not None``), or the context exited (``_exited``).
+    """
+
     def __init__(
         self,
         authority: LeaseAuthority,
@@ -113,9 +151,10 @@ class LeaseMaintenance:
         self._stop = Event()
         self._lock = Lock()
         self._loss: BaseException | None = None
+        self._renewer_generation = 0
         self._thread = Thread(
             target=self._run,
-            name=f"effect-lease-{lease.attempt_id}",
+            name=self._renewer_thread_name(),
             daemon=True,
         )
         self._entered = False
@@ -123,6 +162,11 @@ class LeaseMaintenance:
         self._terminalizing = False
         self._terminalization_started = False
         self._terminalized = False
+
+    def _renewer_thread_name(self) -> str:
+        return (
+            f"effect-lease-{self._lease.attempt_id}-{self._renewer_generation}"
+        )
 
     @property
     def lease(self) -> Lease:
@@ -146,9 +190,10 @@ class LeaseMaintenance:
         self._renewal_wait_strategy.wake()
 
     def _restart_renewer(self) -> None:
+        self._renewer_generation += 1
         self._thread = Thread(
             target=self._run,
-            name=f"effect-lease-{self._lease.attempt_id}",
+            name=self._renewer_thread_name(),
             daemon=True,
         )
         self._thread.start()

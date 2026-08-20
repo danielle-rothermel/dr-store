@@ -324,11 +324,23 @@ def test_maintenance_terminalize_retries_after_transient_authority_error(
         authority.close()
 
 
-def test_abort_terminalization_does_not_restart_renewer_after_exit() -> None:
+def test_exit_after_failed_terminalize_leaves_no_renewer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     authority = LeaseAuthority.memory(
         clock=FakeClock().now,
         _renewal_wait_strategy=ManualRenewalWaitStrategy(),
     )
+
+    def always_fail_succeed(
+        lease: Lease,
+        *,
+        result_ref: ObjectReference,
+    ) -> Terminal:
+        del lease, result_ref
+        raise OSError("db down")
+
+    monkeypatch.setattr(authority, "succeed", always_fail_succeed)
     try:
         acquired = authority.acquire(
             _request(),
@@ -341,14 +353,10 @@ def test_abort_terminalization_does_not_restart_renewer_after_exit() -> None:
             acquired.lease,
             lease_duration=LEASE_DURATION,
         )
-        maintenance.__enter__()
-        maintenance._terminalizing = True
-        maintenance._stop_renewer()
-        maintenance._thread.join()
-        maintenance.__exit__(RuntimeError, RuntimeError("simulated"), None)
+        with pytest.raises(OSError, match="db down"):
+            with maintenance:
+                maintenance.succeed(result_ref=RESULT_REF)
         assert maintenance._exited
-        assert maintenance._stop.is_set()
-        maintenance._abort_terminalization()
         assert maintenance._stop.is_set()
         assert not maintenance._thread.is_alive()
     finally:
