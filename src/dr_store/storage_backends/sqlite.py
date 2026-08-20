@@ -205,7 +205,6 @@ class SqliteBackend:
     async def _run[T](
         self, operation: Callable[..., T], /, *args: object
     ) -> T:
-        self._check_loop()
         async with self._admission:
             if self._state is not _Lifecycle.OPEN:
                 raise SqliteBackendClosedError("SQLite backend is closed")

@@ -1,11 +1,12 @@
 """Blocking sync facade over async ``ObjectStore``.
 
 ``open_sqlite`` and ``persistent_sqlite`` own a dedicated event-loop thread.
-Close waits for every in-flight operation to settle before stopping the loop;
-callers needing prompt teardown should quiesce first. Post-close calls, and
-calls racing close after registration, raise ``SyncSessionClosedError`` rather
-than hanging. Cancel-on-close remains a future upgrade path if fast teardown
-is ever needed.
+Close waits for every in-flight operation to finish before stopping the loop;
+operation failures are delivered only to their caller, not re-raised during
+close. Callers needing prompt teardown should quiesce first. Post-close calls,
+and calls racing close after registration, raise ``SyncSessionClosedError``
+rather than hanging. Cancel-on-close remains a future upgrade path if fast
+teardown is ever needed.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import asyncio
 import concurrent.futures
 import logging
 import threading
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -60,13 +61,48 @@ class SyncSessionClosedError(RuntimeError):
 class _OpenFailure:
     exc_type: type[BaseException]
     args: tuple[object, ...]
+    kwargs: tuple[tuple[str, object], ...]
+    message: str
+    cause: BaseException | None
 
     @classmethod
     def capture(cls, exc: BaseException) -> _OpenFailure:
-        return cls(exc_type=type(exc), args=exc.args)
+        kwargs = tuple(
+            (key, value)
+            for key, value in exc.__dict__.items()
+            if not key.startswith("_")
+        )
+        return cls(
+            exc_type=type(exc),
+            args=exc.args,
+            kwargs=kwargs,
+            message=str(exc),
+            cause=exc.__cause__,
+        )
 
     def reraise(self) -> None:
-        raise self.exc_type(*self.args)
+        fresh: BaseException
+        kwargs = dict(self.kwargs)
+        try:
+            if kwargs:
+                fresh = self.exc_type(**kwargs)
+            else:
+                fresh = self.exc_type(*self.args)
+        except TypeError:
+            fresh = RuntimeError(self.message)
+        if self.cause is fresh:
+            raise fresh from None
+        raise fresh from self.cause
+
+
+def _drain_inflight_futures(
+    snapshot: frozenset[concurrent.futures.Future[Any]],
+) -> None:
+    if not snapshot:
+        return
+    done, _ = concurrent.futures.wait(snapshot)
+    for future in done:
+        future.exception()
 
 
 class BlockingObjectStore:
@@ -89,14 +125,18 @@ class BlockingObjectStore:
 
     def _run(self, factory: Callable[[], Coroutine[Any, Any, _T]]) -> _T:
         self._ensure_open()
-        future = asyncio.run_coroutine_threadsafe(factory(), self._loop)
         session = self._session
         if session is not None:
             with session._futures_lock:
                 if session.closed:
-                    future.cancel()
                     raise SyncSessionClosedError(_SESSION_CLOSED_MESSAGE)
+                future = asyncio.run_coroutine_threadsafe(
+                    factory(),
+                    self._loop,
+                )
                 session._futures.add(future)
+        else:
+            future = asyncio.run_coroutine_threadsafe(factory(), self._loop)
         try:
             return future.result()
         except concurrent.futures.CancelledError as exc:
@@ -178,12 +218,6 @@ class _StoreSession:
             except Exception as exc:
                 self._open_failure = _OpenFailure.capture(exc)
                 raise
-            if self._closed:
-                asyncio.run_coroutine_threadsafe(
-                    backend.aclose(),
-                    self._loop,
-                ).result()
-                self._raise_if_closed_during_open()
             self._backend = backend
             self.store = BlockingObjectStore(
                 ObjectStore(backend),
@@ -199,9 +233,7 @@ class _StoreSession:
             with self._futures_lock:
                 self._closed = True
                 snapshot = frozenset(self._futures)
-            for future in snapshot:
-                with suppress(concurrent.futures.CancelledError):
-                    future.result()
+            _drain_inflight_futures(snapshot)
             if self._backend is not None:
                 asyncio.run_coroutine_threadsafe(
                     self._backend.aclose(),
@@ -239,10 +271,12 @@ def persistent_sqlite(path: str) -> BlockingObjectStore:
         if session is None:
             session = _StoreSession(path)
             _sessions[path] = session
+    opened: BlockingObjectStore | None = None
     try:
-        return session.open()
+        opened = session.open()
+        return opened
     finally:
-        if session.store is None:
+        if opened is None:
             with _sessions_lock:
                 if _sessions.get(path) is session:
                     _sessions.pop(path, None)
