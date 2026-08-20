@@ -311,5 +311,16 @@ def close_persistent(path: str) -> None:
 def close_all_persistent() -> None:
     with _sessions_lock:
         sessions = [_sessions.pop(path) for path in list(_sessions)]
+    errors: list[Exception] = []
     for session in sessions:
-        session.close()
+        try:
+            session.close()
+        except Exception as exc:  # noqa: BLE001 - collect all close failures
+            errors.append(exc)
+    if len(errors) == 1:
+        raise errors[0]
+    if len(errors) > 1:
+        raise ExceptionGroup(
+            "persistent SQLite session close failures",
+            errors,
+        )

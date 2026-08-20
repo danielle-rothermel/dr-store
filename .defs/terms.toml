@@ -549,7 +549,8 @@ part_of = ["lease authority"]
 name = "semantic key"
 definition = """
 A non-empty opaque text key naming one leased coordination slot. It contains no \
-NUL bytes and is bounded in length; storage does not parse its domain meaning."""
+NUL bytes or unpaired surrogate code points and is bounded in length; storage \
+does not parse its domain meaning."""
 categories = ["lease authority"]
 submodule_exports = ["dr_store.lease.LeaseRequest"]
 part_of = ["lease authority"]
@@ -558,15 +559,16 @@ part_of = ["lease authority"]
 name = "owner identity"
 definition = """
 A non-empty bounded text label naming the worker or process that holds a lease. \
-Together with attempt identity it distinguishes concurrent holders of the same \
-semantic key."""
+It contains no NUL bytes or unpaired surrogate code points. Together with \
+attempt identity it distinguishes concurrent holders of the same semantic key."""
 categories = ["lease authority"]
 part_of = ["lease authority"]
 
 [[terms]]
 name = "attempt identity"
 definition = """
-A non-empty bounded text label naming one execution try within an owner. \
-Re-acquire with the same owner and attempt returns the existing unexpired lease."""
+A non-empty bounded text label naming one execution try within an owner. It \
+contains no NUL bytes or unpaired surrogate code points. Re-acquire with the \
+same owner and attempt returns the existing unexpired lease."""
 categories = ["lease authority"]
 part_of = ["lease authority"]

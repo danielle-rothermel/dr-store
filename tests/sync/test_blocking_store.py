@@ -748,6 +748,39 @@ def test_close_stops_thread_when_aclose_raises(sqlite_path: str) -> None:
     assert _loop_thread_count() == before
 
 
+def test_close_all_persistent_closes_remaining_after_aclose_failure() -> None:
+    from unittest.mock import patch
+
+    from dr_store import SqliteBackend
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite3") as first_handle:
+        first_path = first_handle.name
+    with tempfile.NamedTemporaryFile(suffix=".sqlite3") as second_handle:
+        second_path = second_handle.name
+
+    before = _loop_thread_count()
+    first_store = persistent_sqlite(first_path)
+    second_store = persistent_sqlite(second_path)
+    first_store.put("demo.record", {"value": 1})
+    second_store.put("demo.record", {"value": 2})
+    calls = {"count": 0}
+    original_aclose = SqliteBackend.aclose
+
+    async def flaky_aclose(_self: SqliteBackend) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError("first backend close failed")
+        await original_aclose(_self)
+
+    try:
+        with patch.object(SqliteBackend, "aclose", flaky_aclose):
+            with pytest.raises(OSError, match="first backend close failed"):
+                close_all_persistent()
+        assert _loop_thread_count() == before
+    finally:
+        close_all_persistent()
+
+
 def test_close_closes_event_loop(sqlite_path: str) -> None:
     store = persistent_sqlite(sqlite_path)
     session = store._session

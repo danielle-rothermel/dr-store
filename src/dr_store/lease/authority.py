@@ -159,7 +159,7 @@ class LeaseMaintenance:
                 return
             was_terminalizing = self._terminalizing
             self._terminalizing = False
-            if not was_terminalizing or self._loss is not None:
+            if not was_terminalizing or self._loss is not None or self._exited:
                 return
             self._stop.clear()
         self._restart_renewer()

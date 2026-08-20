@@ -45,6 +45,65 @@ def test_lease_request_rejects_nul_in_semantic_key() -> None:
         )
 
 
+def test_lease_request_rejects_surrogate_in_semantic_key() -> None:
+    with pytest.raises(ValidationError):
+        LeaseRequest(
+            semantic_key="\ud800",
+            request_hash="a" * 64,
+            replay_policy=ReplayPolicy.IDEMPOTENT,
+        )
+
+
+def test_lease_rejects_surrogate_in_owner_id() -> None:
+    request = LeaseRequest(
+        semantic_key="key",
+        request_hash="a" * 64,
+        replay_policy=ReplayPolicy.IDEMPOTENT,
+    )
+    with pytest.raises(ValidationError):
+        Lease(
+            request=request,
+            owner_id="\ud800",
+            attempt_id="attempt",
+            fence=1,
+            expires_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+
+def test_lease_rejects_surrogate_in_attempt_id() -> None:
+    request = LeaseRequest(
+        semantic_key="key",
+        request_hash="a" * 64,
+        replay_policy=ReplayPolicy.IDEMPOTENT,
+    )
+    with pytest.raises(ValidationError):
+        Lease(
+            request=request,
+            owner_id="owner",
+            attempt_id="\ud800",
+            fence=1,
+            expires_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+
+def test_terminal_failure_rejects_surrogate_in_code() -> None:
+    with pytest.raises(ValidationError):
+        TerminalFailure(
+            code="\ud800",
+            message="failed",
+            details={},
+        )
+
+
+def test_terminal_failure_rejects_surrogate_in_message() -> None:
+    with pytest.raises(ValidationError):
+        TerminalFailure(
+            code="demo.failure",
+            message="\ud800",
+            details={},
+        )
+
+
 def test_lease_requires_utc_expires_at() -> None:
     request = LeaseRequest(
         semantic_key="key",

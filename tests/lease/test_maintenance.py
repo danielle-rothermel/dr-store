@@ -322,3 +322,34 @@ def test_maintenance_terminalize_retries_after_transient_authority_error(
         assert terminal.result_ref == RESULT_REF
     finally:
         authority.close()
+
+
+def test_abort_terminalization_does_not_restart_renewer_after_exit() -> None:
+    authority = LeaseAuthority.memory(
+        clock=FakeClock().now,
+        _renewal_wait_strategy=ManualRenewalWaitStrategy(),
+    )
+    try:
+        acquired = authority.acquire(
+            _request(),
+            owner_id="owner",
+            attempt_id="attempt",
+            lease_duration=LEASE_DURATION,
+        )
+        assert acquired.lease is not None
+        maintenance = authority.maintain(
+            acquired.lease,
+            lease_duration=LEASE_DURATION,
+        )
+        maintenance.__enter__()
+        maintenance._terminalizing = True
+        maintenance._stop_renewer()
+        maintenance._thread.join()
+        maintenance.__exit__(RuntimeError, RuntimeError("simulated"), None)
+        assert maintenance._exited
+        assert maintenance._stop.is_set()
+        maintenance._abort_terminalization()
+        assert maintenance._stop.is_set()
+        assert not maintenance._thread.is_alive()
+    finally:
+        authority.close()

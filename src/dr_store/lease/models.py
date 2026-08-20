@@ -26,6 +26,10 @@ def _require_text(value: str, *, field: str, maximum: int = 1024) -> str:
         raise ValueError(f"{field} must be non-empty")
     if "\x00" in value:
         raise ValueError(f"{field} cannot contain NUL")
+    if any("\ud800" <= character <= "\udfff" for character in value):
+        raise ValueError(
+            f"{field} cannot contain unpaired surrogate code points"
+        )
     if len(value) > maximum:
         raise ValueError(f"{field} cannot exceed {maximum} characters")
     return value
