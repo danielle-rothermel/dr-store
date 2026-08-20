@@ -169,7 +169,7 @@ class SqliteBackend:
                 and not ready.cancelled()
                 and ready.exception() is None
             ):
-                connection = ready.result()
+                connection = await _await_settled(ready)
                 closing = asyncio.wrap_future(
                     worker.submit(connection.close),
                     loop=loop,
@@ -205,6 +205,7 @@ class SqliteBackend:
     async def _run[T](
         self, operation: Callable[..., T], /, *args: object
     ) -> T:
+        self._check_loop()
         async with self._admission:
             if self._state is not _Lifecycle.OPEN:
                 raise RuntimeError("SQLite backend is closed")
@@ -495,7 +496,6 @@ class SqliteBackend:
             )
 
     async def __aenter__(self) -> Self:
-        self._check_operation()
         return self
 
     async def __aexit__(

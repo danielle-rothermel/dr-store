@@ -136,7 +136,9 @@ class LeaseMaintenance:
             return
         if isinstance(loss, LeaseAuthorityError):
             raise loss
-        raise LeaseAuthorityError("lease maintenance failed") from loss
+        raise LeaseAuthorityError(
+            f"lease maintenance failed: {type(loss).__name__}: {loss}"
+        ) from loss
 
     def _stop_renewer(self) -> None:
         self._stop.set()

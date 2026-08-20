@@ -9,6 +9,7 @@ import pytest
 from dr_store.content_addressing import ObjectReference
 from dr_store.lease import (
     LeaseAuthority,
+    LeaseAuthorityError,
     LeaseRequest,
     ReplayPolicy,
     StaleLeaseError,
@@ -208,6 +209,46 @@ def test_maintenance_surfaces_renewal_loss() -> None:
         finally:
             with pytest.raises(StaleLeaseError):
                 maintenance.__exit__(None, None, None)
+    finally:
+        authority.close()
+
+
+def test_maintenance_check_preserves_renewal_failure_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = ManualRenewalWaitStrategy()
+    authority = LeaseAuthority.memory(
+        clock=FakeClock().now,
+        _renewal_wait_strategy=strategy,
+    )
+
+    def failing_renew(*_args: object, **_kwargs: object) -> None:
+        raise OSError("db down")
+
+    monkeypatch.setattr(authority, "renew", failing_renew)
+    try:
+        acquired = authority.acquire(
+            _request(),
+            owner_id="owner",
+            attempt_id="attempt",
+            lease_duration=LEASE_DURATION,
+        )
+        assert acquired.lease is not None
+        maintenance = authority.maintain(
+            acquired.lease,
+            lease_duration=LEASE_DURATION,
+        )
+
+        def run_until_renewal_loss() -> None:
+            with maintenance:
+                strategy.release_once()
+                strategy.await_cycle()
+
+        with pytest.raises(LeaseAuthorityError) as caught:
+            run_until_renewal_loss()
+        assert "OSError" in str(caught.value)
+        assert "db down" in str(caught.value)
+        assert isinstance(caught.value.__cause__, OSError)
     finally:
         authority.close()
 

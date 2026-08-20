@@ -214,16 +214,17 @@ class ArtifactBundlePublication:
                     f"bundle artifact name {name!r} is already reserved"
                 )
             self._writers[name] = _WriterState.ACTIVE
-            try:
-                handle = _open_exclusive_binary(self.path / name)
-            except (OSError, TypeError, ValueError) as exc:
+        try:
+            handle = _open_exclusive_binary(self.path / name)
+        except (OSError, TypeError, ValueError) as exc:
+            with self._lock:
                 error = BundleAllocationError(
                     f"could not create bundle artifact {name!r}"
                 )
                 self._writers[name] = _WriterState.FAILED
                 self._state = _PublicationState.POISONED
                 self._writer_failure = error
-                raise error from exc
+            raise error from exc
         return BundleArtifactWriter(self, name, handle)
 
     def publish(self, payload: Jsonable) -> None:

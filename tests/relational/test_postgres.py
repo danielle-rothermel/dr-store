@@ -43,11 +43,10 @@ _METADATA_CONSTRAINTS: tuple[
 
 
 @pytest.fixture
-def postgres_connection() -> Iterator[object]:
+def postgres_connection(postgres_dsn: str) -> Iterator[object]:
     from psycopg import connect
 
-    dsn = require_postgres_dsn()
-    with connect(dsn) as connection:
+    with connect(postgres_dsn) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 sql.SQL(

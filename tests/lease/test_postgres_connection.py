@@ -32,11 +32,14 @@ class _ConnectionTracker:
             yield connection
 
 
-def test_postgres_authority_opens_fresh_connection_per_operation() -> None:
-    dsn = require_postgres_dsn()
+def test_postgres_authority_opens_fresh_connection_per_operation(
+    postgres_dsn: str,
+) -> None:
     tracker = _ConnectionTracker()
     semantic_key = f"test.connection/{uuid.uuid4().hex}"
-    authority = LeaseAuthority.postgresql(dsn, _connect=tracker.connect)
+    authority = LeaseAuthority.postgresql(
+        postgres_dsn, _connect=tracker.connect
+    )
     request = LeaseRequest(
         semantic_key=semantic_key,
         request_hash="d" * 64,
@@ -62,10 +65,9 @@ def test_postgres_authority_opens_fresh_connection_per_operation() -> None:
     assert tracker.connect_calls - init_calls == 2
 
 
-def test_lease_survives_caller_transaction_rollback() -> None:
+def test_lease_survives_caller_transaction_rollback(postgres_dsn: str) -> None:
     from psycopg import connect
 
-    dsn = require_postgres_dsn()
     semantic_key = f"test.rollback/{uuid.uuid4().hex}"
     request = LeaseRequest(
         semantic_key=semantic_key,
@@ -73,9 +75,9 @@ def test_lease_survives_caller_transaction_rollback() -> None:
         replay_policy=ReplayPolicy.IDEMPOTENT,
     )
 
-    with connect(dsn) as caller:
+    with connect(postgres_dsn) as caller:
         caller.execute("BEGIN")
-        authority = LeaseAuthority.postgresql(dsn)
+        authority = LeaseAuthority.postgresql(postgres_dsn)
         try:
             acquired = authority.acquire(
                 request,
@@ -88,7 +90,7 @@ def test_lease_survives_caller_transaction_rollback() -> None:
         assert acquired.outcome is AcquireOutcome.ACQUIRED
         caller.execute("ROLLBACK")
 
-    with connect(dsn) as observer:
+    with connect(postgres_dsn) as observer:
         row = observer.execute(
             """
             SELECT state FROM dr_store_lease_authority

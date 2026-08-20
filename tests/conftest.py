@@ -39,6 +39,11 @@ def require_postgres_dsn(*, _module_level: bool = False) -> str:
     return dsn
 
 
+@pytest.fixture(scope="session")
+def postgres_dsn() -> str:
+    return require_postgres_dsn()
+
+
 def _async_dsn(dsn: str) -> str:
     if dsn.startswith("postgresql://"):
         return "postgresql+psycopg://" + dsn.removeprefix("postgresql://")

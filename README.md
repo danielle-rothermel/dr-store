@@ -75,8 +75,9 @@ close_persistent("/path/store.sqlite3")
 ```
 
 Use `open_sqlite` for scoped sessions and `persistent_sqlite` for process-lifetime
-handles keyed by path. After `close_persistent`, a previously returned handle raises
-`SyncSessionClosedError`. This facade is distinct from PostgreSQL enlisted methods,
+handles keyed by path. After `close_persistent` or after an `open_sqlite` context
+exits, a previously returned handle raises `SyncSessionClosedError`. This facade is
+distinct from PostgreSQL enlisted methods,
 which join a caller-owned SQLAlchemy transaction.
 
 ## Lease authority
