@@ -48,7 +48,7 @@ def _directory_flags() -> int:
     return _descriptor_flags(os.O_RDONLY | os.O_DIRECTORY)
 
 
-def _raise_if_symlink(
+def _reraise_open_policy(
     exc: OSError,
     path: Path,
     *,
@@ -75,6 +75,11 @@ def _raise_if_symlink(
         raise PrivatePathViolationError(
             path=path,
             reason=PrivatePathReason.SYMLINKED,
+        ) from exc
+    if not stat.S_ISDIR(status.st_mode):
+        raise PrivatePathViolationError(
+            path=path,
+            reason=PrivatePathReason.WRONG_TYPE,
         ) from exc
 
 
@@ -140,10 +145,10 @@ def _open_or_create_directory(
                 True,
             )
         except OSError as exc:
-            _raise_if_symlink(exc, path, name=name, dir_fd=parent_fd)
+            _reraise_open_policy(exc, path, name=name, dir_fd=parent_fd)
             raise
     except OSError as exc:
-        _raise_if_symlink(exc, path, name=name, dir_fd=parent_fd)
+        _reraise_open_policy(exc, path, name=name, dir_fd=parent_fd)
         raise
     else:
         return fd, False, False
@@ -201,7 +206,7 @@ def _open_private_regular_at(
                 raise
             continue
         except OSError as exc:
-            _raise_if_symlink(
+            _reraise_open_policy(
                 exc,
                 display_path,
                 name=name,
@@ -337,7 +342,7 @@ def open_private_directory(
     try:
         current_fd = os.open(current_path, _directory_flags())
     except OSError as exc:
-        _raise_if_symlink(exc, current_path)
+        _reraise_open_policy(exc, current_path)
         raise
     try:
         private_chain = False
@@ -387,19 +392,11 @@ def open_private_regular_file(
     flags: int,
     mode: int = 0o600,
 ) -> int:
-    _require_posix_support()
-    open_flags = flags & ~os.O_TRUNC
-    truncate = bool(flags & os.O_TRUNC)
+    directory = open_private_directory(path.parent, create=False)
     try:
-        fd = os.open(
-            path,
-            _descriptor_flags(open_flags | os.O_NONBLOCK),
-            mode,
-        )
-    except OSError as exc:
-        _raise_if_symlink(exc, path)
-        raise
-    return _finish_private_regular_fd(fd, path=path, truncate=truncate)
+        return directory.open_regular(path.name, flags, mode)
+    finally:
+        directory.close()
 
 
 class FileLock:
@@ -459,18 +456,5 @@ def fsync_file(fd: int) -> None:
 
 
 def fsync_parent_directory(path: Path) -> None:
-    _require_posix_support()
-    try:
-        fd = os.open(path.parent, _directory_flags())
-    except OSError as exc:
-        _raise_if_symlink(exc, path.parent)
-        raise
-    try:
-        _validate_owned_descriptor(
-            fd,
-            path=path.parent,
-            expected_type=stat.S_IFDIR,
-        )
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    with open_private_directory(path.parent, create=False) as directory:
+        directory.fsync()

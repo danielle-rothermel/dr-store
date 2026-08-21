@@ -20,11 +20,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dr_store.lease import LeaseAuthority
-from dr_store.localfs import PrivateDirectory, open_private_directory
 from dr_store.sync import BlockingObjectStore, open_sqlite
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from dr_store.localfs import PrivateDirectory
 
 
 class FakeClock:
@@ -68,6 +69,10 @@ def temp_lease_authority() -> Iterator[tuple[LeaseAuthority, FakeClock]]:
 
 @contextmanager
 def temp_private_directory() -> Iterator[PrivateDirectory]:
+    from dr_store.localfs import (  # noqa: PLC0415
+        open_private_directory,
+    )
+
     directory = Path(
         os.path.realpath(tempfile.mkdtemp(prefix="dr-store-localfs-"))
     )

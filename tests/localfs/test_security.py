@@ -11,6 +11,7 @@ from dr_store.localfs import (
     PrivatePathReason,
     PrivatePathViolationError,
     ensure_private_directory,
+    fsync_parent_directory,
     open_private_directory,
     open_private_regular_file,
 )
@@ -132,6 +133,45 @@ def test_wrong_directory_mode_is_repaired_on_leaf(tmp_path: Path) -> None:
     ensure_private_directory(target)
 
     assert stat.S_IMODE(target.stat().st_mode) == 0o700
+
+
+def test_regular_file_in_directory_path_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "file"
+    path.write_bytes(b"payload")
+
+    with pytest.raises(PrivatePathViolationError) as caught:
+        ensure_private_directory(path / "child")
+
+    assert caught.value.reason is PrivatePathReason.WRONG_TYPE
+    assert not (path / "child").exists()
+
+
+def test_intermediate_symlink_refuses_regular_file_open(
+    tmp_path: Path,
+) -> None:
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "file").write_bytes(b"payload")
+    link = tmp_path / "linked"
+    link.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(PrivatePathViolationError) as caught:
+        open_private_regular_file(link / "file", os.O_RDONLY)
+
+    assert caught.value.reason is PrivatePathReason.SYMLINKED
+
+
+def test_intermediate_symlink_refuses_parent_fsync(tmp_path: Path) -> None:
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "file").write_bytes(b"payload")
+    link = tmp_path / "linked"
+    link.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(PrivatePathViolationError) as caught:
+        fsync_parent_directory(link / "file")
+
+    assert caught.value.reason is PrivatePathReason.SYMLINKED
 
 
 def test_directory_opened_as_regular_file_is_refused(tmp_path: Path) -> None:

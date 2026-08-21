@@ -5,6 +5,7 @@ from datetime import timedelta
 
 import pytest
 
+from dr_store import testing
 from dr_store.lease import (
     AcquireOutcome,
     LeaseAuthority,
@@ -93,6 +94,10 @@ def test_temp_private_directory_is_usable_and_cleaned_up() -> None:
         os.close(fd)
         assert "child" in directory.list_names()
     assert not kept.exists()
+
+
+def test_testing_module_does_not_import_localfs_at_load() -> None:
+    assert "open_private_directory" not in testing.__dict__
 
 
 def test_temp_private_directory_cleans_up_on_error() -> None:
