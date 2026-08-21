@@ -572,3 +572,39 @@ contains no NUL bytes or unpaired surrogate code points. Re-acquire with the \
 same owner and attempt returns the existing unexpired lease."""
 categories = ["lease authority"]
 part_of = ["lease authority"]
+
+[[terms]]
+name = "private directory"
+definition = """
+An fd-anchored owner-verified directory handle on a POSIX local filesystem. \
+Every child operation uses a directory-relative no-follow descriptor so the \
+path is resolved once; ownership, type, mode, and regular-file hard-link \
+count are checked on that descriptor, and newly created directories fsync \
+the child and then the parent."""
+categories = ["local filesystem"]
+submodule_exports = [
+  "dr_store.localfs.LocalFsError",
+  "dr_store.localfs.PrivateDirectory",
+  "dr_store.localfs.PrivateDirectoryClosedError",
+  "dr_store.localfs.PrivatePathReason",
+  "dr_store.localfs.PrivatePathViolationError",
+  "dr_store.localfs.ensure_private_directory",
+  "dr_store.localfs.fsync_file",
+  "dr_store.localfs.fsync_parent_directory",
+  "dr_store.localfs.open_private_directory",
+  "dr_store.localfs.open_private_regular_file",
+]
+
+[[terms]]
+name = "file lock"
+definition = """
+An advisory flock on a caller-supplied path composed over a private \
+directory. Entering opens the parent as a private directory, creates the \
+lock file under that handle, and exposes the held parent only while the \
+lock is held. Lock-file naming stays caller-owned."""
+categories = ["local filesystem"]
+submodule_exports = [
+  "dr_store.localfs.FileLock",
+  "dr_store.localfs.LockNotHeldError",
+]
+part_of = ["private directory"]

@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 
 import pytest
 
+from dr_store import testing
 from dr_store.lease import (
     AcquireOutcome,
     LeaseAuthority,
     LeaseRequest,
     ReplayPolicy,
 )
+from dr_store.localfs import PrivateDirectory
 from dr_store.sync import BlockingObjectStore
 from dr_store.testing import (
     FakeClock,
     temp_lease_authority,
+    temp_private_directory,
     temp_sqlite_lease_authority,
     temp_sqlite_store,
 )
@@ -79,4 +83,23 @@ def test_temp_lease_authority_exposes_fake_clock() -> None:
 
 def test_temp_sqlite_store_cleans_up_on_error() -> None:
     with pytest.raises(RuntimeError), temp_sqlite_store():
+        raise RuntimeError("cleanup probe")
+
+
+def test_temp_private_directory_is_usable_and_cleaned_up() -> None:
+    with temp_private_directory() as directory:
+        assert isinstance(directory, PrivateDirectory)
+        kept = directory.path
+        fd = directory.open_regular("child", os.O_WRONLY | os.O_CREAT)
+        os.close(fd)
+        assert "child" in directory.list_names()
+    assert not kept.exists()
+
+
+def test_testing_module_does_not_import_localfs_at_load() -> None:
+    assert "open_private_directory" not in testing.__dict__
+
+
+def test_temp_private_directory_cleans_up_on_error() -> None:
+    with pytest.raises(RuntimeError), temp_private_directory():
         raise RuntimeError("cleanup probe")

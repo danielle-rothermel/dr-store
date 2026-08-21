@@ -39,6 +39,10 @@ records, document artifacts, and mutable keyed coordination:
   supplies shared schema metadata, contract introspection, structured mismatch
   errors, and transaction observer hooks for typed-row persistence layers such
   as the lease authority.
+- **[Local filesystem](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/localfs)**
+  supplies fd-anchored private directories and advisory `FileLock` on POSIX
+  local filesystems. Work done under `lock.directory` stays bound to the same
+  inode the lock was taken in. Lock-file naming stays caller-owned.
 - **[Record Cache](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/record_cache)**
   memoizes records under opaque caller-owned keys. Reads return typed hits;
   absent, missing, or unverifiable stored values are misses, while invalid
@@ -155,12 +159,42 @@ metadata create/verify paths; callers choose the backend explicitly rather than
 through connection-type dispatch. Metadata verification assumes `component` is
 the metadata table primary key.
 
+## Local filesystem
+
+The [local filesystem](https://github.com/danielle-rothermel/dr-store/tree/main/src/dr_store/localfs)
+primitives are stdlib-only and synchronous. `PrivateDirectory` opens paths
+relative to a held directory descriptor with `O_NOFOLLOW`; `FileLock` flocks a
+caller-named file and exposes that parent while the lock is held:
+
+```python
+import os
+
+from dr_store.localfs import FileLock, fsync_file
+
+with FileLock(path / ".work.lock") as lock:
+    fd = lock.directory.open_regular(
+        "staged", os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    )
+    view = memoryview(body)
+    while view:
+        view = view[os.write(fd, view) :]
+    fsync_file(fd)
+    os.close(fd)
+    lock.directory.replace("staged", "published")
+    lock.directory.fsync()
+```
+
+Two `FileLock` instances on the same path exclude each other even in one
+process. The primitive is POSIX-only and assumes a local filesystem; `flock`
+over NFS is unreliable and is not handled.
+
 ## Submodule imports
 
 Version 0.2.4 adds `dr_store.sync`, `dr_store.lease`, `dr_store.relational`, and
-`dr_store.testing` as explicit submodule imports. The root `dr_store` package export
-surface is unchanged from pre-0.2.4 releases; import the submodule that owns the API
-you need.
+`dr_store.testing` as explicit submodule imports. Version 0.2.5 adds
+`dr_store.localfs` the same way. The root `dr_store` package export surface is
+unchanged from pre-0.2.4 releases; import the submodule that owns the API you
+need.
 
 ## Installation
 
