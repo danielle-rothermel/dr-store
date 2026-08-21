@@ -184,6 +184,16 @@ def test_directory_opened_as_regular_file_is_refused(tmp_path: Path) -> None:
     assert caught.value.reason is PrivatePathReason.WRONG_TYPE
 
 
+def test_writable_directory_open_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "dir"
+    path.mkdir()
+
+    with pytest.raises(PrivatePathViolationError) as caught:
+        open_private_regular_file(path, os.O_WRONLY)
+
+    assert caught.value.reason is PrivatePathReason.WRONG_TYPE
+
+
 def test_filesystem_root_is_refused() -> None:
     with pytest.raises(PrivatePathViolationError) as caught:
         ensure_private_directory(Path("/"))

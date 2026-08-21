@@ -60,6 +60,11 @@ def _reraise_open_policy(
             path=path,
             reason=PrivatePathReason.SYMLINKED,
         ) from exc
+    if exc.errno == errno.EISDIR:
+        raise PrivatePathViolationError(
+            path=path,
+            reason=PrivatePathReason.WRONG_TYPE,
+        ) from exc
     # macOS reports O_NOFOLLOW|O_DIRECTORY on a symlink as ENOTDIR.
     if exc.errno != errno.ENOTDIR:
         return

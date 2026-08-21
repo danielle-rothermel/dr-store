@@ -172,7 +172,9 @@ import os
 from dr_store.localfs import FileLock
 
 with FileLock(path / ".work.lock") as lock:
-    fd = lock.directory.open_regular("staged", os.O_WRONLY | os.O_CREAT)
+    fd = lock.directory.open_regular(
+        "staged", os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    )
     os.write(fd, body)
     os.close(fd)
     lock.directory.replace("staged", "published")
