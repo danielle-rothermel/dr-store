@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import errno
 import os
+import shutil
+import socket
 import stat
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -187,6 +190,41 @@ def test_directory_opened_as_regular_file_is_refused(tmp_path: Path) -> None:
 def test_writable_directory_open_is_refused(tmp_path: Path) -> None:
     path = tmp_path / "dir"
     path.mkdir()
+
+    with pytest.raises(PrivatePathViolationError) as caught:
+        open_private_regular_file(path, os.O_WRONLY)
+
+    assert caught.value.reason is PrivatePathReason.WRONG_TYPE
+
+
+def test_unix_socket_open_is_refused() -> None:
+    # Darwin AF_UNIX bind rejects the long pytest tmp_path.
+    directory = Path(os.path.realpath(tempfile.mkdtemp(prefix="drs-s-")))
+    path = directory / "s"
+    bound = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        bound.bind(os.fspath(path))
+        with pytest.raises(PrivatePathViolationError) as caught:
+            open_private_regular_file(path, os.O_RDONLY)
+        assert caught.value.reason is PrivatePathReason.WRONG_TYPE
+    finally:
+        bound.close()
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def test_fifo_read_open_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "fifo"
+    os.mkfifo(path)
+
+    with pytest.raises(PrivatePathViolationError) as caught:
+        open_private_regular_file(path, os.O_RDONLY)
+
+    assert caught.value.reason is PrivatePathReason.WRONG_TYPE
+
+
+def test_fifo_write_open_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "fifo"
+    os.mkfifo(path)
 
     with pytest.raises(PrivatePathViolationError) as caught:
         open_private_regular_file(path, os.O_WRONLY)

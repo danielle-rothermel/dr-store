@@ -52,6 +52,7 @@ def _reraise_open_policy(
     exc: OSError,
     path: Path,
     *,
+    expected_type: int,
     name: str | None = None,
     dir_fd: int | None = None,
 ) -> None:
@@ -60,14 +61,6 @@ def _reraise_open_policy(
             path=path,
             reason=PrivatePathReason.SYMLINKED,
         ) from exc
-    if exc.errno == errno.EISDIR:
-        raise PrivatePathViolationError(
-            path=path,
-            reason=PrivatePathReason.WRONG_TYPE,
-        ) from exc
-    # macOS reports O_NOFOLLOW|O_DIRECTORY on a symlink as ENOTDIR.
-    if exc.errno != errno.ENOTDIR:
-        return
     try:
         status = (
             os.lstat(name, dir_fd=dir_fd)
@@ -81,7 +74,7 @@ def _reraise_open_policy(
             path=path,
             reason=PrivatePathReason.SYMLINKED,
         ) from exc
-    if not stat.S_ISDIR(status.st_mode):
+    if stat.S_IFMT(status.st_mode) != expected_type:
         raise PrivatePathViolationError(
             path=path,
             reason=PrivatePathReason.WRONG_TYPE,
@@ -150,10 +143,22 @@ def _open_or_create_directory(
                 True,
             )
         except OSError as exc:
-            _reraise_open_policy(exc, path, name=name, dir_fd=parent_fd)
+            _reraise_open_policy(
+                exc,
+                path,
+                expected_type=stat.S_IFDIR,
+                name=name,
+                dir_fd=parent_fd,
+            )
             raise
     except OSError as exc:
-        _reraise_open_policy(exc, path, name=name, dir_fd=parent_fd)
+        _reraise_open_policy(
+            exc,
+            path,
+            expected_type=stat.S_IFDIR,
+            name=name,
+            dir_fd=parent_fd,
+        )
         raise
     else:
         return fd, False, False
@@ -214,6 +219,7 @@ def _open_private_regular_at(
             _reraise_open_policy(
                 exc,
                 display_path,
+                expected_type=stat.S_IFREG,
                 name=name,
                 dir_fd=directory_fd,
             )
@@ -347,7 +353,11 @@ def open_private_directory(
     try:
         current_fd = os.open(current_path, _directory_flags())
     except OSError as exc:
-        _reraise_open_policy(exc, current_path)
+        _reraise_open_policy(
+            exc,
+            current_path,
+            expected_type=stat.S_IFDIR,
+        )
         raise
     try:
         private_chain = False

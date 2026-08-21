@@ -169,13 +169,16 @@ caller-named file and exposes that parent while the lock is held:
 ```python
 import os
 
-from dr_store.localfs import FileLock
+from dr_store.localfs import FileLock, fsync_file
 
 with FileLock(path / ".work.lock") as lock:
     fd = lock.directory.open_regular(
         "staged", os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     )
-    os.write(fd, body)
+    view = memoryview(body)
+    while view:
+        view = view[os.write(fd, view) :]
+    fsync_file(fd)
     os.close(fd)
     lock.directory.replace("staged", "published")
     lock.directory.fsync()

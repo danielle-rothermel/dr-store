@@ -956,7 +956,9 @@ opens. Every held descriptor is checked for current-user ownership and \
 the expected inode type; regular files must have hard-link count 1. Mode \
 drift is repaired to ``0o700`` for directories and ``0o600`` for regular \
 files. A newly created directory fsyncs the child and then the parent. \
-Existing ancestors outside the created chain are not repaired. The \
+Existing ancestors outside the created chain are not repaired. When an \
+open fails before a descriptor is held, ``lstat`` classifies symlink \
+and wrong-type refusals; remaining OS errors stay untyped. The \
 filesystem root is refused. ``replace``, ``unlink``, ``stat``, \
 ``list_names``, and ``fsync`` run against the held directory descriptor. \
 The primitive is POSIX-only and assumes a local filesystem.
