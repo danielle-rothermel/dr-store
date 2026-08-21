@@ -149,6 +149,30 @@ def _open_or_create_directory(
         return fd, False, False
 
 
+def _finish_private_regular_fd(
+    fd: int,
+    *,
+    path: Path,
+    truncate: bool,
+) -> int:
+    try:
+        status = _validate_owned_descriptor(
+            fd,
+            path=path,
+            expected_type=stat.S_IFREG,
+        )
+        if stat.S_IMODE(status.st_mode) != _PRIVATE_FILE_MODE:
+            os.fchmod(fd, _PRIVATE_FILE_MODE)
+        # Defer O_TRUNC until after policy checks so a refused path is
+        # not emptied by the open itself.
+        if truncate:
+            os.ftruncate(fd, 0)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 def _open_private_regular_at(
     directory_fd: int,
     name: str,
@@ -161,12 +185,14 @@ def _open_private_regular_at(
     # O_CREAT can race with a sibling unlink; retry a bounded number of
     # times rather than treating a transient ENOENT as a hard failure.
     attempts = 4 if flags & os.O_CREAT else 1
+    open_flags = flags & ~os.O_TRUNC
+    truncate = bool(flags & os.O_TRUNC)
     fd: int | None = None
     for attempt in range(attempts):
         try:
             fd = os.open(
                 name,
-                _descriptor_flags(flags | os.O_NONBLOCK),
+                _descriptor_flags(open_flags | os.O_NONBLOCK),
                 mode,
                 dir_fd=directory_fd,
             )
@@ -185,18 +211,11 @@ def _open_private_regular_at(
         break
     if fd is None:
         raise FileNotFoundError(display_path)
-    try:
-        status = _validate_owned_descriptor(
-            fd,
-            path=display_path,
-            expected_type=stat.S_IFREG,
-        )
-        if stat.S_IMODE(status.st_mode) != _PRIVATE_FILE_MODE:
-            os.fchmod(fd, _PRIVATE_FILE_MODE)
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
+    return _finish_private_regular_fd(
+        fd,
+        path=display_path,
+        truncate=truncate,
+    )
 
 
 @dataclass(slots=True)
@@ -369,27 +388,18 @@ def open_private_regular_file(
     mode: int = 0o600,
 ) -> int:
     _require_posix_support()
+    open_flags = flags & ~os.O_TRUNC
+    truncate = bool(flags & os.O_TRUNC)
     try:
         fd = os.open(
             path,
-            _descriptor_flags(flags | os.O_NONBLOCK),
+            _descriptor_flags(open_flags | os.O_NONBLOCK),
             mode,
         )
     except OSError as exc:
         _raise_if_symlink(exc, path)
         raise
-    try:
-        status = _validate_owned_descriptor(
-            fd,
-            path=path,
-            expected_type=stat.S_IFREG,
-        )
-        if stat.S_IMODE(status.st_mode) != _PRIVATE_FILE_MODE:
-            os.fchmod(fd, _PRIVATE_FILE_MODE)
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
+    return _finish_private_regular_fd(fd, path=path, truncate=truncate)
 
 
 class FileLock:

@@ -71,6 +71,46 @@ def test_hard_linked_regular_file_is_refused(tmp_path: Path) -> None:
     assert caught.value.reason is PrivatePathReason.HARD_LINKED
 
 
+def test_trunc_open_does_not_empty_a_refused_file(tmp_path: Path) -> None:
+    path = tmp_path / "file"
+    path.write_bytes(b"payload")
+    os.link(path, tmp_path / "other")
+
+    with pytest.raises(PrivatePathViolationError) as caught:
+        open_private_regular_file(path, os.O_RDWR | os.O_TRUNC)
+
+    assert caught.value.reason is PrivatePathReason.HARD_LINKED
+    assert path.read_bytes() == b"payload"
+
+
+def test_trunc_open_empties_an_accepted_file(tmp_path: Path) -> None:
+    path = tmp_path / "file"
+    path.write_bytes(b"payload")
+
+    fd = open_private_regular_file(path, os.O_RDWR | os.O_TRUNC)
+    try:
+        assert os.fstat(fd).st_size == 0
+    finally:
+        os.close(fd)
+    assert path.read_bytes() == b""
+
+
+def test_directory_trunc_open_does_not_empty_a_refused_child(
+    tmp_path: Path,
+) -> None:
+    with open_private_directory(tmp_path / "priv") as directory:
+        fd = directory.open_regular("file", os.O_WRONLY | os.O_CREAT)
+        try:
+            os.write(fd, b"payload")
+        finally:
+            os.close(fd)
+        os.link(tmp_path / "priv" / "file", tmp_path / "priv" / "other")
+        with pytest.raises(PrivatePathViolationError) as caught:
+            directory.open_regular("file", os.O_RDWR | os.O_TRUNC)
+        assert caught.value.reason is PrivatePathReason.HARD_LINKED
+        assert directory.stat("file").st_size == len(b"payload")
+
+
 def test_wrong_regular_file_mode_is_repaired(tmp_path: Path) -> None:
     path = tmp_path / "file"
     path.write_bytes(b"payload")
