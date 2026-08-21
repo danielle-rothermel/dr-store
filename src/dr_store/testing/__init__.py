@@ -6,10 +6,12 @@ production surface.
 ``FakeClock`` drives expiry on the memory lease backend only. SQLite and
 PostgreSQL read authority time from the database by design, so
 ``temp_sqlite_lease_authority`` cannot take a clock.
+``temp_private_directory`` yields a held ``PrivateDirectory``.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -18,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dr_store.lease import LeaseAuthority
+from dr_store.localfs import PrivateDirectory, open_private_directory
 from dr_store.sync import BlockingObjectStore, open_sqlite
 
 if TYPE_CHECKING:
@@ -64,6 +67,21 @@ def temp_lease_authority() -> Iterator[tuple[LeaseAuthority, FakeClock]]:
 
 
 @contextmanager
+def temp_private_directory() -> Iterator[PrivateDirectory]:
+    directory = Path(
+        os.path.realpath(tempfile.mkdtemp(prefix="dr-store-localfs-"))
+    )
+    opened: PrivateDirectory | None = None
+    try:
+        opened = open_private_directory(directory)
+        yield opened
+    finally:
+        if opened is not None:
+            opened.close()
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+@contextmanager
 def temp_sqlite_lease_authority() -> Iterator[LeaseAuthority]:
     directory = Path(tempfile.mkdtemp(prefix="dr-store-lease-test-"))
     path = directory / "lease.sqlite3"
@@ -79,6 +97,7 @@ def temp_sqlite_lease_authority() -> Iterator[LeaseAuthority]:
 __all__ = [
     "FakeClock",
     "temp_lease_authority",
+    "temp_private_directory",
     "temp_sqlite_lease_authority",
     "temp_sqlite_store",
 ]

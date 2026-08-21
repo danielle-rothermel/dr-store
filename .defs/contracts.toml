@@ -946,3 +946,50 @@ store transaction would defer or inherit rollback semantics that defeat independ
 lease publication."""
 date = "2026-08-19"
 check = "scripts/test-postgres.sh -- uv run pytest -q tests/lease/test_postgres_connection.py"
+
+[[contracts]]
+title = "Private directories are fd-anchored and owner-verified"
+statement = """
+``open_private_directory`` walks from the filesystem-root anchor with \
+directory-relative ``O_NOFOLLOW``, ``O_DIRECTORY``, and ``O_CLOEXEC`` \
+opens. Every held descriptor is checked for current-user ownership and \
+the expected inode type; regular files must have hard-link count 1. Mode \
+drift is repaired to ``0o700`` for directories and ``0o600`` for regular \
+files. A newly created directory fsyncs the child and then the parent. \
+Existing ancestors outside the created chain are not repaired. The \
+filesystem root is refused. ``replace``, ``unlink``, ``stat``, \
+``list_names``, and ``fsync`` run against the held directory descriptor. \
+The primitive is POSIX-only and assumes a local filesystem.
+"""
+rationale = """
+Fd-anchored no-follow opens exclude symlink races after the path is first \
+resolved. Ownership, type, and hard-link checks keep the handle bound to \
+a private tree the current user created. Child-then-parent fsync makes \
+directory creation crash-durable on a local filesystem without claiming \
+NFS or Windows behavior.
+"""
+date = "2026-08-21"
+check = "uv run pytest -q tests/localfs tests/testing/test_helpers.py tests/contracts/test_defs.py"
+
+[[contracts]]
+title = "File locks are advisory flock with a held-directory handle"
+statement = """
+``FileLock`` takes an fd-anchored handle on the lock path's parent, \
+creates the lock file under that handle with private-directory rules \
+(``0o600``, owner-verified), and applies advisory ``fcntl.flock`` \
+(shared or exclusive). Two ``FileLock`` instances on the same path \
+exclude each other even in one process because each open has a separate \
+file description. ``lock.directory`` is the held parent and is valid \
+only while the lock is held. Lock-file naming is caller-owned. The \
+primitive documents that ``flock`` over NFS is unreliable and does not \
+handle that case.
+"""
+rationale = """
+The held parent is the useful composition: work done under the lock stays \
+bound to the same inode the lock was taken in. Stating same-process \
+exclusion makes the open-file-description guarantee explicit. Leaving \
+lock-file naming with the caller keeps PartialLog and cache conventions \
+out of the primitive.
+"""
+date = "2026-08-21"
+check = "uv run pytest -q tests/localfs tests/testing/test_helpers.py tests/contracts/test_defs.py"

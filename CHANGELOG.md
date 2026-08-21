@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-21
+
+### Added
+
+- Added `dr_store.localfs` with fd-anchored `PrivateDirectory` and advisory
+  `FileLock` primitives, typed policy and lifecycle errors, and POSIX-only
+  local-filesystem semantics.
+- Added `temp_private_directory` to `dr_store.testing`.
+
 ## [0.2.4] - 2026-08-19
 
 ### Added
