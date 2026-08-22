@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-08-21
+
+### Fixed
+
+- `LeaseMaintenance` no longer restarts the renewer after a definitive
+  `StaleLeaseError` or `TerminalConflictError` during terminalization. The
+  handle stays terminalized-failed so a later `succeed` / `fail` surfaces the
+  same error without renewing a lease that is already lost.
+
+### Added
+
+- PostgreSQL lease schema-mismatch tests cover column-type drift, a missing
+  `fence > 0` CHECK or primary key, and the boundary that those failures are
+  lease errors rather than bare relational errors. They run under
+  `DR_STORE_POSTGRES_DSN`.
+
 ## [0.2.5] - 2026-08-21
 
 ### Added
