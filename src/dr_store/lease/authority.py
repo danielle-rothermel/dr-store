@@ -12,8 +12,12 @@ through ``maintenance.succeed(...)`` / ``maintenance.fail(...)``, which stop
 the renewer before publishing. A clean context exit requires prior terminal
 publication. If terminal publication fails with a transient authority error,
 ``_abort_terminalization`` may restart the renewer so the caller can retry
-while the context remains open; restart is suppressed once terminalization
-committed, a renewal loss was recorded, or the context exited.
+while the context remains open. Restart is suppressed for definitive
+non-retryable lease errors (``StaleLeaseError``, ``TerminalConflictError``):
+the handle stays terminalized-failed, the renewer stays stopped, and a later
+``succeed`` / ``fail`` surfaces the same error without renewing. Restart is
+also skipped once terminalization committed, a renewal loss was recorded, or
+the context exited.
 
 A ``LeaseMaintenance`` handle is **single-threaded**: ``__enter__``,
 ``succeed``, ``fail``, ``check``, and ``__exit__`` must all run on one
@@ -129,9 +133,14 @@ class LeaseMaintenance:
     Terminal publication stops the renewer, joins it, then calls
     ``LeaseAuthority.succeed`` / ``fail``. On transient authority failure,
     ``_abort_terminalization`` clears the in-progress flag and may restart the
-    renewer so the caller can retry. Restart is skipped when terminalization
-    already committed (``_terminalization_started``), a renewal loss was
-    recorded (``_loss is not None``), or the context exited (``_exited``).
+    renewer so the caller can retry. Restart is skipped for definitive
+    non-retryable lease errors (``StaleLeaseError``,
+    ``TerminalConflictError``): the handle stays terminalized-failed
+    (``_loss`` records the error, the renewer stays stopped) so a later retry
+    surfaces the same error without renewing. Restart is also skipped when
+    terminalization already committed (``_terminalization_started``), a
+    renewal loss was recorded (``_loss is not None``), or the context exited
+    (``_exited``).
     """
 
     def __init__(
@@ -198,12 +207,19 @@ class LeaseMaintenance:
         )
         self._thread.start()
 
-    def _abort_terminalization(self) -> None:
+    def _abort_terminalization(
+        self, error: BaseException | None = None
+    ) -> None:
         with self._lock:
             if self._terminalization_started:
                 return
             was_terminalizing = self._terminalizing
             self._terminalizing = False
+            if (
+                isinstance(error, (StaleLeaseError, TerminalConflictError))
+                and self._loss is None
+            ):
+                self._loss = error
             if not was_terminalizing or self._loss is not None or self._exited:
                 return
             self._stop.clear()
@@ -242,16 +258,16 @@ class LeaseMaintenance:
             self.check()
             with self._lock:
                 return self._lease
-        except BaseException:
-            self._abort_terminalization()
+        except BaseException as exc:
+            self._abort_terminalization(exc)
             raise
 
     def succeed(self, *, result_ref: ObjectReference) -> Terminal:
         lease = self._prepare_for_terminalization()
         try:
             terminal = self._authority.succeed(lease, result_ref=result_ref)
-        except BaseException:
-            self._abort_terminalization()
+        except BaseException as exc:
+            self._abort_terminalization(exc)
             raise
         self._commit_terminalization()
         return terminal
@@ -269,8 +285,8 @@ class LeaseMaintenance:
                 result_ref=result_ref,
                 failure=failure,
             )
-        except BaseException:
-            self._abort_terminalization()
+        except BaseException as exc:
+            self._abort_terminalization(exc)
             raise
         self._commit_terminalization()
         return terminal

@@ -281,6 +281,53 @@ def test_maintenance_terminalize_after_exit_raises() -> None:
         authority.close()
 
 
+def test_maintenance_stale_terminalize_does_not_restart_renewer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = ManualRenewalWaitStrategy()
+    authority = LeaseAuthority.memory(
+        clock=FakeClock().now,
+        _renewal_wait_strategy=strategy,
+    )
+
+    def stale_succeed(
+        lease: Lease,
+        *,
+        result_ref: ObjectReference,
+    ) -> Terminal:
+        del lease, result_ref
+        raise StaleLeaseError("effect lease is stale")
+
+    monkeypatch.setattr(authority, "succeed", stale_succeed)
+    try:
+        acquired = authority.acquire(
+            _request(),
+            owner_id="owner",
+            attempt_id="attempt",
+            lease_duration=LEASE_DURATION,
+        )
+        assert acquired.lease is not None
+        maintenance = authority.maintain(
+            acquired.lease,
+            lease_duration=LEASE_DURATION,
+        )
+        maintenance.__enter__()
+        try:
+            with pytest.raises(StaleLeaseError):
+                maintenance.succeed(result_ref=RESULT_REF)
+            assert maintenance._stop.is_set()
+            assert not maintenance._thread.is_alive()
+            with pytest.raises(StaleLeaseError):
+                maintenance.succeed(result_ref=RESULT_REF)
+            assert maintenance._stop.is_set()
+            assert not maintenance._thread.is_alive()
+        finally:
+            with pytest.raises(StaleLeaseError):
+                maintenance.__exit__(None, None, None)
+    finally:
+        authority.close()
+
+
 def test_maintenance_terminalize_retries_after_transient_authority_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

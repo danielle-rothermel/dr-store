@@ -1,6 +1,6 @@
 [project]
 name = "dr-store"
-version = "0.2.5"
+version = "0.2.6"
 description = "Storage primitives for content-addressed records, document artifacts, and keyed coordination."
 readme = "README.md"
 license = "MIT"
