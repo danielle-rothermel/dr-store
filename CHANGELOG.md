@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-08-26
+
+### Changed
+
+- `LeaseAuthority.renew` and terminalization (`succeed` / `fail`) now raise
+  distinct `StaleLeaseError` messages for the two conditions that previously
+  shared "effect lease no longer exists": an absent row reports "effect lease
+  row no longer exists", while a row whose request differs from the caller's
+  reports "effect lease is held by a different request (foreign writer)". The
+  exception type is unchanged; only the diagnostic text is more specific.
+
 ## [0.2.6] - 2026-08-21
 
 ### Fixed

@@ -66,6 +66,10 @@ _MAX_FENCE = (1 << 63) - 1
 _RECOVERY_MESSAGE = (
     "the non-redrivable effect lease expired without a terminal outcome"
 )
+_MISSING_ROW_MESSAGE = "effect lease row no longer exists"
+_FOREIGN_ROW_MESSAGE = (
+    "effect lease is held by a different request (foreign writer)"
+)
 
 
 class _RenewalWaitStrategy(Protocol):
@@ -499,8 +503,10 @@ class LeaseAuthority:
         def transition(
             row: _LeaseRow | None, now: datetime
         ) -> tuple[_LeaseRow | None, Lease]:
-            if row is None or row.request != lease.request:
-                raise StaleLeaseError("effect lease no longer exists")
+            if row is None:
+                raise StaleLeaseError(_MISSING_ROW_MESSAGE)
+            if row.request != lease.request:
+                raise StaleLeaseError(_FOREIGN_ROW_MESSAGE)
             current = row.lease() if row.terminal is None else None
             if (
                 current is None
@@ -586,8 +592,10 @@ class LeaseAuthority:
         def transition(
             row: _LeaseRow | None, now: datetime
         ) -> tuple[_LeaseRow | None, Terminal]:
-            if row is None or row.request != lease.request:
-                raise StaleLeaseError("effect lease no longer exists")
+            if row is None:
+                raise StaleLeaseError(_MISSING_ROW_MESSAGE)
+            if row.request != lease.request:
+                raise StaleLeaseError(_FOREIGN_ROW_MESSAGE)
             if row.terminal is not None:
                 if row.terminal == terminal:
                     return row, row.terminal

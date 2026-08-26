@@ -195,6 +195,66 @@ def test_renew_stale_on_owner_mismatch(
         )
 
 
+def test_renew_distinguishes_absent_row_from_foreign_writer(
+    authority_fixture: AuthorityFixture,
+) -> None:
+    acquired = _acquire(authority_fixture)
+    assert acquired.lease is not None
+
+    absent = acquired.lease.model_copy(
+        update={
+            "request": acquired.lease.request.model_copy(
+                update={"semantic_key": "test.semantic/never-acquired"}
+            )
+        }
+    )
+    with pytest.raises(StaleLeaseError, match="row no longer exists"):
+        authority_fixture.authority.renew(
+            absent,
+            lease_duration=LEASE_DURATION,
+        )
+
+    foreign = acquired.lease.model_copy(
+        update={
+            "request": acquired.lease.request.model_copy(
+                update={"request_hash": REQUEST_HASH_B}
+            )
+        }
+    )
+    with pytest.raises(StaleLeaseError, match="different request"):
+        authority_fixture.authority.renew(
+            foreign,
+            lease_duration=LEASE_DURATION,
+        )
+
+
+def test_terminalize_distinguishes_absent_row_from_foreign_writer(
+    authority_fixture: AuthorityFixture,
+) -> None:
+    acquired = _acquire(authority_fixture)
+    assert acquired.lease is not None
+
+    absent = acquired.lease.model_copy(
+        update={
+            "request": acquired.lease.request.model_copy(
+                update={"semantic_key": "test.semantic/never-acquired"}
+            )
+        }
+    )
+    with pytest.raises(StaleLeaseError, match="row no longer exists"):
+        authority_fixture.authority.succeed(absent, result_ref=RESULT_REF)
+
+    foreign = acquired.lease.model_copy(
+        update={
+            "request": acquired.lease.request.model_copy(
+                update={"request_hash": REQUEST_HASH_B}
+            )
+        }
+    )
+    with pytest.raises(StaleLeaseError, match="different request"):
+        authority_fixture.authority.succeed(foreign, result_ref=RESULT_REF)
+
+
 def test_terminalize_is_idempotent(
     authority_fixture: AuthorityFixture,
 ) -> None:
