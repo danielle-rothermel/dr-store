@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   ci:
-    runs-on: depot-ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
@@ -24,7 +24,7 @@ jobs:
       - run: scripts/pre-check.sh
 
   postgres:
-    runs-on: depot-ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         postgres-version: ["16", "17", "18"]
